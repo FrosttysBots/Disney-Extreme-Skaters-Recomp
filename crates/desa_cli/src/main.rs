@@ -6,6 +6,11 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use gc_disc::{Disc, NodeKind};
 
+mod collision;
+mod models;
+mod scripts;
+mod textures;
+
 #[derive(Parser)]
 #[command(
     name = "desa",
@@ -43,6 +48,74 @@ enum Command {
         #[command(subcommand)]
         command: PrgCommand,
     },
+    /// Work with .img.ngc images and .tex.ngc texture dictionaries
+    Tex {
+        #[command(subcommand)]
+        command: TexCommand,
+    },
+    /// Work with .mdl.ngc models and .scn.ngc level scenes
+    Model {
+        #[command(subcommand)]
+        command: ModelCommand,
+    },
+    /// Work with .col.ngc collision meshes
+    Col {
+        #[command(subcommand)]
+        command: ColCommand,
+    },
+    /// Work with .qb compiled scripts
+    Qb {
+        #[command(subcommand)]
+        command: QbCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum QbCommand {
+    /// Decompile a .qb, or every .qb under a folder, into readable .q files
+    Decompile {
+        input: PathBuf,
+        out: PathBuf,
+        /// Folder of scripts whose symbol tables supply names (default: the input folder)
+        #[arg(long)]
+        symbols: Option<PathBuf>,
+    },
+    /// Summarize a level script's NodeArray (nodes by class, rails)
+    Nodes {
+        file: PathBuf,
+        /// Folder of scripts whose symbol tables supply names
+        #[arg(long)]
+        symbols: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ColCommand {
+    /// Summarize a collision file: counts, face flags and terrain types
+    Info { file: PathBuf },
+    /// Export a collision file as OBJ, with faces colored by their flags
+    Export { file: PathBuf, out: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum ModelCommand {
+    /// Summarize a model or scene: counts and bounds
+    Info { file: PathBuf },
+    /// List materials by area covered, with their passes and textures
+    Materials {
+        file: PathBuf,
+        /// Texture dictionary to check against (default: <name>.tex.ngc next to the file)
+        #[arg(long)]
+        textures: Option<PathBuf>,
+    },
+    /// Export a model or scene as OBJ + MTL + PNG textures
+    Export {
+        file: PathBuf,
+        out: PathBuf,
+        /// Texture dictionary to use (default: <name>.tex.ngc next to the file)
+        #[arg(long)]
+        textures: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -51,6 +124,14 @@ enum PrgCommand {
     Ls { archive: PathBuf },
     /// Unpack a .prg archive, or every .prg in a directory, into <OUT>/<archive name>/
     Unpack { input: PathBuf, out: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum TexCommand {
+    /// Describe an image, or list the textures in a dictionary
+    Ls { file: PathBuf },
+    /// Export a texture file, or every one under a directory, as PNGs
+    Export { input: PathBuf, out: PathBuf },
 }
 
 fn main() -> Result<()> {
@@ -62,6 +143,33 @@ fn main() -> Result<()> {
         Command::Prg { command } => match command {
             PrgCommand::Ls { archive } => prg_ls(&archive),
             PrgCommand::Unpack { input, out } => prg_unpack(&input, &out),
+        },
+        Command::Tex { command } => match command {
+            TexCommand::Ls { file } => textures::ls(&file),
+            TexCommand::Export { input, out } => textures::export(&input, &out),
+        },
+        Command::Qb { command } => match command {
+            QbCommand::Decompile {
+                input,
+                out,
+                symbols,
+            } => scripts::decompile_files(&input, &out, symbols.as_deref()),
+            QbCommand::Nodes { file, symbols } => scripts::nodes(&file, symbols.as_deref()),
+        },
+        Command::Col { command } => match command {
+            ColCommand::Info { file } => collision::info(&file),
+            ColCommand::Export { file, out } => collision::export(&file, &out),
+        },
+        Command::Model { command } => match command {
+            ModelCommand::Info { file } => models::info(&file),
+            ModelCommand::Materials { file, textures } => {
+                models::materials(&file, textures.as_deref())
+            }
+            ModelCommand::Export {
+                file,
+                out,
+                textures,
+            } => models::export(&file, &out, textures.as_deref()),
         },
     }
 }

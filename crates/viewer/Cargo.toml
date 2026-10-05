@@ -1,0 +1,34 @@
+[package]
+name = "desa_viewer"
+description = "Real-time level viewer for Disney's Extreme Skate Adventure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "desa-viewer"
+path = "src/main.rs"
+
+[[bin]]
+name = "desa-map-viewer"
+path = "src/bin/map_viewer/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+bytemuck = { version = "1.25.2", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
+egui = "0.33"
+egui-wgpu = "0.33"
+egui-winit = "0.33"
+gc_disc = { version = "0.1.0", path = "../gc_disc" }
+glam = "0.34.0"
+ngc_collision = { version = "0.1.0", path = "../ngc_collision" }
+ngc_model = { version = "0.1.0", path = "../ngc_model" }
+ngc_texture = { version = "0.1.0", path = "../ngc_texture" }
+png = "0.18.1"
+pollster = "1.0.1"
+prg = { version = "0.1.0", path = "../prg" }
+qb = { version = "0.1.0", path = "../qb" }
+rfd = "0.17.2"
+wgpu = "27"
+winit = "0.30.13"
