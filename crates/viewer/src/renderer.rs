@@ -1,7 +1,8 @@
-//! Draws a level and its sky with wgpu.
+//! Draws a level, its sky and a character with wgpu.
 //!
 //! Order: sky (no depth test, camera-centered), then opaque materials, then
-//! transparent materials by draw order. Every material draws all of its
+//! transparent materials by draw order, then the character (posed on the
+//! CPU; see `character`), which also gets simple directional lighting. Every material draws all of its
 //! passes, each with the engine's blend mode for that pass. Depth uses
 //! reversed Z with an infinite far plane, which keeps precision across
 //! levels that span more than 100,000 units.
@@ -114,7 +115,7 @@ struct PassParams {
 }
 
 impl PassParams {
-    fn new(pass: &PassDraw, kind: Kind) -> Self {
+    fn new(pass: &PassDraw, kind: Kind, lit: bool) -> Self {
         let w = pass.uv_wibble;
         Self {
             wibble_velocity_frequency: [w[0], w[1], w[2], w[3]],
@@ -131,7 +132,7 @@ impl PassParams {
                 } else {
                     0.0
                 },
-                0.0,
+                if lit { 1.0 } else { 0.0 },
                 0.0,
                 0.0,
             ],
@@ -172,6 +173,10 @@ pub struct Renderer {
     sky_globals: Globals,
     world: GpuLevel,
     sky: Option<GpuLevel>,
+    /// Its vertex buffer is rewritten every frame with the posed vertices.
+    character: Option<GpuLevel>,
+    pass_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     collision: Option<(wgpu::Buffer, u32)>,
     /// Rails and spawn markers.
     markers: Option<(wgpu::Buffer, u32)>,
@@ -250,8 +255,8 @@ impl Renderer {
 
         let world_globals = make_globals(&device, &globals_layout);
         let sky_globals = make_globals(&device, &globals_layout);
-        let world = upload_level(&device, &queue, &pass_layout, &sampler, world);
-        let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky));
+        let world = upload_level(&device, &queue, &pass_layout, &sampler, world, false);
+        let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky, false));
         let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
         let color_overlay = make_collision_pipeline(&device, &globals_layout, color_format, true);
         let color_solid = make_collision_pipeline(&device, &globals_layout, color_format, false);
@@ -265,6 +270,9 @@ impl Renderer {
             sky_globals,
             world,
             sky,
+            character: None,
+            pass_layout,
+            sampler,
             collision,
             markers: None,
             color_overlay,
@@ -283,6 +291,30 @@ impl Renderer {
     /// Replaces the rail and spawn geometry (empty hides it).
     pub fn set_markers(&mut self, vertices: &[ColorVertex]) {
         self.markers = color_buffer(&self.device, "markers", vertices);
+    }
+
+    /// Uploads a character's mesh (`None` removes it). Its vertices are
+    /// then replaced each frame with [`pose_character`](Self::pose_character).
+    pub fn set_character(&mut self, mesh: Option<&Level>) {
+        self.character = mesh.map(|mesh| {
+            upload_level(
+                &self.device,
+                &self.queue,
+                &self.pass_layout,
+                &self.sampler,
+                mesh,
+                true,
+            )
+        });
+    }
+
+    /// Replaces the character's vertices, which must match the mesh given
+    /// to [`set_character`](Self::set_character) in count and order.
+    pub fn pose_character(&self, vertices: &[Vertex]) {
+        if let Some(character) = &self.character {
+            self.queue
+                .write_buffer(&character.vertices, 0, bytemuck::cast_slice(vertices));
+        }
     }
 
     /// Renders one frame into `target` and submits it. `time` drives
@@ -390,6 +422,10 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
                 draw(&mut pass, &self.world, &self.world_pipelines);
+            }
+            if let Some(character) = &self.character {
+                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+                draw(&mut pass, character, &self.world_pipelines);
             }
             pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
             if let Some((buffer, count)) = &self.markers {
@@ -598,11 +634,16 @@ fn upload_level(
     pass_layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     level: &Level,
+    character: bool,
 ) -> GpuLevel {
     let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vertices"),
         contents: bytemuck::cast_slice(&level.vertices),
-        usage: wgpu::BufferUsages::VERTEX,
+        usage: if character {
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
+        } else {
+            wgpu::BufferUsages::VERTEX
+        },
     });
     let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("indices"),
@@ -620,7 +661,7 @@ fn upload_level(
     for batch in &level.batches {
         for (i, pass) in batch.passes.iter().enumerate() {
             let mut slot = [0u8; PARAMS_STRIDE as usize];
-            let data = PassParams::new(pass, Kind::of(pass.blend_mode, i == 0));
+            let data = PassParams::new(pass, Kind::of(pass.blend_mode, i == 0), character);
             slot[..std::mem::size_of::<PassParams>()].copy_from_slice(bytemuck::bytes_of(&data));
             params.extend_from_slice(&slot);
         }
@@ -936,10 +977,10 @@ mod tests {
             environment: true,
             uv_wibble: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
         };
-        let params = PassParams::new(&pass, Kind::of(pass.blend_mode, false));
+        let params = PassParams::new(&pass, Kind::of(pass.blend_mode, false), true);
         assert_eq!(params.settings, [1.0, 0.5, 0.5, 1.0]);
         assert_eq!(params.wibble_amplitude_phase, [5.0, 6.0, 7.0, 8.0]);
-        assert_eq!(params.options[0], 0.0);
+        assert_eq!(params.options, [0.0, 1.0, 0.0, 0.0]);
         assert!(std::mem::size_of::<PassParams>() as u64 <= PARAMS_STRIDE);
     }
 }

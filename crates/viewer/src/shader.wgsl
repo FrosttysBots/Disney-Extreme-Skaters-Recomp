@@ -13,7 +13,8 @@ struct PassParams {
     // x: UV set, y: fixed alpha (negative = none), z: alpha test threshold,
     // w: 1 if the pass is environment mapped
     settings: vec4<f32>,
-    // x: 1 to output alpha as the color (modulate and brighten blending)
+    // x: 1 to output alpha as the color (modulate and brighten blending),
+    // y: 1 to light by the normal (characters; levels have baked lighting)
     options: vec4<f32>,
 };
 
@@ -63,7 +64,14 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.uv = vec2<f32>(uv.x, 1.0 - uv.y);
     // Vertex colors use 0x80 as full brightness, so they can brighten up to 2x.
     // time.y is an optional minimum light level for seeing into dark areas.
-    let lit = in.color * (255.0 / 128.0);
+    var lit = in.color * (255.0 / 128.0);
+    if pass_params.options.y > 0.5 {
+        // A soft key light from above and in front, plus ambient. Normals
+        // are already in world space (characters are posed on the CPU).
+        let light = normalize(vec3<f32>(0.35, 1.0, 0.45));
+        let diffuse = max(dot(normalize(in.normal), light), 0.0);
+        lit = vec4<f32>(lit.rgb * (0.55 + 0.6 * diffuse), lit.a);
+    }
     out.color = vec4<f32>(max(lit.rgb, vec3<f32>(globals.time.y)), lit.a);
     return out;
 }

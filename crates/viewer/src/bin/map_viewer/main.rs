@@ -5,7 +5,8 @@
 //!
 //! Reads levels straight from the disc (or a folder of extracted `.prg`
 //! archives), so no unpacking step is needed. The disc's location is
-//! remembered between runs.
+//! remembered between runs. Any of the playable characters can stand on a
+//! spawn point and play their animations.
 
 mod settings;
 mod ui;
@@ -17,7 +18,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use glam::Vec3;
+use glam::{Mat4, Quat, Vec3};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -28,9 +29,10 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use desa_viewer::camera::FlyCamera;
+use desa_viewer::character::Character;
 use desa_viewer::collision::{self, CollisionView};
 use desa_viewer::level::Level;
-use desa_viewer::nodes::LevelNodes;
+use desa_viewer::nodes::{LevelNodes, Spawn};
 use desa_viewer::renderer::{self, Renderer, request_device};
 use desa_viewer::source::{GameData, LevelInfo};
 use settings::Settings;
@@ -50,9 +52,18 @@ struct Args {
     /// Level to open first, by archive name (e.g. HUB, beach, ToyStory_Bedroom)
     #[arg(long)]
     level: Option<String>,
+    /// Character to show, by id (e.g. jessie, buzz, simba)
+    #[arg(long)]
+    character: Option<String>,
     /// Render one frame, panel included, to this PNG and exit
     #[arg(long)]
     screenshot: Option<PathBuf>,
+    /// For --screenshot: the character's animation (default StandIdle)
+    #[arg(long, requires = "screenshot")]
+    animation: Option<String>,
+    /// For --screenshot: seconds into the animation
+    #[arg(long, requires = "screenshot", default_value_t = 0.0)]
+    time: f32,
 }
 
 fn main() -> Result<()> {
@@ -66,12 +77,22 @@ fn main() -> Result<()> {
 
     if let Some(out) = &args.screenshot {
         let path = data_path.context("no game data found; pass the disc image's path")?;
-        return screenshot(&path, args.level.as_deref(), out);
+        return screenshot(&path, &args, out);
     }
 
     let mut app = App::new(&mut settings);
     if let Some(path) = data_path {
         app.open_data(&path);
+    }
+    // Show the requested character, else the last one shown.
+    if let Some(id) = args
+        .character
+        .clone()
+        .or_else(|| app.settings.last_character.clone())
+    {
+        if let Some(i) = app.character_index(&id) {
+            app.load_character(Some(i));
+        }
     }
     // Open the requested level, else the last one viewed, else the hub.
     if let Some(level) = args
@@ -106,6 +127,8 @@ struct LoadedLevel {
     collision: Vec<desa_viewer::collision::ColorVertex>,
     nodes: LevelNodes,
     start: FlyCamera,
+    /// Where a character stands until you go to a spawn point.
+    home: Mat4,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -141,6 +164,9 @@ fn load_level(
         || FlyCamera::looking_at(center + Vec3::new(0.0, radius * 0.5, radius * 1.2), center),
         |spawn| spawn.camera_clear_of(collision.as_deref().unwrap_or_default()),
     );
+    let home = nodes
+        .start()
+        .map_or(Mat4::from_translation(center), placement_at);
     let stats = format!(
         "{} triangles, {} textures, {} rail segments, {} spawn points{}",
         world.indices.len() / 3,
@@ -167,10 +193,30 @@ fn load_level(
             collision: collision.unwrap_or_default(),
             nodes,
             start,
+            home,
             markers: (false, false),
         },
         stats,
     ))
+}
+
+/// Where a character stands at a spawn point, facing its way. Character
+/// models face +Z.
+fn placement_at(spawn: &Spawn) -> Mat4 {
+    Mat4::from_rotation_translation(
+        Quat::from_rotation_arc(Vec3::Z, spawn.facing()),
+        spawn.position,
+    )
+}
+
+/// A camera in front of a character placed by `placement`, looking at it.
+fn camera_facing(placement: Mat4) -> FlyCamera {
+    let position = placement.transform_point3(Vec3::ZERO);
+    let forward = placement.transform_vector3(Vec3::Z).normalize_or(Vec3::Z);
+    FlyCamera::looking_at(
+        position + forward * 170.0 + Vec3::Y * 75.0,
+        position + Vec3::Y * 45.0,
+    )
 }
 
 struct Gpu {
@@ -196,6 +242,11 @@ struct App<'a> {
     /// A level to load, and how many frames the "Loading" message has shown.
     pending: Option<(usize, u32)>,
     next_spawn: usize,
+    character: Option<Character>,
+    /// Where the character stands.
+    placement: Mat4,
+    /// The animation the character's time belongs to.
+    shown_animation: usize,
     last_frame: Instant,
     started: Instant,
     error: Option<anyhow::Error>,
@@ -226,12 +277,25 @@ impl<'a> App<'a> {
                 camera_text: String::new(),
                 message: None,
                 panel_open: true,
+                character: ui::CharacterModel {
+                    characters: Vec::new(),
+                    current: None,
+                    animations: Vec::new(),
+                    animation: 0,
+                    playing: true,
+                    speed: 1.0,
+                    time: 0.0,
+                    duration: 0.0,
+                },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
             keys: HashSet::new(),
             looking: false,
             pending: None,
             next_spawn: 0,
+            character: None,
+            placement: Mat4::IDENTITY,
+            shown_animation: 0,
             last_frame: Instant::now(),
             started: Instant::now(),
             error: None,
@@ -250,7 +314,13 @@ impl<'a> App<'a> {
                 };
                 self.model.current = None;
                 self.level = None;
+                self.model.character.characters = data.characters();
                 self.data = Some(data);
+                // Characters come from the old data too. Keep the remembered
+                // one, so it can be shown again from the new data.
+                self.character = None;
+                self.model.character.current = None;
+                self.model.character.animations.clear();
                 self.settings.data_path = Some(path.to_path_buf());
                 self.settings.save();
             }
@@ -272,8 +342,12 @@ impl<'a> App<'a> {
         };
         let info = self.model.levels[index].clone();
         match load_level(data, &info, &gpu.device, &gpu.queue, gpu.config.format) {
-            Ok((level, stats)) => {
+            Ok((mut level, stats)) => {
                 self.camera = level.start;
+                self.placement = level.home;
+                if let Some(character) = &self.character {
+                    level.renderer.set_character(Some(&character.mesh));
+                }
                 self.model.current = Some(index);
                 self.model.stats = Some(stats);
                 self.model.has_collision = level.renderer.has_collision();
@@ -294,8 +368,85 @@ impl<'a> App<'a> {
     fn go_to_spawn(&mut self, index: usize) {
         if let Some(spawn) = self.level.as_ref().and_then(|l| l.nodes.spawns.get(index)) {
             self.camera = spawn.camera_clear_of(&self.level.as_ref().unwrap().collision);
+            self.placement = placement_at(spawn);
             self.next_spawn = index + 1;
         }
+    }
+
+    fn character_index(&self, id: &str) -> Option<usize> {
+        self.model
+            .character
+            .characters
+            .iter()
+            .position(|c| c.id.eq_ignore_ascii_case(id))
+    }
+
+    /// Shows character `index` (in the panel's list), or none.
+    fn load_character(&mut self, index: Option<usize>) {
+        self.character = None;
+        self.model.character.current = None;
+        self.model.character.animations.clear();
+        if let Some(level) = &mut self.level {
+            level.renderer.set_character(None);
+        }
+        let Some(index) = index else {
+            self.settings.last_character = None;
+            self.settings.save();
+            return;
+        };
+        let Some(data) = &mut self.data else { return };
+        let info = self.model.character.characters[index].clone();
+        let loaded = data
+            .load_character(&info.id)
+            .and_then(|files| Character::from_files(&files))
+            .with_context(|| format!("could not load {}", info.title));
+        match loaded {
+            Ok(character) => {
+                let model = &mut self.model.character;
+                model.animations = character
+                    .animations
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                model.animation = ["StandIdle", "Stage_Idle"]
+                    .iter()
+                    .find_map(|name| character.animation(name))
+                    .unwrap_or(0);
+                model.duration = character.animations[model.animation].1.duration;
+                model.time = 0.0;
+                model.current = Some(index);
+                self.shown_animation = model.animation;
+                if let Some(level) = &mut self.level {
+                    level.renderer.set_character(Some(&character.mesh));
+                }
+                self.character = Some(character);
+                self.settings.last_character = Some(info.id);
+                self.settings.save();
+            }
+            Err(err) => self.model.message = Some(format!("{err:#}")),
+        }
+    }
+
+    /// Advances the character's animation and uploads the posed mesh.
+    fn animate(&mut self, dt: f32) {
+        let (Some(character), Some(level)) = (&self.character, &self.level) else {
+            return;
+        };
+        let model = &mut self.model.character;
+        model.animation = model.animation.min(character.animations.len() - 1);
+        if model.animation != self.shown_animation {
+            self.shown_animation = model.animation;
+            model.time = 0.0;
+        }
+        model.duration = character.animations[model.animation].1.duration;
+        if model.playing && model.duration > 0.0 {
+            // Everything loops here, even one-off moves like an ollie.
+            model.time = (model.time + dt * model.speed) % model.duration;
+        }
+        model.time = model.time.clamp(0.0, model.duration);
+        level
+            .renderer
+            .pose_character(&character.pose(model.animation, model.time, self.placement));
     }
 
     /// Pushes panel settings into the renderer.
@@ -424,6 +575,7 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.sync_view();
+        self.animate(dt);
         let p = self.camera.position;
         self.model.camera_text = format!(
             "x {:.0}  y {:.0}  z {:.0}\nyaw {:.0}  pitch {:.0}",
@@ -481,6 +633,8 @@ impl<'a> App<'a> {
                         self.camera = level.start;
                     }
                 }
+                ui::Action::LoadCharacter(i) => self.load_character(i),
+                ui::Action::LookAtCharacter => self.camera = camera_facing(self.placement),
             }
         }
         // Load after the "Loading" message has been on screen for a frame.
@@ -526,6 +680,21 @@ impl<'a> App<'a> {
             KeyCode::KeyR if !repeat => {
                 if let Some(level) = &self.level {
                     self.camera = level.start;
+                }
+            }
+            KeyCode::KeyP if !repeat => {
+                self.model.character.playing = !self.model.character.playing;
+            }
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                let count = self.model.character.animations.len();
+                if count > 0 {
+                    let step = if code == KeyCode::BracketRight {
+                        1
+                    } else {
+                        count - 1
+                    };
+                    let model = &mut self.model.character;
+                    model.animation = (model.animation + step) % count;
                 }
             }
             _ => {}
@@ -690,10 +859,11 @@ impl ApplicationHandler for App<'_> {
 }
 
 /// Renders the first frame of a level, panel included, without a window.
-fn screenshot(data_path: &Path, level: Option<&str>, out: &Path) -> Result<()> {
+/// With a character, the camera looks at it instead.
+fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     let mut data = GameData::open(data_path)?;
     let levels = data.levels();
-    let index = match level {
+    let index = match args.level.as_deref() {
         Some(id) => levels
             .iter()
             .position(|l| l.id.eq_ignore_ascii_case(id))
@@ -717,6 +887,33 @@ fn screenshot(data_path: &Path, level: Option<&str>, out: &Path) -> Result<()> {
     app.model.has_collision = loaded.renderer.has_collision();
     app.model.set_spawns(&loaded.nodes.spawns);
     app.model.camera_text = loaded.start.describe();
+    let mut camera = loaded.start;
+
+    if let Some(id) = &args.character {
+        app.model.character.characters = data.characters();
+        app.data = Some(data);
+        let i = app
+            .character_index(id)
+            .with_context(|| format!("no character named {id}"))?;
+        app.load_character(Some(i));
+        let character = app
+            .character
+            .as_ref()
+            .with_context(|| app.model.message.clone().unwrap_or_default())?;
+        if let Some(name) = &args.animation {
+            app.model.character.animation = character
+                .animation(name)
+                .with_context(|| format!("{id} has no animation named {name}"))?;
+        }
+        app.shown_animation = app.model.character.animation;
+        app.model.character.time = args.time;
+        loaded.renderer.set_character(Some(&character.mesh));
+        app.placement = loaded.home;
+        camera = camera_facing(loaded.home);
+        app.level = Some(loaded);
+        app.animate(0.0);
+        loaded = app.level.take().unwrap();
+    }
 
     let (width, height) = (1400, 850);
     let egui_ctx = egui::Context::default();
@@ -757,7 +954,6 @@ fn screenshot(data_path: &Path, level: Option<&str>, out: &Path) -> Result<()> {
         view_formats: &[],
     });
     let view = target.create_view(&Default::default());
-    let camera = loaded.start;
     paint(
         &device,
         &queue,

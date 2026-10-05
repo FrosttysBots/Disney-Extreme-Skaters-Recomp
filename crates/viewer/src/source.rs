@@ -4,6 +4,10 @@
 //! Each level `X` is spread over three archives: `XScn.prg` (the scene,
 //! its sky and their textures), `Xcol.prg` (collision) and `X.prg` (among
 //! other things, the level script with the node array).
+//!
+//! Each playable character `X` has `anims_X.prg`: its model, board and
+//! animations. Skeletons and the animation key tables are shared, in
+//! `skeletons.prg`.
 
 use std::fs::{self, File};
 use std::io::BufReader;
@@ -37,6 +41,31 @@ pub struct LevelFiles {
     pub sky: Option<(Vec<u8>, Option<Vec<u8>>)>,
     pub collision: Option<Vec<u8>>,
     pub nodes: Option<Vec<u8>>,
+}
+
+/// The raw files for one playable character.
+pub struct CharacterFiles {
+    pub skin: Vec<u8>,
+    pub textures: Option<Vec<u8>>,
+    /// The skateboard, skinned to the character's skeleton.
+    pub board: Option<(Vec<u8>, Option<Vec<u8>>)>,
+    pub skeleton: Vec<u8>,
+    /// `standardkeyq.bin` and `standardkeyt.bin`.
+    pub key_tables: (Vec<u8>, Vec<u8>),
+    /// Animation names (file names without `.ska.ngc`) and contents.
+    pub animations: Vec<(String, Vec<u8>)>,
+}
+
+/// Reads one file from an archive by a test on its lowercased path.
+fn entry(archive: &Archive, pred: &dyn Fn(&str) -> bool) -> Result<Option<Vec<u8>>> {
+    match archive
+        .entries()
+        .iter()
+        .find(|e| pred(&e.path().to_ascii_lowercase()))
+    {
+        Some(e) => Ok(Some(e.contents()?.into_owned())),
+        None => Ok(None),
+    }
 }
 
 impl GameData {
@@ -125,16 +154,6 @@ impl GameData {
         let scn =
             Archive::parse(&scn_data).with_context(|| format!("could not read {id}Scn.prg"))?;
 
-        let entry = |archive: &Archive, pred: &dyn Fn(&str) -> bool| -> Result<Option<Vec<u8>>> {
-            match archive
-                .entries()
-                .iter()
-                .find(|e| pred(&e.path().to_ascii_lowercase()))
-            {
-                Some(e) => Ok(Some(e.contents()?.into_owned())),
-                None => Ok(None),
-            }
-        };
         let is_scene = |p: &str| p.ends_with(".scn.ngc") && !p.ends_with("_sky.scn.ngc");
         let scene_entry = scn
             .entries()
@@ -180,6 +199,78 @@ impl GameData {
             sky,
             collision,
             nodes,
+        })
+    }
+
+    /// Every playable character, sorted by title. The id is the archive
+    /// name without `anims_`, e.g. `jessie`.
+    pub fn characters(&self) -> Vec<LevelInfo> {
+        let mut characters: Vec<LevelInfo> = self
+            .archive_names()
+            .iter()
+            .filter_map(|name| {
+                let lower = name.to_ascii_lowercase();
+                let id = lower.strip_prefix("anims_")?.strip_suffix(".prg")?;
+                // The created skater is assembled from parts in
+                // skaterparts.prg, so its archive has animations but no model.
+                (id != "kid").then(|| name[6..6 + id.len()].to_string())
+            })
+            .map(|id| LevelInfo {
+                title: title(&id),
+                id,
+            })
+            .collect();
+        characters.sort_by(|a, b| a.title.cmp(&b.title));
+        characters
+    }
+
+    pub fn load_character(&mut self, id: &str) -> Result<CharacterFiles> {
+        let name = id.to_ascii_lowercase();
+        let data = self
+            .read_archive(&format!("anims_{id}.prg"))?
+            .with_context(|| format!("anims_{id}.prg is missing"))?;
+        let archive =
+            Archive::parse(&data).with_context(|| format!("could not read anims_{id}.prg"))?;
+        let file = |suffix: &str| entry(&archive, &|p| p.ends_with(&format!("/{name}{suffix}")));
+        let skin = file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;
+        let textures = file(".tex.ngc")?;
+        let board = match file("board.skin.ngc")? {
+            Some(board) => Some((board, file("board.tex.ngc")?)),
+            None => None,
+        };
+        let mut animations = Vec::new();
+        for e in archive.entries() {
+            let path = e.path();
+            let file_name = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+            let lower = file_name.to_ascii_lowercase();
+            if let Some(stem) = lower.strip_suffix(".ska.ngc") {
+                animations.push((
+                    file_name[..stem.len()].to_string(),
+                    e.contents()?.into_owned(),
+                ));
+            }
+        }
+        animations.sort_by_key(|a| a.0.to_ascii_lowercase());
+
+        let data = self
+            .read_archive("skeletons.prg")?
+            .context("skeletons.prg is missing")?;
+        let skeletons = Archive::parse(&data).context("could not read skeletons.prg")?;
+        let skeleton = entry(&skeletons, &|p| p.ends_with(&format!("/{name}.ske")))?
+            .with_context(|| format!("skeletons.prg has no skeleton for {id}"))?;
+        let table = |file: &str| {
+            entry(&skeletons, &|p| p.ends_with(file))?
+                .with_context(|| format!("skeletons.prg has no {file}"))
+        };
+        let key_tables = (table("standardkeyq.bin")?, table("standardkeyt.bin")?);
+
+        Ok(CharacterFiles {
+            skin,
+            textures,
+            board,
+            skeleton,
+            key_tables,
+            animations,
         })
     }
 }

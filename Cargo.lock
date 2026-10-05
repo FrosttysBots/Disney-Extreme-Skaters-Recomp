@@ -551,6 +551,7 @@ dependencies = [
  "egui-winit",
  "gc_disc",
  "glam",
+ "ngc_anim",
  "ngc_collision",
  "ngc_model",
  "ngc_texture",

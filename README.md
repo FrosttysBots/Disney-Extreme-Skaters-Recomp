@@ -9,7 +9,9 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 ## Map Viewer
 
 `DESA Map Viewer.exe` lets you fly around every level, straight from your
-disc image; nothing needs unpacking first.
+disc image; nothing needs unpacking first. Any of the 12 playable
+characters can stand in the level on their board and play their
+animations.
 
 ```
 cargo build --release -p desa_viewer
@@ -18,13 +20,18 @@ cargo build --release -p desa_viewer
 This builds `target/release/desa-map-viewer.exe`, which needs no installs.
 On first run it looks for the disc image (`.iso`) next to itself and in the
 folders above it; otherwise use **Open disc image...** in the panel. It
-remembers the disc, the last level and the camera speed in
+remembers the disc, the last level, the character and the camera speed in
 `%APPDATA%\desa-map-viewer\settings.txt`.
 
 The side panel lists the 11 levels and has toggles for the sky, rails
 (magenta tubes), spawn points (green = player 1 start, blue = others) and
 collision, a brighten slider for dark areas, camera speed, and every
 spawn point by name to jump to.
+
+Under **Character**, pick a character and one of their 125-133
+animations, then play, pause, change the speed or drag the time slider.
+The character stands on the level's start, and moves to each spawn point
+you go to. **Look at the character** puts the camera in front of them.
 
 | Control | Action |
 |---|---|
@@ -36,10 +43,14 @@ spawn point by name to jump to.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
+| P | Play or pause the character |
+| [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
 
 `desa-map-viewer --level HUB --screenshot out.png` renders one frame,
-panel included, without opening a window.
+panel included, without opening a window. Add
+`--character jessie --animation Ollie --time 0.4` to show a character
+there, with the camera looking at them.
 
 ## Crates
 
@@ -52,7 +63,7 @@ panel included, without opening a window.
 | `ngc_anim` | Parses `.ske` skeletons and `.ska.ngc` animations, samples them and poses skinned characters |
 | `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
-| `desa_viewer` | Level rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
+| `desa_viewer` | Level and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
@@ -326,8 +337,8 @@ from 1,079 files.
 
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
    skinned models, levels, collision, a level viewer, skeletons and
-   animations (done). Next: animated characters in the viewer, camera
-   paths, and the skins' extra-influence block.
+   animations, and animated characters in the Map Viewer (done). Next:
+   camera paths, blinking, and the skins' extra-influence block.
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.
