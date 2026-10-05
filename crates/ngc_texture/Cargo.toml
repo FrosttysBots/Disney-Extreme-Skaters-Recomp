@@ -1,0 +1,9 @@
+[package]
+name = "ngc_texture"
+description = "Decoders for the GameCube image (.img.ngc) and texture (.tex.ngc) files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true

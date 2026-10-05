@@ -12,6 +12,7 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 |---|---|
 | `gc_disc` | Reads GameCube disc images: header, file system table, `main.dol` sections |
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
+| `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
@@ -49,6 +50,35 @@ To check the `prg` crate against every archive on the real disc:
 cargo test --release -p prg -- --ignored
 ```
 
+Export images and textures as PNGs (a file, or everything under a folder):
+
+```
+cargo run --release -- tex export extracted/files/images extracted/textures/images
+cargo run --release -- tex export extracted/unpacked extracted/textures/unpacked
+cargo run --release -- tex ls extracted/unpacked/beachScn/Levels/beach/beach.tex.ngc
+```
+
+An `.img.ngc` becomes one PNG. A `.tex.ngc` becomes a folder of PNGs named
+by each texture's checksum, which is how models refer to them. Only the
+full-size mip level is exported.
+
+## Texture formats
+
+Both files are big-endian; see the module docs in `crates/ngc_texture` for
+the exact layouts.
+
+- **Pixel formats:** CMPR (the GameCube's DXT1), CMPR plus a second CMPR
+  texture whose green channel is the alpha, and tiled RGBA8 (loading screens
+  and two level textures).
+- **Rows are stored bottom to top.** The decoder flips them. When a picture
+  is padded to a larger stored size, the padding comes first in stored order.
+- **A stored 0 means 32.** The original tool wrote any width, height or size
+  of exactly 32 (and a size of 8192) as 0.
+- **Not supported yet:** the 8 memory-card icons, which use a palette format.
+
+Result on the US disc: 48 loading screens plus 3,364 images and textures
+from 1,079 files.
+
 ## Formats found so far
 
 | Extension | Count | Probably |
@@ -65,7 +95,7 @@ cargo test --release -p prg -- --ignored
 
 ## Roadmap
 
-1. **Asset tools.** Disc reading and PRG unpacking (done), then texture,
+1. **Asset tools.** Disc reading, PRG unpacking and textures (done), then
    model and level format decoders, ending in a level viewer.
 2. **Level loading.** Render whole levels with collision and a free camera.
 3. **QB scripts.** Parse and run Neversoft's compiled script format.

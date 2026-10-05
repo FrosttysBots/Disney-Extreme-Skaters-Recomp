@@ -6,6 +6,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use gc_disc::{Disc, NodeKind};
 
+mod textures;
+
 #[derive(Parser)]
 #[command(
     name = "desa",
@@ -43,6 +45,11 @@ enum Command {
         #[command(subcommand)]
         command: PrgCommand,
     },
+    /// Work with .img.ngc images and .tex.ngc texture dictionaries
+    Tex {
+        #[command(subcommand)]
+        command: TexCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -51,6 +58,14 @@ enum PrgCommand {
     Ls { archive: PathBuf },
     /// Unpack a .prg archive, or every .prg in a directory, into <OUT>/<archive name>/
     Unpack { input: PathBuf, out: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum TexCommand {
+    /// Describe an image, or list the textures in a dictionary
+    Ls { file: PathBuf },
+    /// Export a texture file, or every one under a directory, as PNGs
+    Export { input: PathBuf, out: PathBuf },
 }
 
 fn main() -> Result<()> {
@@ -62,6 +77,10 @@ fn main() -> Result<()> {
         Command::Prg { command } => match command {
             PrgCommand::Ls { archive } => prg_ls(&archive),
             PrgCommand::Unpack { input, out } => prg_unpack(&input, &out),
+        },
+        Command::Tex { command } => match command {
+            TexCommand::Ls { file } => textures::ls(&file),
+            TexCommand::Export { input, out } => textures::export(&input, &out),
         },
     }
 }
