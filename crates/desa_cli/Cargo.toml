@@ -1,0 +1,16 @@
+[package]
+name = "desa_cli"
+description = "Command-line tools for Disney's Extreme Skate Adventure (GameCube)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "desa"
+path = "src/main.rs"
+
+[dependencies]
+gc_disc.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+prg.workspace = true

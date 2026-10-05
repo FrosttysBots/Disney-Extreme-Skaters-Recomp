@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+gc_disc = { path = "crates/gc_disc" }
+prg = { path = "crates/prg" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"

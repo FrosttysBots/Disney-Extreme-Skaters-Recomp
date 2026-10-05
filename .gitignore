@@ -1,0 +1,11 @@
+/target
+
+# Game data stays out of the repo: it is copyrighted and huge.
+*.iso
+*.gcm
+*.rvz
+*.wia
+*.gcz
+*.ciso
+*.nkit.*
+/extracted/

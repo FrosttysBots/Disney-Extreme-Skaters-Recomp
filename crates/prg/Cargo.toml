@@ -1,0 +1,9 @@
+[package]
+name = "prg"
+description = "Reader for Neversoft PRE/PRG archives (as used on the GameCube)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true

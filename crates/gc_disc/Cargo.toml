@@ -1,0 +1,9 @@
+[package]
+name = "gc_disc"
+description = "Reader for GameCube disc images (.iso / .gcm)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
