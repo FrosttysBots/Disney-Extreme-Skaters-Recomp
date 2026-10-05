@@ -1,0 +1,9 @@
+[package]
+name = "qb"
+description = "Tokenizer, decompiler and data parser for Neversoft QB scripts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true

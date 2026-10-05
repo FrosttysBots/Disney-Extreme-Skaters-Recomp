@@ -15,6 +15,7 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
 | `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
 | `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
+| `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
 | `desa_viewer` | `desa-viewer`: a real-time level viewer (wgpu) with a free-fly camera |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
@@ -118,6 +119,40 @@ the `<X>Scn` folder) and shown with **K**, or `--show-collision overlay|only`
 for screenshots. Colors: yellow = trigger or non-collidable, red = vert
 (quarter pipes), blue = wall-ridable, purple = not skatable, gray = the rest.
 
+## Scripts (QB)
+
+Most of the game's logic and every level's object placement live in compiled
+QB scripts: the 188 global scripts in `qb.prg`, plus each level's
+`<level>.qb` (its `NodeArray`: rails, spawn points, objects, pedestrians)
+and `<level>_scripts.qb`.
+
+```
+cargo run --release -- qb decompile extracted/unpacked extracted/scripts
+cargo run --release -- qb nodes extracted/unpacked/beach/levels/beach/beach.qb
+cargo test --release -p qb -- --ignored    # tokenize, parse and decompile every script
+```
+
+`decompile` writes readable `.q` source next to the original paths, for
+example `extracted/scripts/beach/levels/beach/beach.q`. `nodes` counts a
+level's nodes by class and its linked rail nodes.
+
+- **Tokens** follow the compiler shared across the THPS series: one-byte
+  codes, some followed by data. Numbers are **little-endian**, unlike the
+  rest of the GameCube data.
+- **Names** are stored as checksums: a CRC-32 of the lowercased name
+  without the final inversion. Each file ends with a symbol table giving
+  the original names, so the decompiled scripts use the developers' own
+  names. Across the disc there are 41,018 names, and every checksum used in
+  every script is covered. Names that aren't plain identifiers print as
+  `#"Big 1"`; unknown ones would print as `#0x1234abcd`.
+- **`Random(@a @b ...)`** is stored as a table of offsets with jumps between
+  the choices; the decompiler rebuilds the original form.
+- **Data definitions** such as `NodeArray` parse into structured values
+  (`qb::Value`), ready for the viewer and gameplay code.
+
+On the US disc all 347 scripts tokenize to their last byte and parse:
+7,046 scripts and 25,503 level nodes.
+
 ## Collision format
 
 ```
@@ -198,9 +233,10 @@ from 1,079 files.
 
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static models,
    levels, collision and a level viewer (done). Next: skinned models.
-2. **Level loading.** Object and rail placement from the level scripts,
-   the collision BSP tree, fog and vertex-color animation.
-3. **QB scripts.** Parse and run Neversoft's compiled script format.
+2. **Level loading.** Rails, spawn points and objects from the level node
+   arrays, the collision BSP tree, fog and vertex-color animation.
+3. **QB scripts.** Decompiling and data parsing (done). Next: an
+   interpreter that runs the game's scripts.
 4. **Skater physics.** Match the original's constants and update loop,
    verified against Dolphin frame by frame.
 5. **Gameplay.** Tricks, scoring, goals, game modes, UI and audio.

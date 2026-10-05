@@ -18,3 +18,4 @@ png = "0.18.1"
 ngc_texture.workspace = true
 ngc_model.workspace = true
 ngc_collision.workspace = true
+qb.workspace = true

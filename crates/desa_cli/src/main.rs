@@ -8,6 +8,7 @@ use gc_disc::{Disc, NodeKind};
 
 mod collision;
 mod models;
+mod scripts;
 mod textures;
 
 #[derive(Parser)]
@@ -61,6 +62,30 @@ enum Command {
     Col {
         #[command(subcommand)]
         command: ColCommand,
+    },
+    /// Work with .qb compiled scripts
+    Qb {
+        #[command(subcommand)]
+        command: QbCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum QbCommand {
+    /// Decompile a .qb, or every .qb under a folder, into readable .q files
+    Decompile {
+        input: PathBuf,
+        out: PathBuf,
+        /// Folder of scripts whose symbol tables supply names (default: the input folder)
+        #[arg(long)]
+        symbols: Option<PathBuf>,
+    },
+    /// Summarize a level script's NodeArray (nodes by class, rails)
+    Nodes {
+        file: PathBuf,
+        /// Folder of scripts whose symbol tables supply names
+        #[arg(long)]
+        symbols: Option<PathBuf>,
     },
 }
 
@@ -122,6 +147,14 @@ fn main() -> Result<()> {
         Command::Tex { command } => match command {
             TexCommand::Ls { file } => textures::ls(&file),
             TexCommand::Export { input, out } => textures::export(&input, &out),
+        },
+        Command::Qb { command } => match command {
+            QbCommand::Decompile {
+                input,
+                out,
+                symbols,
+            } => scripts::decompile_files(&input, &out, symbols.as_deref()),
+            QbCommand::Nodes { file, symbols } => scripts::nodes(&file, symbols.as_deref()),
         },
         Command::Col { command } => match command {
             ColCommand::Info { file } => collision::info(&file),
