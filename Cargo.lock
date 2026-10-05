@@ -530,6 +530,7 @@ dependencies = [
  "anyhow",
  "clap",
  "gc_disc",
+ "ngc_anim",
  "ngc_collision",
  "ngc_model",
  "ngc_texture",
@@ -1454,6 +1455,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "ngc_anim"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

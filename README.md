@@ -49,6 +49,7 @@ panel included, without opening a window.
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
 | `ngc_model` | Parses `.mdl.ngc` models, `.skin.ngc` skinned characters and `.scn.ngc` level scenes: materials, vertex arrays, bone weights, triangle strips |
+| `ngc_anim` | Parses `.ske` skeletons and `.ska.ngc` animations, samples them and poses skinned characters |
 | `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
 | `desa_viewer` | Level rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
@@ -114,6 +115,17 @@ cargo test --release -p ngc_model -- --ignored    # parse every real model and l
 Vertex colors (the levels' baked lighting) are written as OBJ vertex colors.
 `tools/render_obj.py` and `tools/render_textured.py` render quick previews of
 an exported OBJ with Python and Pillow, for checking results without Blender.
+
+Inspect an animation, or export a character posed by one at a given time
+(in seconds). The skeleton, the key tables and the rest pose are found
+automatically when everything is unpacked under one folder; `--skeleton`,
+`--tables` and `--rest` override them:
+
+```
+cargo run --release -- anim info extracted/unpacked/anims_jessie/anims/jessie/Ollie.ska.ngc
+cargo run --release -- anim pose extracted/unpacked/anims_jessie/models/jessie/jessie.skin.ngc extracted/unpacked/anims_jessie/anims/jessie/Ollie.ska.ngc extracted/models/jessie_ollie --time 0.4
+cargo test --release -p ngc_anim -- --ignored    # parse every real skeleton and animation
+```
 
 ## Level viewer
 
@@ -252,6 +264,33 @@ cargo run --release -- model export extracted/unpacked/anims_jessie/models/jessi
 Result on the US disc: all 195 models, 22 level scenes (11 levels plus their
 skies) and 191 skinned models parse exactly to the end of the file.
 
+## Skeletons and animations
+
+Both formats are documented in the module docs of `crates/ngc_anim`. The
+decoder was checked against the game's own (at `0x80067BE8` in `main.dol`).
+
+- **Skeletons** (`.ske`, little-endian) are just names: for each bone its
+  checksum, its parent's and its mirror partner's (left arm <-> right arm).
+  There is no rest pose in them.
+- **Animations** (`.ska.ngc`) have a big-endian header and per-bone key
+  counts, then little-endian key streams. Keys are at 60 frames per second
+  and relative to the parent bone.
+- **Rotation keys** are compressed quaternions: x, y and z as 16-bit values
+  (or unsigned bytes when small) scaled by 1/16384, with w rebuilt from them
+  and its sign in a flag bit. A key can instead be a 1-byte index into
+  `standardkeyq.bin`, a table of common rotations loaded at start-up.
+  Translations work the same way, divided by 32, with `standardkeyt.bin`.
+- **Posing.** The decoded quaternions must be conjugated. A bone's matrix
+  is parent * translate * rotate, and a vertex follows its bones by
+  pose * inverse(rest), where the rest pose is the character's
+  `default.ska.ngc` at time 0. The two weights of each skinned vertex are
+  stored in reverse bone order. Getting any of these wrong tears the mesh
+  apart at the joints.
+- **Not supported yet:** the 292 camera paths (header flags `0x1E000000`),
+  which use a different layout.
+
+Result on the US disc: all 53 skeletons and 2,197 bone animations parse.
+
 ## Texture formats
 
 Both files are big-endian; see the module docs in `crates/ngc_texture` for
@@ -273,21 +312,22 @@ from 1,079 files.
 
 | Extension | Count | Probably |
 |---|---|---|
-| `.ska.ngc` | 2489 | Skeletal animations |
+| `.ska.ngc` | 2489 | Animations: 2,197 skeletal (decoded) and 292 camera paths |
 | `.dsp` | 736 | GameCube ADPCM sound effects |
 | `.img.ngc` / `.tex.ngc` | 679 / 408 | Images and texture dictionaries |
 | `.qb` | 347 | Compiled QB scripts |
 | `.col.ngc` | 271 | Collision meshes (decoded) |
 | `.mdl.ngc` / `.skin.ngc` / `.scn.ngc` | 195 / 191 / 22 | Models, skinned characters, level scenes |
 | `.cas.ngc` | 191 | Create-a-skater parts |
-| `.ske` | 53 | Skeletons |
+| `.ske` | 53 | Skeletons (decoded) |
 | `.fnt.ngc` | 32 | Fonts |
 
 ## Roadmap
 
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
-   skinned models, levels, collision and a level viewer (done). Next:
-   skeletons (`.ske`) and animations (`.ska`) to pose the characters.
+   skinned models, levels, collision, a level viewer, skeletons and
+   animations (done). Next: animated characters in the viewer, camera
+   paths, and the skins' extra-influence block.
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.

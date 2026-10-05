@@ -11,7 +11,9 @@
 //!   u32  vertex count
 //!   u16  0, u8 bone, u8 bone
 //!   count × (f32 ×3 position, f32 ×3 normal)    model space, rest pose
-//!   count × (f32 weight, f32 weight)            one per bone
+//!   count × (f32 weight, f32 weight)            in reverse bone order: the
+//!                                               first weight is the second
+//!                                               bone's
 //! u32  byte size, u32 entry count               a second block, apparently
 //! ...                                           extra influences for the few
 //!                                               vertices with more than two
@@ -101,7 +103,9 @@ pub(crate) fn read(data: &[u8], start: usize, stored_count: u32) -> Result<Skinn
         }
         at += count as usize * 24;
         for v in 0..count as usize {
-            weights.push([f32_at(data, at + v * 8), f32_at(data, at + v * 8 + 4)]);
+            // Stored in reverse bone order (see the module docs). Posing a
+            // character the other way tears the mesh apart at the joints.
+            weights.push([f32_at(data, at + v * 8 + 4), f32_at(data, at + v * 8)]);
         }
         at += count as usize * 8;
     }
@@ -238,7 +242,8 @@ mod tests {
         assert_eq!(skinned.positions[3], [3.0, 1.0, 2.0]);
         assert_eq!(skinned.normals[0], [0.0, 1.0, 0.0]);
         assert_eq!(skinned.skin.bones, [[3, 2], [3, 2], [5, 4], [5, 4], [5, 4]]);
-        assert_eq!(skinned.skin.weights[4], [0.75, 0.25]);
+        // Stored as (0.75, 0.25): the first weight is the second bone's.
+        assert_eq!(skinned.skin.weights[4], [0.25, 0.75]);
         assert_eq!(skinned.skin.extra_influences, [0, 0, 0, 0, 9, 9]);
         assert_eq!(skinned.end, data.len());
         assert_eq!(skinned.skin.repaired_counts, 0);

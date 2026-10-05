@@ -133,7 +133,13 @@ pub fn materials(path: &Path, textures: Option<&Path>) -> Result<()> {
 /// `<out>/textures/`. Textures come from `textures`, or by default from
 /// `<name>.tex.ngc` next to the input.
 pub fn export(path: &Path, out: &Path, textures: Option<&Path>) -> Result<()> {
-    let scene = load(path)?;
+    export_scene(&load(path)?, path, out, textures)
+}
+
+/// Like [`export`], for a scene that's already loaded (and perhaps
+/// changed, such as a posed character). `path` is the file it came from,
+/// used for its name and to find its textures.
+pub fn export_scene(scene: &Scene, path: &Path, out: &Path, textures: Option<&Path>) -> Result<()> {
     let name = stem(path)?;
 
     let tex_path = match textures {
@@ -189,7 +195,7 @@ pub fn export(path: &Path, out: &Path, textures: Option<&Path>) -> Result<()> {
     }
     mtl.flush()?;
 
-    let (vertices, triangles) = write_obj(&scene, name, &out.join(format!("{name}.obj")))?;
+    let (vertices, triangles) = write_obj(scene, name, &out.join(format!("{name}.obj")))?;
 
     println!(
         "Wrote {name}.obj ({vertices} vertices, {triangles} triangles, {} materials) and {written} textures to {}",
