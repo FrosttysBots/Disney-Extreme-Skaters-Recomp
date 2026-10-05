@@ -13,12 +13,15 @@
 //! triangle strips from the pool with one material. Textures are referenced
 //! by checksum and live in the matching `.tex.ngc` file.
 //!
-//! Skinned characters (`.skin.ngc`, sector flag `0x10`) use a different,
-//! grouped vertex layout that isn't supported yet.
+//! Skinned characters (`.skin.ngc`) use the same layout, except that
+//! sectors with flag `0x10` store their vertices in bone groups; see
+//! [`skin`].
 
 mod reader;
+pub mod skin;
 
 use reader::Reader;
+pub use skin::Skin;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -52,7 +55,7 @@ pub mod sector_flags {
     pub const TEXCOORDS: u32 = 0x01;
     pub const COLORS: u32 = 0x02;
     pub const NORMALS: u32 = 0x04;
-    /// Skinned vertex layout (not supported).
+    /// Skinned: positions and normals come in bone groups (see `skin`).
     pub const WEIGHTS: u32 = 0x10;
     /// One byte per vertex selecting a vertex-color animation sequence.
     pub const VC_WIBBLE_INDICES: u32 = 0x800;
@@ -134,6 +137,8 @@ pub struct Sector {
     pub uvs: Vec<[f32; 2]>,
     pub colors: Vec<[u8; 4]>,
     pub vc_wibble_indices: Vec<u8>,
+    /// Bones and weights, for skinned sectors.
+    pub skin: Option<Skin>,
     pub meshes: Vec<Mesh>,
 }
 
@@ -284,23 +289,35 @@ fn read_sector(r: &mut Reader) -> Result<Sector> {
     let checksum = r.u32("sector checksum")?;
     let bone = r.i32("bone index")?;
     let flags = r.u32("sector flags")?;
-    if flags & sector_flags::WEIGHTS != 0 {
-        return Err(Error::Unsupported(format!(
-            "sector {checksum:08x} at {start:#x} is skinned; skinned models aren't supported yet"
-        )));
-    }
     let mesh_count = r.count("mesh count", 28)?;
     let bbox = r.f32s("bounding box")?;
     let bsphere = r.f32s("bounding sphere")?;
-    let vertex_count = r.count("vertex count", 12)?;
+    let stored_vertex_count = r.u32("vertex count")?;
     let _vertex_size = r.u32("vertex size")?;
 
-    let positions = (0..vertex_count)
-        .map(|_| r.f32s("position"))
-        .collect::<Result<_>>()?;
-
     let mut normals = Vec::new();
-    if flags & sector_flags::NORMALS != 0 {
+    let mut skin = None;
+    let positions: Vec<[f32; 3]>;
+    if flags & sector_flags::WEIGHTS != 0 {
+        let skinned = skin::read(r.data(), r.offset, stored_vertex_count)?;
+        positions = skinned.positions;
+        normals = skinned.normals;
+        skin = Some(skinned.skin);
+        r.offset = skinned.end;
+    } else {
+        let count = stored_vertex_count as usize;
+        if count.saturating_mul(12) > r.remaining() {
+            return Err(Error::Invalid(format!(
+                "vertex count {count} of sector {checksum:08x} at {start:#x} is larger than the file"
+            )));
+        }
+        positions = (0..count)
+            .map(|_| r.f32s("position"))
+            .collect::<Result<_>>()?;
+    }
+    let vertex_count = positions.len();
+
+    if flags & sector_flags::NORMALS != 0 && skin.is_none() {
         let raw = r.bytes(vertex_count * 6, "normals")?;
         normals = raw
             .chunks_exact(6)
@@ -350,6 +367,7 @@ fn read_sector(r: &mut Reader) -> Result<Sector> {
         uvs,
         colors,
         vc_wibble_indices,
+        skin,
         meshes,
     })
 }

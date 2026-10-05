@@ -156,21 +156,6 @@ fn strips_become_counter_clockwise_triangles() {
 }
 
 #[test]
-fn rejects_skinned_sectors() {
-    let mut b = Builder::default();
-    b.u32(1).u32(1).u32(1).u32(0).u32(1);
-    b.u32(0xBEEF)
-        .u32(u32::MAX)
-        .u32(sector_flags::WEIGHTS)
-        .u32(0);
-    b.f32s(&[0.0; 10]).u32(0).u32(60);
-    assert!(matches!(
-        Scene::parse(&finish(b)),
-        Err(Error::Unsupported(_))
-    ));
-}
-
-#[test]
 fn rejects_out_of_range_indices() {
     let mut data = finish(sample());
     // The first strip's first index: 0 -> 9 (only 4 vertices).
@@ -205,7 +190,7 @@ fn rejects_absurd_counts() {
     assert!(matches!(Scene::parse(&b.0), Err(Error::Invalid(_))));
 }
 
-/// Parses every static model and level from a real disc. Run with
+/// Parses every model, skinned model and level from a real disc. Run with
 /// `cargo test -p ngc_model -- --ignored` after unpacking into `extracted/unpacked`.
 #[test]
 #[ignore = "needs the unpacked game files"]
@@ -236,7 +221,10 @@ fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             .to_ascii_lowercase();
         if path.is_dir() {
             collect(&path, out);
-        } else if name.ends_with(".mdl.ngc") || name.ends_with(".scn.ngc") {
+        } else if name.ends_with(".mdl.ngc")
+            || name.ends_with(".scn.ngc")
+            || name.ends_with(".skin.ngc")
+        {
             out.push(path);
         }
     }

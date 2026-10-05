@@ -11,7 +11,7 @@ use ngc_texture::TexDictionary;
 
 use crate::textures::write_png;
 
-const SUFFIXES: [&str; 2] = [".mdl.ngc", ".scn.ngc"];
+const SUFFIXES: [&str; 3] = [".mdl.ngc", ".scn.ngc", ".skin.ngc"];
 
 /// The file name without its two-part extension, e.g. `beach` for `beach.scn.ngc`.
 fn stem(path: &Path) -> Result<&str> {
@@ -24,7 +24,7 @@ fn stem(path: &Path) -> Result<&str> {
         .iter()
         .find(|s| lower.ends_with(*s))
         .map(|s| &name[..name.len() - s.len()])
-        .with_context(|| format!("expected a {} or {} file", SUFFIXES[0], SUFFIXES[1]))
+        .with_context(|| format!("expected a {} file", SUFFIXES.join(", ")))
 }
 
 fn load(path: &Path) -> Result<Scene> {

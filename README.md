@@ -48,7 +48,7 @@ panel included, without opening a window.
 | `gc_disc` | Reads GameCube disc images: header, file system table, `main.dol` sections |
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
-| `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
+| `ngc_model` | Parses `.mdl.ngc` models, `.skin.ngc` skinned characters and `.scn.ngc` level scenes: materials, vertex arrays, bone weights, triangle strips |
 | `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
 | `desa_viewer` | Level rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
@@ -236,11 +236,21 @@ exact field list is in the module docs of `crates/ngc_model`.
   wind counter-clockwise.
 - **Coordinates** are Y-up. UVs use a bottom-left origin, which matches the
   bottom-up texture storage, so they export to OBJ unchanged.
-- **Not supported yet:** skinned characters (`.skin.ngc`), which group
-  vertices by bone, and collision (`.col.ngc`).
+- **Skinned characters** (`.skin.ngc`) use the same layout, except that
+  their vertices come in groups sharing a pair of bones (a bone and its
+  parent), each vertex with two weights, plus a small second block of what
+  look like extra influences (kept raw for now). Positions are in model
+  space in the rest pose, so characters export and draw without a
+  skeleton. Some group counts suffer the same `0x20` -> `0x00` corruption as
+  collision; the parser repairs them by keeping the reading where every
+  group header lines up.
 
-Result on the US disc: all 195 models and 22 level scenes (11 levels plus
-their skies) parse exactly to the end of the file.
+```
+cargo run --release -- model export extracted/unpacked/anims_jessie/models/jessie/jessie.skin.ngc extracted/models/jessie
+```
+
+Result on the US disc: all 195 models, 22 level scenes (11 levels plus their
+skies) and 191 skinned models parse exactly to the end of the file.
 
 ## Texture formats
 
@@ -275,8 +285,9 @@ from 1,079 files.
 
 ## Roadmap
 
-1. **Asset tools.** Disc reading, PRG unpacking, textures, static models,
-   levels, collision and a level viewer (done). Next: skinned models.
+1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
+   skinned models, levels, collision and a level viewer (done). Next:
+   skeletons (`.ske`) and animations (`.ska`) to pose the characters.
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.

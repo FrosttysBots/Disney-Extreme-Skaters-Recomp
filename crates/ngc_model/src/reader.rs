@@ -11,6 +11,11 @@ impl<'a> Reader<'a> {
         Self { data, offset: 0 }
     }
 
+    /// The whole file, for parsers that need to look ahead.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
+
     pub fn remaining(&self) -> usize {
         self.data.len() - self.offset
     }
