@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use gc_disc::{Disc, NodeKind};
 
+mod models;
 mod textures;
 
 #[derive(Parser)]
@@ -50,6 +51,25 @@ enum Command {
         #[command(subcommand)]
         command: TexCommand,
     },
+    /// Work with .mdl.ngc models and .scn.ngc level scenes
+    Model {
+        #[command(subcommand)]
+        command: ModelCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModelCommand {
+    /// Summarize a model or scene: counts and bounds
+    Info { file: PathBuf },
+    /// Export a model or scene as OBJ + MTL + PNG textures
+    Export {
+        file: PathBuf,
+        out: PathBuf,
+        /// Texture dictionary to use (default: <name>.tex.ngc next to the file)
+        #[arg(long)]
+        textures: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -81,6 +101,14 @@ fn main() -> Result<()> {
         Command::Tex { command } => match command {
             TexCommand::Ls { file } => textures::ls(&file),
             TexCommand::Export { input, out } => textures::export(&input, &out),
+        },
+        Command::Model { command } => match command {
+            ModelCommand::Info { file } => models::info(&file),
+            ModelCommand::Export {
+                file,
+                out,
+                textures,
+            } => models::export(&file, &out, textures.as_deref()),
         },
     }
 }

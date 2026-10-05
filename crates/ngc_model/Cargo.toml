@@ -1,0 +1,9 @@
+[package]
+name = "ngc_model"
+description = "Parser for the GameCube model (.mdl.ngc) and level scene (.scn.ngc) files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true

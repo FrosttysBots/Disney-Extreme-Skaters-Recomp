@@ -13,6 +13,7 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 | `gc_disc` | Reads GameCube disc images: header, file system table, `main.dol` sections |
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
+| `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
@@ -62,6 +63,40 @@ An `.img.ngc` becomes one PNG. A `.tex.ngc` becomes a folder of PNGs named
 by each texture's checksum, which is how models refer to them. Only the
 full-size mip level is exported.
 
+Export a model or a whole level as OBJ + MTL + PNG textures, ready to open
+in Blender. Textures come from the `.tex.ngc` with the same name next to the
+input, or from `--textures`:
+
+```
+cargo run --release -- model info   extracted/unpacked/beachScn/Levels/beach/beach.scn.ngc
+cargo run --release -- model export extracted/unpacked/beachScn/Levels/beach/beach.scn.ngc extracted/models/beach
+cargo test --release -p ngc_model -- --ignored    # parse every real model and level
+```
+
+Vertex colors (the levels' baked lighting) are written as OBJ vertex colors.
+`tools/render_obj.py` and `tools/render_textured.py` render quick previews of
+an exported OBJ with Python and Pillow, for checking results without Blender.
+
+## Model formats
+
+`.mdl.ngc` (objects) and `.scn.ngc` (levels) share one big-endian layout; the
+exact field list is in the module docs of `crates/ngc_model`.
+
+- **Materials** have one or more passes. Each pass names a texture by
+  checksum, plus blend settings, a color, and optional UV-scrolling and
+  vertex-color animation blocks, depending on its flags.
+- **Sectors** are objects: a vertex pool (positions, 16-bit normals,
+  interleaved UV sets, colors where 0x80 is full brightness) plus meshes.
+- **Meshes** draw triangle strips from the pool with one material. Strips
+  wind counter-clockwise.
+- **Coordinates** are Y-up. UVs use a bottom-left origin, which matches the
+  bottom-up texture storage, so they export to OBJ unchanged.
+- **Not supported yet:** skinned characters (`.skin.ngc`), which group
+  vertices by bone, and collision (`.col.ngc`).
+
+Result on the US disc: all 195 models and 22 level scenes (11 levels plus
+their skies) parse exactly to the end of the file.
+
 ## Texture formats
 
 Both files are big-endian; see the module docs in `crates/ngc_texture` for
@@ -95,8 +130,9 @@ from 1,079 files.
 
 ## Roadmap
 
-1. **Asset tools.** Disc reading, PRG unpacking and textures (done), then
-   model and level format decoders, ending in a level viewer.
+1. **Asset tools.** Disc reading, PRG unpacking, textures, and static
+   models and levels (done). Next: skinned models, collision, and a level
+   viewer.
 2. **Level loading.** Render whole levels with collision and a free camera.
 3. **QB scripts.** Parse and run Neversoft's compiled script format.
 4. **Skater physics.** Match the original's constants and update loop,

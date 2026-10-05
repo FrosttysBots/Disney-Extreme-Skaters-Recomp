@@ -148,7 +148,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn write_png(path: &Path, image: &Image) -> Result<()> {
+pub fn write_png(path: &Path, image: &Image) -> Result<()> {
     let file =
         File::create(path).with_context(|| format!("could not create {}", path.display()))?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), image.width, image.height);
