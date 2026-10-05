@@ -10,6 +10,8 @@ pub struct Settings {
     pub data_path: Option<PathBuf>,
     /// The archive id of the last level viewed.
     pub last_level: Option<String>,
+    /// The id of the character last shown.
+    pub last_character: Option<String>,
     pub speed: Option<f32>,
 }
 
@@ -34,6 +36,9 @@ impl Settings {
             match key.trim() {
                 "data_path" if !value.is_empty() => settings.data_path = Some(PathBuf::from(value)),
                 "last_level" if !value.is_empty() => settings.last_level = Some(value.to_string()),
+                "last_character" if !value.is_empty() => {
+                    settings.last_character = Some(value.to_string())
+                }
                 "speed" => settings.speed = value.parse().ok(),
                 _ => {}
             }
@@ -53,6 +58,9 @@ impl Settings {
         }
         if let Some(level) = &self.last_level {
             text += &format!("last_level={level}\n");
+        }
+        if let Some(character) = &self.last_character {
+            text += &format!("last_character={character}\n");
         }
         if let Some(speed) = self.speed {
             text += &format!("speed={speed}\n");

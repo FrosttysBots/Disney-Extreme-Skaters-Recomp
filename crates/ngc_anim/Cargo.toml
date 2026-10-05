@@ -1,0 +1,10 @@
+[package]
+name = "ngc_anim"
+description = "Skeletons (.ske) and animations (.ska.ngc) for the GameCube characters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+glam = "0.34"

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use gc_disc::{Disc, NodeKind};
 
+mod anims;
 mod collision;
 mod models;
 mod scripts;
@@ -67,6 +68,43 @@ enum Command {
     Qb {
         #[command(subcommand)]
         command: QbCommand,
+    },
+    /// Work with .ska.ngc animations and .ske skeletons
+    Anim {
+        #[command(subcommand)]
+        command: AnimCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AnimCommand {
+    /// Summarize an animation: length, bones and keys
+    Info {
+        file: PathBuf,
+        /// Folder with standardkeyq.bin and standardkeyt.bin (default: skeletons/anims above the file)
+        #[arg(long)]
+        tables: Option<PathBuf>,
+    },
+    /// Export a skinned character posed at a moment of an animation, as OBJ
+    Pose {
+        /// The character (.skin.ngc)
+        skin: PathBuf,
+        /// The animation (.ska.ngc)
+        anim: PathBuf,
+        /// Output folder
+        out: PathBuf,
+        /// Time in seconds
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
+        /// Skeleton (default: skeletons/skeletons/<name>.ske above the character)
+        #[arg(long)]
+        skeleton: Option<PathBuf>,
+        /// Rest-pose animation (default: default.ska.ngc beside the animation)
+        #[arg(long)]
+        rest: Option<PathBuf>,
+        /// Folder with standardkeyq.bin and standardkeyt.bin
+        #[arg(long)]
+        tables: Option<PathBuf>,
     },
 }
 
@@ -147,6 +185,26 @@ fn main() -> Result<()> {
         Command::Tex { command } => match command {
             TexCommand::Ls { file } => textures::ls(&file),
             TexCommand::Export { input, out } => textures::export(&input, &out),
+        },
+        Command::Anim { command } => match command {
+            AnimCommand::Info { file, tables } => anims::info(&file, tables.as_deref()),
+            AnimCommand::Pose {
+                skin,
+                anim,
+                out,
+                time,
+                skeleton,
+                rest,
+                tables,
+            } => anims::pose(&anims::PoseOptions {
+                skin: &skin,
+                anim: &anim,
+                time,
+                out: &out,
+                skeleton: skeleton.as_deref(),
+                rest: rest.as_deref(),
+                tables: tables.as_deref(),
+            }),
         },
         Command::Qb { command } => match command {
             QbCommand::Decompile {

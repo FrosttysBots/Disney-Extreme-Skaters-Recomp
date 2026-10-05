@@ -2,6 +2,7 @@
 //! `desa-map-viewer` (the windowed map viewer).
 
 pub mod camera;
+pub mod character;
 pub mod collision;
 pub mod level;
 pub mod nodes;

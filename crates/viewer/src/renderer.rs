@@ -1,7 +1,8 @@
-//! Draws a level and its sky with wgpu.
+//! Draws a level, its sky and a character with wgpu.
 //!
 //! Order: sky (no depth test, camera-centered), then opaque materials, then
-//! transparent materials by draw order. Every material draws all of its
+//! transparent materials by draw order, then the character (posed on the
+//! CPU; see `character`), which also gets simple directional lighting. Every material draws all of its
 //! passes, each with the engine's blend mode for that pass. Depth uses
 //! reversed Z with an infinite far plane, which keeps precision across
 //! levels that span more than 100,000 units.
@@ -17,7 +18,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-use crate::camera::FlyCamera;
+use crate::camera::{FlyCamera, ScriptedCamera};
 use crate::collision::{CollisionView, ColorVertex};
 use crate::level::{Level, PassDraw, TextureData, Vertex, blend};
 
@@ -114,7 +115,7 @@ struct PassParams {
 }
 
 impl PassParams {
-    fn new(pass: &PassDraw, kind: Kind) -> Self {
+    fn new(pass: &PassDraw, kind: Kind, lit: bool) -> Self {
         let w = pass.uv_wibble;
         Self {
             wibble_velocity_frequency: [w[0], w[1], w[2], w[3]],
@@ -131,7 +132,7 @@ impl PassParams {
                 } else {
                     0.0
                 },
-                0.0,
+                if lit { 1.0 } else { 0.0 },
                 0.0,
                 0.0,
             ],
@@ -142,6 +143,12 @@ impl PassParams {
 struct GpuPass {
     kind: Kind,
     bind_group: wgpu::BindGroup,
+    /// The texture slot the material uses, and the one currently bound
+    /// (they differ while a texture is swapped, as when blinking).
+    texture: usize,
+    shown: usize,
+    /// This pass's slot in `GpuLevel::params`.
+    params_slot: u64,
 }
 
 struct GpuBatch {
@@ -156,6 +163,9 @@ struct GpuLevel {
     indices: wgpu::Buffer,
     /// Opaque batches in file order, then transparent ones by draw order.
     batches: Vec<GpuBatch>,
+    /// Kept for rebinding passes to other textures.
+    views: Vec<wgpu::TextureView>,
+    params: wgpu::Buffer,
 }
 
 struct Globals {
@@ -172,6 +182,10 @@ pub struct Renderer {
     sky_globals: Globals,
     world: GpuLevel,
     sky: Option<GpuLevel>,
+    /// Its vertex buffer is rewritten every frame with the posed vertices.
+    character: Option<GpuLevel>,
+    pass_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     collision: Option<(wgpu::Buffer, u32)>,
     /// Rails and spawn markers.
     markers: Option<(wgpu::Buffer, u32)>,
@@ -179,6 +193,9 @@ pub struct Renderer {
     color_solid: wgpu::RenderPipeline,
     pub collision_view: CollisionView,
     pub show_sky: bool,
+    /// When set, frames are drawn from this camera instead of the one
+    /// passed to `render` / `encode` (for playing camera paths).
+    pub scripted_camera: Option<ScriptedCamera>,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
@@ -250,8 +267,8 @@ impl Renderer {
 
         let world_globals = make_globals(&device, &globals_layout);
         let sky_globals = make_globals(&device, &globals_layout);
-        let world = upload_level(&device, &queue, &pass_layout, &sampler, world);
-        let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky));
+        let world = upload_level(&device, &queue, &pass_layout, &sampler, world, false);
+        let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky, false));
         let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
         let color_overlay = make_collision_pipeline(&device, &globals_layout, color_format, true);
         let color_solid = make_collision_pipeline(&device, &globals_layout, color_format, false);
@@ -265,12 +282,16 @@ impl Renderer {
             sky_globals,
             world,
             sky,
+            character: None,
+            pass_layout,
+            sampler,
             collision,
             markers: None,
             color_overlay,
             color_solid,
             collision_view: CollisionView::Hidden,
             show_sky: true,
+            scripted_camera: None,
             min_light: 0.0,
             depth: None,
         }
@@ -283,6 +304,55 @@ impl Renderer {
     /// Replaces the rail and spawn geometry (empty hides it).
     pub fn set_markers(&mut self, vertices: &[ColorVertex]) {
         self.markers = color_buffer(&self.device, "markers", vertices);
+    }
+
+    /// Uploads a character's mesh (`None` removes it). Its vertices are
+    /// then replaced each frame with [`pose_character`](Self::pose_character).
+    pub fn set_character(&mut self, mesh: Option<&Level>) {
+        self.character = mesh.map(|mesh| {
+            upload_level(
+                &self.device,
+                &self.queue,
+                &self.pass_layout,
+                &self.sampler,
+                mesh,
+                true,
+            )
+        });
+    }
+
+    /// Replaces the character's vertices, which must match the mesh given
+    /// to [`set_character`](Self::set_character) in count and order.
+    pub fn pose_character(&self, vertices: &[Vertex]) {
+        if let Some(character) = &self.character {
+            self.queue
+                .write_buffer(&character.vertices, 0, bytemuck::cast_slice(vertices));
+        }
+    }
+
+    /// Draws the character's passes that use texture slot `from` with
+    /// slot `to` instead (`to == from` restores them). Slots index the
+    /// textures of the mesh given to [`set_character`](Self::set_character).
+    pub fn swap_character_texture(&mut self, from: usize, to: usize) {
+        let Some(character) = &mut self.character else {
+            return;
+        };
+        if to >= character.views.len() {
+            return;
+        }
+        for pass in character.batches.iter_mut().flat_map(|b| &mut b.passes) {
+            if pass.texture == from && pass.shown != to {
+                pass.bind_group = pass_bind_group(
+                    &self.device,
+                    &self.pass_layout,
+                    &character.views[to],
+                    &self.sampler,
+                    &character.params,
+                    pass.params_slot,
+                );
+                pass.shown = to;
+            }
+        }
     }
 
     /// Renders one frame into `target` and submits it. `time` drives
@@ -334,11 +404,20 @@ impl Renderer {
         }
 
         let aspect = width as f32 / height.max(1) as f32;
-        let projection = glam::camera::rh::proj::directx::perspective_infinite_reverse(
-            FOV_Y_DEGREES.to_radians(),
-            aspect,
-            NEAR,
-        );
+        let (view, rotation_view, fov_y) = match self.scripted_camera {
+            Some(c) => (
+                Mat4::from_rotation_translation(c.rotation, c.position).inverse(),
+                Mat4::from_quat(c.rotation.conjugate()),
+                c.fov_y,
+            ),
+            None => (
+                camera.view(),
+                camera.rotation_view(),
+                FOV_Y_DEGREES.to_radians(),
+            ),
+        };
+        let projection =
+            glam::camera::rh::proj::directx::perspective_infinite_reverse(fov_y, aspect, NEAR);
         let min_light = self.min_light;
         let write = |globals: &Globals, view: Mat4| {
             let data = GlobalsData {
@@ -349,8 +428,8 @@ impl Renderer {
             self.queue
                 .write_buffer(&globals.buffer, 0, bytemuck::bytes_of(&data));
         };
-        write(&self.world_globals, camera.view());
-        write(&self.sky_globals, camera.rotation_view());
+        write(&self.world_globals, view);
+        write(&self.sky_globals, rotation_view);
 
         {
             let (depth_view, _, _) = self.depth.as_ref().unwrap();
@@ -390,6 +469,10 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
                 draw(&mut pass, &self.world, &self.world_pipelines);
+            }
+            if let Some(character) = &self.character {
+                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+                draw(&mut pass, character, &self.world_pipelines);
             }
             pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
             if let Some((buffer, count)) = &self.markers {
@@ -598,11 +681,16 @@ fn upload_level(
     pass_layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     level: &Level,
+    character: bool,
 ) -> GpuLevel {
     let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vertices"),
         contents: bytemuck::cast_slice(&level.vertices),
-        usage: wgpu::BufferUsages::VERTEX,
+        usage: if character {
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
+        } else {
+            wgpu::BufferUsages::VERTEX
+        },
     });
     let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("indices"),
@@ -620,7 +708,7 @@ fn upload_level(
     for batch in &level.batches {
         for (i, pass) in batch.passes.iter().enumerate() {
             let mut slot = [0u8; PARAMS_STRIDE as usize];
-            let data = PassParams::new(pass, Kind::of(pass.blend_mode, i == 0));
+            let data = PassParams::new(pass, Kind::of(pass.blend_mode, i == 0), character);
             slot[..std::mem::size_of::<PassParams>()].copy_from_slice(bytemuck::bytes_of(&data));
             params.extend_from_slice(&slot);
         }
@@ -645,34 +733,21 @@ fn upload_level(
                 .iter()
                 .enumerate()
                 .map(|(i, pass)| {
-                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("pass"),
-                        layout: pass_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&views[pass.texture]),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer: &params_buffer,
-                                    offset: slot * PARAMS_STRIDE,
-                                    size: wgpu::BufferSize::new(
-                                        std::mem::size_of::<PassParams>() as u64
-                                    ),
-                                }),
-                            },
-                        ],
-                    });
+                    let bind_group = pass_bind_group(
+                        device,
+                        pass_layout,
+                        &views[pass.texture],
+                        sampler,
+                        &params_buffer,
+                        slot,
+                    );
                     slot += 1;
                     GpuPass {
                         kind: Kind::of(pass.blend_mode, i == 0),
                         bind_group,
+                        texture: pass.texture,
+                        shown: pass.texture,
+                        params_slot: slot - 1,
                     }
                 })
                 .collect();
@@ -696,7 +771,41 @@ fn upload_level(
         vertices,
         indices,
         batches,
+        views,
+        params: params_buffer,
     }
+}
+
+fn pass_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    texture: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    params: &wgpu::Buffer,
+    params_slot: u64,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("pass"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(texture),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: params,
+                    offset: params_slot * PARAMS_STRIDE,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<PassParams>() as u64),
+                }),
+            },
+        ],
+    })
 }
 
 fn upload_texture(
@@ -936,10 +1045,10 @@ mod tests {
             environment: true,
             uv_wibble: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
         };
-        let params = PassParams::new(&pass, Kind::of(pass.blend_mode, false));
+        let params = PassParams::new(&pass, Kind::of(pass.blend_mode, false), true);
         assert_eq!(params.settings, [1.0, 0.5, 0.5, 1.0]);
         assert_eq!(params.wibble_amplitude_phase, [5.0, 6.0, 7.0, 8.0]);
-        assert_eq!(params.options[0], 0.0);
+        assert_eq!(params.options, [0.0, 1.0, 0.0, 0.0]);
         assert!(std::mem::size_of::<PassParams>() as u64 <= PARAMS_STRIDE);
     }
 }

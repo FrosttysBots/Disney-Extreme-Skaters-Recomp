@@ -9,7 +9,9 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 ## Map Viewer
 
 `DESA Map Viewer.exe` lets you fly around every level, straight from your
-disc image; nothing needs unpacking first.
+disc image; nothing needs unpacking first. Any of the 12 playable
+characters can stand in the level on their board and play their
+animations.
 
 ```
 cargo build --release -p desa_viewer
@@ -18,13 +20,26 @@ cargo build --release -p desa_viewer
 This builds `target/release/desa-map-viewer.exe`, which needs no installs.
 On first run it looks for the disc image (`.iso`) next to itself and in the
 folders above it; otherwise use **Open disc image...** in the panel. It
-remembers the disc, the last level and the camera speed in
+remembers the disc, the last level, the character and the camera speed in
 `%APPDATA%\desa-map-viewer\settings.txt`.
 
 The side panel lists the 11 levels and has toggles for the sky, rails
 (magenta tubes), spawn points (green = player 1 start, blue = others) and
 collision, a brighten slider for dark areas, camera speed, and every
 spawn point by name to jump to.
+
+Under **Character**, pick a character and one of their 125-133
+animations, then play, pause, change the speed or drag the time slider.
+The character stands on the level's start, and moves to each spawn point
+you go to (the spawn markers are switched off then, since they'd stand
+right through the character). **Look at the character** puts the camera in
+front of them, and **Blink** makes them blink every few seconds (see
+[Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
+frames.
+
+Under **Camera paths**, each level lists its cutscene, goal and warp
+cameras (7 to 46 per level). Click one to watch it; moving or looking
+around takes over from wherever it is.
 
 | Control | Action |
 |---|---|
@@ -36,10 +51,15 @@ spawn point by name to jump to.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
+| P | Play or pause the character |
+| [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
 
 `desa-map-viewer --level HUB --screenshot out.png` renders one frame,
-panel included, without opening a window.
+panel included, without opening a window. Add
+`--character jessie --animation Ollie --time 0.4` to show a character
+there, with the camera looking at them, or `--camera-path Cam_Plane
+--time 8` to view from a camera path.
 
 ## Crates
 
@@ -48,10 +68,11 @@ panel included, without opening a window.
 | `gc_disc` | Reads GameCube disc images: header, file system table, `main.dol` sections |
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
-| `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
+| `ngc_model` | Parses `.mdl.ngc` models, `.skin.ngc` skinned characters and `.scn.ngc` level scenes: materials, vertex arrays, bone weights, triangle strips |
+| `ngc_anim` | Parses `.ske` skeletons and `.ska.ngc` animations, samples them and poses skinned characters |
 | `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
-| `desa_viewer` | Level rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
+| `desa_viewer` | Level and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
@@ -114,6 +135,17 @@ cargo test --release -p ngc_model -- --ignored    # parse every real model and l
 Vertex colors (the levels' baked lighting) are written as OBJ vertex colors.
 `tools/render_obj.py` and `tools/render_textured.py` render quick previews of
 an exported OBJ with Python and Pillow, for checking results without Blender.
+
+Inspect an animation, or export a character posed by one at a given time
+(in seconds). The skeleton, the key tables and the rest pose are found
+automatically when everything is unpacked under one folder; `--skeleton`,
+`--tables` and `--rest` override them:
+
+```
+cargo run --release -- anim info extracted/unpacked/anims_jessie/anims/jessie/Ollie.ska.ngc
+cargo run --release -- anim pose extracted/unpacked/anims_jessie/models/jessie/jessie.skin.ngc extracted/unpacked/anims_jessie/anims/jessie/Ollie.ska.ngc extracted/models/jessie_ollie --time 0.4
+cargo test --release -p ngc_anim -- --ignored    # parse every real skeleton and animation
+```
 
 ## Level viewer
 
@@ -236,11 +268,77 @@ exact field list is in the module docs of `crates/ngc_model`.
   wind counter-clockwise.
 - **Coordinates** are Y-up. UVs use a bottom-left origin, which matches the
   bottom-up texture storage, so they export to OBJ unchanged.
-- **Not supported yet:** skinned characters (`.skin.ngc`), which group
-  vertices by bone, and collision (`.col.ngc`).
+- **Skinned characters** (`.skin.ngc`) use the same layout, except that
+  their vertices come in groups sharing a pair of bones (a bone and its
+  parent), each vertex with two weights. A second block gives 3,701
+  vertices on the disc a third bone with a small weight (1/21 to 1/3), the
+  two main weights then adding up to one minus it; posing with it
+  stretches the mesh less for 9 of the 11 characters that have any. It
+  also holds copies of those vertices, which undo 40 values that the
+  `0x20` bug damaged in the main data (10.0 stored as 8.0). Positions are
+  in model space in the rest pose, so characters export and draw without
+  a skeleton. Some group counts suffer the same `0x20` -> `0x00` corruption as
+  collision; the parser repairs them by keeping the reading where every
+  group header lines up.
 
-Result on the US disc: all 195 models and 22 level scenes (11 levels plus
-their skies) parse exactly to the end of the file.
+```
+cargo run --release -- model export extracted/unpacked/anims_jessie/models/jessie/jessie.skin.ngc extracted/models/jessie
+```
+
+Result on the US disc: all 195 models, 22 level scenes (11 levels plus their
+skies) and 191 skinned models parse exactly to the end of the file.
+
+## Skeletons and animations
+
+Both formats are documented in the module docs of `crates/ngc_anim`. The
+decoder was checked against the game's own (at `0x80067BE8` in `main.dol`).
+
+- **Skeletons** (`.ske`, little-endian) are just names: for each bone its
+  checksum, its parent's and its mirror partner's (left arm <-> right arm).
+  There is no rest pose in them.
+- **Animations** (`.ska.ngc`) have a big-endian header and per-bone key
+  counts, then little-endian key streams. Keys are at 60 frames per second
+  and relative to the parent bone.
+- **Rotation keys** are compressed quaternions: x, y and z as 16-bit values
+  (or unsigned bytes when small) scaled by 1/16384, with w rebuilt from them
+  and its sign in a flag bit. A key can instead be a 1-byte index into
+  `standardkeyq.bin`, a table of common rotations loaded at start-up.
+  Translations work the same way, divided by 32, with `standardkeyt.bin`.
+- **Posing.** The decoded quaternions must be conjugated. A bone's matrix
+  is parent * translate * rotate, and a vertex follows its bones by
+  pose * inverse(rest), where the rest pose is the character's
+  `default.ska.ngc` at time 0. The two weights of each skinned vertex are
+  stored in reverse bone order. Getting any of these wrong tears the mesh
+  apart at the joints.
+- **Camera paths** (header flags `0x1E000000`) are the same file type
+  with plain big-endian floats: one track of rotation and translation
+  keys, plus "custom" keys that set the field of view. The camera looks
+  down its local -Z after the same conjugation as bones; with that, the
+  view rays of the 93 moving paths meet at their subject (median error
+  0.4 degrees, against 50 or more for any other choice). Positions are in
+  mesh space, unlike node positions. Frame numbers have the `0x20` ->
+  `0x00` corruption and are repaired by keeping them in order. Many paths
+  hold their last key for much longer than they move (the hub's warp
+  shots say 55.9 seconds but stop at 11), leaving it to the scripts to
+  cut away. Details are in `crates/ngc_anim/src/camera.rs`.
+
+Result on the US disc: all 53 skeletons, 2,197 bone animations and 292
+camera paths parse.
+
+### Blinking
+
+Most characters' eyes are a small mesh textured with `eyes.png`. The same
+model carries three more frames on tiny quads hidden inside the body:
+`eyes00` (open), `eyes01` (half shut) and `eyes03` (shut). The names come
+from the created-skater script `disneytricks.qb`, which swaps all four
+together, and the texture checksums are the same in every character.
+
+The GameCube executable never refers to these textures: there is no
+checksum, name or format string for them, and
+`CSkinComponent::replace_texture` only prints "STUB FUNCTION called". So
+the GameCube release may not blink at all. The Map Viewer plays the frames
+anyway (half shut, shut, half shut, about 1/6 second in all, every 1.5 to
+5.5 seconds) on a timing of our own; untick **Blink** to turn it off.
 
 ## Texture formats
 
@@ -263,20 +361,22 @@ from 1,079 files.
 
 | Extension | Count | Probably |
 |---|---|---|
-| `.ska.ngc` | 2489 | Skeletal animations |
+| `.ska.ngc` | 2489 | Animations: 2,197 skeletal and 292 camera paths (decoded) |
 | `.dsp` | 736 | GameCube ADPCM sound effects |
 | `.img.ngc` / `.tex.ngc` | 679 / 408 | Images and texture dictionaries |
 | `.qb` | 347 | Compiled QB scripts |
 | `.col.ngc` | 271 | Collision meshes (decoded) |
 | `.mdl.ngc` / `.skin.ngc` / `.scn.ngc` | 195 / 191 / 22 | Models, skinned characters, level scenes |
 | `.cas.ngc` | 191 | Create-a-skater parts |
-| `.ske` | 53 | Skeletons |
+| `.ske` | 53 | Skeletons (decoded) |
 | `.fnt.ngc` | 32 | Fonts |
 
 ## Roadmap
 
-1. **Asset tools.** Disc reading, PRG unpacking, textures, static models,
-   levels, collision and a level viewer (done). Next: skinned models.
+1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
+   skinned models, levels, collision, a level viewer, skeletons and
+   animations, camera paths, and animated characters in the Map Viewer
+   (done).
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.

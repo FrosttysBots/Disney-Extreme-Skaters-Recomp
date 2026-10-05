@@ -27,6 +27,8 @@ pub struct Vertex {
 
 /// RGBA8 pixels for every mip level, top row first.
 pub struct TextureData {
+    /// The texture's name checksum (0 for the built-in white texture).
+    pub checksum: u32,
     pub width: u32,
     pub height: u32,
     pub levels: Vec<Vec<u8>>,
@@ -131,6 +133,7 @@ impl Level {
             indices: Vec::new(),
             batches: Vec::new(),
             textures: vec![TextureData {
+                checksum: 0,
                 width: 1,
                 height: 1,
                 levels: vec![vec![255; 4]],
@@ -206,6 +209,38 @@ impl Level {
         level.focus = focus(&level.vertices);
         Ok(level)
     }
+
+    /// The slot in `textures` of the texture with this name checksum.
+    pub fn texture_slot(&self, checksum: u32) -> Option<usize> {
+        self.textures
+            .iter()
+            .skip(1)
+            .position(|t| t.checksum == checksum)
+            .map(|i| i + 1)
+    }
+
+    /// Adds `other`'s geometry after this one's (a character and its board).
+    /// Its vertices keep their order, starting at this level's old count.
+    pub fn append(&mut self, other: Level) {
+        let base_vertex = self.vertices.len() as u32;
+        let base_index = self.indices.len() as u32;
+        // Both share slot 0, the white texture.
+        let base_texture = self.textures.len() - 1;
+        self.vertices.extend(other.vertices);
+        self.indices
+            .extend(other.indices.iter().map(|i| i + base_vertex));
+        self.textures.extend(other.textures.into_iter().skip(1));
+        for mut batch in other.batches {
+            batch.first_index += base_index;
+            for pass in &mut batch.passes {
+                if pass.texture != 0 {
+                    pass.texture += base_texture;
+                }
+            }
+            self.batches.push(batch);
+        }
+        self.focus = focus(&self.vertices);
+    }
 }
 
 fn pass_draw(pass: &Pass, texture: usize, uv_set: u32, alpha_cutoff: u32) -> PassDraw {
@@ -278,6 +313,7 @@ fn decode_texture(dict: &TexDictionary, checksum: u32) -> Option<TextureData> {
         .map_err(|e| eprintln!("warning: texture {checksum:08x}: {e}"))
         .ok()?;
     Some(TextureData {
+        checksum,
         width: texture.width,
         height: texture.height,
         levels,

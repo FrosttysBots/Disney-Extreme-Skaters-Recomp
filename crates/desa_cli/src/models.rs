@@ -11,7 +11,7 @@ use ngc_texture::TexDictionary;
 
 use crate::textures::write_png;
 
-const SUFFIXES: [&str; 2] = [".mdl.ngc", ".scn.ngc"];
+const SUFFIXES: [&str; 3] = [".mdl.ngc", ".scn.ngc", ".skin.ngc"];
 
 /// The file name without its two-part extension, e.g. `beach` for `beach.scn.ngc`.
 fn stem(path: &Path) -> Result<&str> {
@@ -24,7 +24,7 @@ fn stem(path: &Path) -> Result<&str> {
         .iter()
         .find(|s| lower.ends_with(*s))
         .map(|s| &name[..name.len() - s.len()])
-        .with_context(|| format!("expected a {} or {} file", SUFFIXES[0], SUFFIXES[1]))
+        .with_context(|| format!("expected a {} file", SUFFIXES.join(", ")))
 }
 
 fn load(path: &Path) -> Result<Scene> {
@@ -133,7 +133,13 @@ pub fn materials(path: &Path, textures: Option<&Path>) -> Result<()> {
 /// `<out>/textures/`. Textures come from `textures`, or by default from
 /// `<name>.tex.ngc` next to the input.
 pub fn export(path: &Path, out: &Path, textures: Option<&Path>) -> Result<()> {
-    let scene = load(path)?;
+    export_scene(&load(path)?, path, out, textures)
+}
+
+/// Like [`export`], for a scene that's already loaded (and perhaps
+/// changed, such as a posed character). `path` is the file it came from,
+/// used for its name and to find its textures.
+pub fn export_scene(scene: &Scene, path: &Path, out: &Path, textures: Option<&Path>) -> Result<()> {
     let name = stem(path)?;
 
     let tex_path = match textures {
@@ -189,7 +195,7 @@ pub fn export(path: &Path, out: &Path, textures: Option<&Path>) -> Result<()> {
     }
     mtl.flush()?;
 
-    let (vertices, triangles) = write_obj(&scene, name, &out.join(format!("{name}.obj")))?;
+    let (vertices, triangles) = write_obj(scene, name, &out.join(format!("{name}.obj")))?;
 
     println!(
         "Wrote {name}.obj ({vertices} vertices, {triangles} triangles, {} materials) and {written} textures to {}",
