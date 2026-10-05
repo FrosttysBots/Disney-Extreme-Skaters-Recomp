@@ -204,11 +204,26 @@ fn real_models_and_levels() {
         !files.is_empty(),
         "no .mdl.ngc / .scn.ngc files under {root}"
     );
+    let (mut extra, mut repaired, mut add_up) = (0, 0, 0);
     for path in &files {
         let data = std::fs::read(path).unwrap();
-        Scene::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let scene = Scene::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        for skin in scene.sectors.iter().filter_map(|s| s.skin.as_ref()) {
+            extra += skin.extra.len();
+            repaired += skin.repaired_values;
+            // With its third bone, a vertex's weights should add up to one.
+            add_up += skin
+                .influences()
+                .iter()
+                .filter(|i| i[2].1 > 0.0 && (i.iter().map(|w| w.1).sum::<f32>() - 1.0).abs() < 1e-3)
+                .count();
+        }
     }
-    println!("parsed {} files", files.len());
+    println!(
+        "parsed {} files; {extra} extra influences ({add_up} adding up to one), {repaired} values repaired from their copies",
+        files.len()
+    );
+    assert!(add_up * 100 >= extra * 98);
 }
 
 fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

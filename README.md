@@ -270,10 +270,14 @@ exact field list is in the module docs of `crates/ngc_model`.
   bottom-up texture storage, so they export to OBJ unchanged.
 - **Skinned characters** (`.skin.ngc`) use the same layout, except that
   their vertices come in groups sharing a pair of bones (a bone and its
-  parent), each vertex with two weights, plus a small second block of what
-  look like extra influences (kept raw for now). Positions are in model
-  space in the rest pose, so characters export and draw without a
-  skeleton. Some group counts suffer the same `0x20` -> `0x00` corruption as
+  parent), each vertex with two weights. A second block gives 3,701
+  vertices on the disc a third bone with a small weight (1/21 to 1/3), the
+  two main weights then adding up to one minus it; posing with it
+  stretches the mesh less for 9 of the 11 characters that have any. It
+  also holds copies of those vertices, which undo 40 values that the
+  `0x20` bug damaged in the main data (10.0 stored as 8.0). Positions are
+  in model space in the rest pose, so characters export and draw without
+  a skeleton. Some group counts suffer the same `0x20` -> `0x00` corruption as
   collision; the parser repairs them by keeping the reading where every
   group header lines up.
 
@@ -372,7 +376,7 @@ from 1,079 files.
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
    skinned models, levels, collision, a level viewer, skeletons and
    animations, camera paths, and animated characters in the Map Viewer
-   (done). Next: the skins' extra-influence block.
+   (done).
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.

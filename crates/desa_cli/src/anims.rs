@@ -152,14 +152,8 @@ pub fn pose(options: &PoseOptions) -> Result<()> {
     let mut skinned = 0;
     for sector in &mut scene.sectors {
         let Some(skin) = &sector.skin else { continue };
-        for (i, position) in sector.positions.iter_mut().enumerate() {
-            let p = pose::skin_point(
-                &matrices,
-                skin.bones[i],
-                skin.weights[i],
-                (*position).into(),
-            );
-            *position = p.into();
+        for (position, influences) in sector.positions.iter_mut().zip(skin.influences()) {
+            *position = pose::skin_point(&matrices, &influences, (*position).into()).into();
         }
         skinned += sector.positions.len();
     }

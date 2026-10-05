@@ -21,7 +21,7 @@ mod reader;
 pub mod skin;
 
 use reader::Reader;
-pub use skin::Skin;
+pub use skin::{ExtraInfluence, Skin};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

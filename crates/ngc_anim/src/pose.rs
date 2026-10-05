@@ -46,21 +46,35 @@ pub fn skinning(rest: &[Mat4], posed: &[Mat4]) -> Vec<Mat4> {
         .collect()
 }
 
-/// Moves a rest-pose position by two weighted bones.
-pub fn skin_point(matrices: &[Mat4], bones: [u8; 2], weights: [f32; 2], point: Vec3) -> Vec3 {
-    let total = weights[0] + weights[1];
-    let (w0, w1) = if total > 0.0 {
-        (weights[0] / total, weights[1] / total)
-    } else {
-        (1.0, 0.0)
-    };
+/// Moves a rest-pose position by weighted bones (bone index, weight).
+/// Weights are normalized; with none at all, the first bone moves it.
+pub fn skin_point(matrices: &[Mat4], influences: &[(u8, f32)], point: Vec3) -> Vec3 {
+    blend(matrices, influences, |m| m.transform_point3(point))
+}
+
+/// Like [`skin_point`] for a direction, such as a normal (not renormalized).
+pub fn skin_vector(matrices: &[Mat4], influences: &[(u8, f32)], vector: Vec3) -> Vec3 {
+    blend(matrices, influences, |m| m.transform_vector3(vector))
+}
+
+fn blend(matrices: &[Mat4], influences: &[(u8, f32)], apply: impl Fn(&Mat4) -> Vec3) -> Vec3 {
     let m = |b: u8| {
         matrices
             .get(usize::from(b))
             .copied()
             .unwrap_or(Mat4::IDENTITY)
     };
-    m(bones[0]).transform_point3(point) * w0 + m(bones[1]).transform_point3(point) * w1
+    let total: f32 = influences.iter().map(|&(_, w)| w).sum();
+    if total <= 0.0 {
+        return influences
+            .first()
+            .map_or(apply(&Mat4::IDENTITY), |&(b, _)| apply(&m(b)));
+    }
+    influences
+        .iter()
+        .filter(|&&(_, w)| w != 0.0)
+        .map(|&(b, w)| apply(&m(b)) * (w / total))
+        .sum()
 }
 
 #[cfg(test)]
@@ -112,6 +126,22 @@ mod tests {
         let rest = model_space(&chain(), &local);
         let skin = skinning(&rest, &rest);
         let p = Vec3::new(1.0, 2.0, 3.0);
-        assert!(skin_point(&skin, [0, 1], [0.5, 0.5], p).abs_diff_eq(p, 1e-5));
+        assert!(skin_point(&skin, &[(0, 0.5), (1, 0.5)], p).abs_diff_eq(p, 1e-5));
+    }
+
+    #[test]
+    fn weights_blend_and_normalize() {
+        let matrices = [
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::X * 10.0),
+            Mat4::from_translation(Vec3::Y * 10.0),
+        ];
+        let p = skin_point(&matrices, &[(0, 0.5), (1, 0.25), (2, 0.25)], Vec3::ZERO);
+        assert!(p.abs_diff_eq(Vec3::new(2.5, 2.5, 0.0), 1e-5));
+        // Weights that don't add up to one are scaled to.
+        let p = skin_point(&matrices, &[(1, 0.2), (2, 0.2)], Vec3::ZERO);
+        assert!(p.abs_diff_eq(Vec3::new(5.0, 5.0, 0.0), 1e-5));
+        // Translations don't move directions.
+        assert_eq!(skin_vector(&matrices, &[(1, 1.0)], Vec3::Z), Vec3::Z);
     }
 }

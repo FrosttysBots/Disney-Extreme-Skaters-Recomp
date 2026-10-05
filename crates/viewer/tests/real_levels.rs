@@ -19,8 +19,8 @@ fn real_level_camera_paths() {
     for level in &levels {
         let files = data.load_level(&level.id).unwrap();
         for (name, bytes) in &files.cameras {
-            let path = CameraPath::parse(bytes)
-                .unwrap_or_else(|e| panic!("{} {name}: {e}", level.id));
+            let path =
+                CameraPath::parse(bytes).unwrap_or_else(|e| panic!("{} {name}: {e}", level.id));
             assert!(path.last_key_time() <= path.duration, "{} {name}", level.id);
         }
         println!("{}: {} camera paths", level.title, files.cameras.len());

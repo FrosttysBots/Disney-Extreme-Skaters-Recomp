@@ -19,7 +19,7 @@
 //! may not blink. [`Blink`] plays them anyway, on a timing of our own.
 
 use anyhow::{Context, Result, bail};
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use ngc_anim::{Animation, KeyTables, Skeleton, pose};
 use ngc_model::Scene;
 
@@ -29,8 +29,8 @@ use crate::source::CharacterFiles;
 pub struct Character {
     /// Materials, textures and triangles, with the vertices in the rest pose.
     pub mesh: Level,
-    /// For each vertex of `mesh`: its two bones and their weights.
-    influences: Vec<([u8; 2], [f32; 2])>,
+    /// For each vertex of `mesh`: its bones and their weights.
+    influences: Vec<[(u8, f32); 3]>,
     skeleton: Skeleton,
     /// Model-space bone matrices of the rest pose.
     rest: Vec<Mat4>,
@@ -104,20 +104,16 @@ impl Character {
             .into_iter()
             .map(|m| placement * m)
             .collect();
-        let matrix = |b: u8| matrices.get(usize::from(b)).copied().unwrap_or(placement);
         self.mesh
             .vertices
             .iter()
             .zip(&self.influences)
-            .map(|(v, &(bones, weights))| {
-                let normal = Vec3::from(v.normal);
-                let normal = matrix(bones[0]).transform_vector3(normal) * weights[0]
-                    + matrix(bones[1]).transform_vector3(normal) * weights[1];
-                Vertex {
-                    position: pose::skin_point(&matrices, bones, weights, v.position.into()).into(),
-                    normal: normal.normalize_or_zero().into(),
-                    ..*v
-                }
+            .map(|(v, influences)| Vertex {
+                position: pose::skin_point(&matrices, influences, v.position.into()).into(),
+                normal: pose::skin_vector(&matrices, influences, v.normal.into())
+                    .normalize_or_zero()
+                    .into(),
+                ..*v
             })
             .collect()
     }
@@ -179,15 +175,16 @@ impl Blink {
 
 /// Bones and weights for every vertex, in the order `Level` lays them out.
 /// Vertices outside skinned sectors follow the root bone.
-fn influences(skin: &[u8]) -> Result<Vec<([u8; 2], [f32; 2])>> {
+fn influences(skin: &[u8]) -> Result<Vec<[(u8, f32); 3]>> {
     let scene = Scene::parse(skin).context("could not parse the model")?;
     let mut out = Vec::new();
     for sector in &scene.sectors {
-        for i in 0..sector.positions.len() {
-            out.push(match &sector.skin {
-                Some(skin) => (skin.bones[i], skin.weights[i]),
-                None => ([0, 0], [1.0, 0.0]),
-            });
+        match &sector.skin {
+            Some(skin) => out.extend(skin.influences()),
+            None => out.extend(std::iter::repeat_n(
+                [(0, 1.0), (0, 0.0), (0, 0.0)],
+                sector.positions.len(),
+            )),
         }
     }
     Ok(out)
