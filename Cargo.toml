@@ -12,6 +12,7 @@ gc_disc = { path = "crates/gc_disc" }
 prg = { path = "crates/prg" }
 ngc_texture = { path = "crates/ngc_texture" }
 ngc_model = { path = "crates/ngc_model" }
+ngc_collision = { path = "crates/ngc_collision" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"

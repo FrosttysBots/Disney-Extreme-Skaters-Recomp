@@ -1,0 +1,9 @@
+[package]
+name = "ngc_collision"
+description = "Parser for the GameCube collision files (.col.ngc)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true

@@ -16,6 +16,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::camera::FlyCamera;
+use crate::collision::{CollisionVertex, CollisionView};
 use crate::level::Level;
 use crate::renderer::{Renderer, request_device};
 
@@ -27,13 +28,21 @@ Controls:
   Q / Ctrl           down
   Shift              move 5x faster
   Mouse wheel        change speed
+  K                  cycle collision: hidden, overlay, only
   C                  print the camera (for --camera / --screenshot)
   R                  reset the camera
   Esc                quit";
 
 const MOUSE_SENSITIVITY: f32 = 0.0025;
 
-pub fn run(name: String, world: Level, sky: Option<Level>, start: FlyCamera) -> Result<()> {
+pub fn run(
+    name: String,
+    world: Level,
+    sky: Option<Level>,
+    collision: Option<Vec<CollisionVertex>>,
+    collision_view: CollisionView,
+    start: FlyCamera,
+) -> Result<()> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let speed = (world.focus.1 * 0.15).clamp(100.0, 5000.0);
@@ -41,6 +50,8 @@ pub fn run(name: String, world: Level, sky: Option<Level>, start: FlyCamera) -> 
         name,
         world: Some(world),
         sky,
+        collision,
+        collision_view,
         start,
         camera: start,
         speed,
@@ -72,6 +83,8 @@ struct App {
     /// Moved into the renderer once the window exists.
     world: Option<Level>,
     sky: Option<Level>,
+    collision: Option<Vec<CollisionVertex>>,
+    collision_view: CollisionView,
     start: FlyCamera,
     camera: FlyCamera,
     speed: f32,
@@ -119,8 +132,17 @@ impl App {
         surface.configure(&device, &config);
 
         let world = self.world.take().expect("init runs once");
-        let renderer = Renderer::new(device, queue, format, &world, self.sky.as_ref());
+        let mut renderer = Renderer::new(
+            device,
+            queue,
+            format,
+            &world,
+            self.sky.as_ref(),
+            self.collision.as_deref(),
+        );
+        renderer.collision_view = self.collision_view;
         self.sky = None;
+        self.collision = None;
         self.gpu = Some(Gpu {
             window,
             surface,
@@ -256,6 +278,13 @@ impl ApplicationHandler for App {
                                 println!("--camera {}", self.camera.describe())
                             }
                             KeyCode::KeyR => self.camera = self.start,
+                            KeyCode::KeyK if !event.repeat => {
+                                self.collision_view = self.collision_view.next();
+                                if let Some(gpu) = &mut self.gpu {
+                                    gpu.renderer.collision_view = self.collision_view;
+                                }
+                                println!("collision: {:?}", self.collision_view);
+                            }
                             _ => {}
                         }
                     }

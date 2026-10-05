@@ -2,6 +2,7 @@
 
 mod app;
 mod camera;
+mod collision;
 mod level;
 mod renderer;
 
@@ -12,6 +13,7 @@ use clap::Parser;
 use glam::Vec3;
 
 use camera::FlyCamera;
+use collision::CollisionView;
 use level::Level;
 
 #[derive(Parser)]
@@ -44,6 +46,15 @@ struct Args {
     /// Animation time in seconds for --screenshot (scrolling textures)
     #[arg(long, default_value_t = 0.0, requires = "screenshot")]
     time: f32,
+    /// Collision file (default: <X>col/Levels/<name>/<name>.col.ngc beside the <X>Scn folder)
+    #[arg(long)]
+    collision: Option<PathBuf>,
+    /// Don't load collision
+    #[arg(long, conflicts_with = "collision")]
+    no_collision: bool,
+    /// How to show collision at start (press K to cycle)
+    #[arg(long, value_enum, default_value = "hidden")]
+    show_collision: CollisionView,
 }
 
 fn main() -> Result<()> {
@@ -74,6 +85,29 @@ fn main() -> Result<()> {
         if sky.is_some() { ", with sky" } else { "" }
     );
 
+    let collision_path = if args.no_collision {
+        None
+    } else {
+        args.collision
+            .clone()
+            .or_else(|| collision::find(&args.scene))
+    };
+    // Collision is optional: report problems but keep showing the level.
+    let collision = collision_path.and_then(|path| match collision::load(&path) {
+        Ok(vertices) => {
+            println!(
+                "collision: {} triangles from {}",
+                vertices.len() / 3,
+                path.display()
+            );
+            Some(vertices)
+        }
+        Err(err) => {
+            eprintln!("warning: {err:#}");
+            None
+        }
+    });
+
     let (center, radius) = world.focus;
     let start = args.camera.unwrap_or_else(|| {
         FlyCamera::looking_at(center + Vec3::new(0.0, radius * 0.5, radius * 1.2), center)
@@ -82,7 +116,14 @@ fn main() -> Result<()> {
     match &args.screenshot {
         Some(out) => {
             let (width, height) = parse_size(&args.size)?;
-            renderer::screenshot(&world, sky.as_ref(), &start, width, height, args.time, out)?;
+            let collision = collision.as_deref().map(|c| (c, args.show_collision));
+            let shot = renderer::Shot {
+                camera: &start,
+                width,
+                height,
+                time: args.time,
+            };
+            renderer::screenshot(&world, sky.as_ref(), collision, &shot, out)?;
             println!(
                 "Wrote {} ({width}x{height}, camera {})",
                 out.display(),
@@ -91,8 +132,13 @@ fn main() -> Result<()> {
             Ok(())
         }
         None => {
-            println!("{}", app::CONTROLS);
-            app::run(name, world, sky, start)
+            println!(
+                "{}
+{}",
+                app::CONTROLS,
+                collision::LEGEND
+            );
+            app::run(name, world, sky, collision, args.show_collision, start)
         }
     }
 }

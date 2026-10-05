@@ -14,6 +14,7 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
 | `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
+| `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
 | `desa_viewer` | `desa-viewer`: a real-time level viewer (wgpu) with a free-fly camera |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
@@ -93,6 +94,7 @@ cargo run --release -p desa_viewer -- extracted/unpacked/HUBScn/Levels/HUB/HUB.s
 | E / Space, Q / Ctrl | Up, down |
 | Shift | Move 5x faster |
 | Mouse wheel | Change speed |
+| K | Cycle collision: hidden, overlay, collision only |
 | C | Print the camera as a `--camera` value |
 | R / Esc | Reset the camera / quit |
 
@@ -110,6 +112,36 @@ set, scrolling UVs and environment mapping. Not drawn yet: vertex-color
 animation, fog, and the objects placed by scripts (pedestrians, goal items).
 `desa model materials <file>` lists a level's materials by area covered,
 which helps track down rendering problems.
+
+The level's collision is found automatically (`<X>col/Levels/<name>/` next to
+the `<X>Scn` folder) and shown with **K**, or `--show-collision overlay|only`
+for screenshots. Colors: yellow = trigger or non-collidable, red = vert
+(quarter pipes), blue = wall-ridable, purple = not skatable, gray = the rest.
+
+## Collision format
+
+```
+cargo run --release -- col info   extracted/unpacked/HUBcol/Levels/HUB/HUB.col.ngc
+cargo run --release -- col export extracted/unpacked/HUBcol/Levels/HUB/HUB.col.ngc extracted/models/HUB_col.obj
+cargo test --release -p ngc_collision -- --ignored    # parse every real collision file
+```
+
+The layout (in the module docs of `crates/ngc_collision`) matches the rest
+of Neversoft's THPS engine family: object records with bounding boxes,
+float vertices, a brightness byte per vertex, faces with 8- or 16-bit
+indices, and a BSP tree (kept as raw bytes for now). Each face has flags
+and a terrain type (which picks sounds and particles). Objects share their
+checksums with the level's visible sectors; many are collision-only, such
+as invisible walls and trigger volumes. Rails aren't collision faces: in
+this engine they're path nodes defined by the level scripts.
+
+**Corrupted counts.** The tool that wrote these files turned `0x20` bytes
+into `0x00` in some count and offset fields (32 reads as 0, 288 as 256,
+1056 as 1024). This is the same bug behind the textures' "0 means 32". The
+parser rebuilds each object's true counts by picking the reading that keeps
+all offsets and totals consistent while assuming the fewest corrupted
+fields. On the US disc it repairs 88 counts across 271 files, and all
+457,940 faces load.
 
 ## Model formats
 
@@ -156,7 +188,7 @@ from 1,079 files.
 | `.dsp` | 736 | GameCube ADPCM sound effects |
 | `.img.ngc` / `.tex.ngc` | 679 / 408 | Images and texture dictionaries |
 | `.qb` | 347 | Compiled QB scripts |
-| `.col.ngc` | 271 | Collision meshes |
+| `.col.ngc` | 271 | Collision meshes (decoded) |
 | `.mdl.ngc` / `.skin.ngc` / `.scn.ngc` | 195 / 191 / 22 | Models, skinned characters, level scenes |
 | `.cas.ngc` | 191 | Create-a-skater parts |
 | `.ske` | 53 | Skeletons |
@@ -164,10 +196,10 @@ from 1,079 files.
 
 ## Roadmap
 
-1. **Asset tools.** Disc reading, PRG unpacking, textures, static models
-   and levels, and a level viewer (done). Next: skinned models and collision.
-2. **Level loading.** Collision, object placement from the level scripts,
-   fog and vertex-color animation.
+1. **Asset tools.** Disc reading, PRG unpacking, textures, static models,
+   levels, collision and a level viewer (done). Next: skinned models.
+2. **Level loading.** Object and rail placement from the level scripts,
+   the collision BSP tree, fog and vertex-color animation.
 3. **QB scripts.** Parse and run Neversoft's compiled script format.
 4. **Skater physics.** Match the original's constants and update loop,
    verified against Dolphin frame by frame.

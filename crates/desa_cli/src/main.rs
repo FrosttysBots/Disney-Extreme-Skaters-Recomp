@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use gc_disc::{Disc, NodeKind};
 
+mod collision;
 mod models;
 mod textures;
 
@@ -56,6 +57,19 @@ enum Command {
         #[command(subcommand)]
         command: ModelCommand,
     },
+    /// Work with .col.ngc collision meshes
+    Col {
+        #[command(subcommand)]
+        command: ColCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ColCommand {
+    /// Summarize a collision file: counts, face flags and terrain types
+    Info { file: PathBuf },
+    /// Export a collision file as OBJ, with faces colored by their flags
+    Export { file: PathBuf, out: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -108,6 +122,10 @@ fn main() -> Result<()> {
         Command::Tex { command } => match command {
             TexCommand::Ls { file } => textures::ls(&file),
             TexCommand::Export { input, out } => textures::export(&input, &out),
+        },
+        Command::Col { command } => match command {
+            ColCommand::Info { file } => collision::info(&file),
+            ColCommand::Export { file, out } => collision::export(&file, &out),
         },
         Command::Model { command } => match command {
             ModelCommand::Info { file } => models::info(&file),

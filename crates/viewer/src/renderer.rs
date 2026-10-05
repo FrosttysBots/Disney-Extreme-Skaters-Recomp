@@ -18,6 +18,7 @@ use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::camera::FlyCamera;
+use crate::collision::{CollisionVertex, CollisionView};
 use crate::level::{Level, PassDraw, TextureData, Vertex, blend};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -171,7 +172,16 @@ pub struct Renderer {
     sky_globals: Globals,
     world: GpuLevel,
     sky: Option<GpuLevel>,
+    collision: Option<GpuCollision>,
+    pub collision_view: CollisionView,
     depth: Option<(wgpu::TextureView, u32, u32)>,
+}
+
+struct GpuCollision {
+    vertices: wgpu::Buffer,
+    count: u32,
+    overlay: wgpu::RenderPipeline,
+    solid: wgpu::RenderPipeline,
 }
 
 impl Renderer {
@@ -181,6 +191,7 @@ impl Renderer {
         color_format: wgpu::TextureFormat,
         world: &Level,
         sky: Option<&Level>,
+        collision: Option<&[CollisionVertex]>,
     ) -> Self {
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
@@ -240,6 +251,18 @@ impl Renderer {
         let sky_globals = make_globals(&device, &globals_layout);
         let world = upload_level(&device, &queue, &pass_layout, &sampler, world);
         let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky));
+        let collision = collision
+            .filter(|v| !v.is_empty())
+            .map(|vertices| GpuCollision {
+                vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("collision"),
+                    contents: bytemuck::cast_slice(vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                count: vertices.len() as u32,
+                overlay: make_collision_pipeline(&device, &globals_layout, color_format, true),
+                solid: make_collision_pipeline(&device, &globals_layout, color_format, false),
+            });
 
         Self {
             device,
@@ -250,6 +273,8 @@ impl Renderer {
             sky_globals,
             world,
             sky,
+            collision,
+            collision_view: CollisionView::Hidden,
             depth: None,
         }
     }
@@ -331,15 +356,96 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            if let Some(sky) = &self.sky {
-                pass.set_bind_group(0, &self.sky_globals.bind_group, &[]);
-                draw(&mut pass, sky, &self.sky_pipelines);
+            let collision = self
+                .collision
+                .as_ref()
+                .filter(|_| self.collision_view != CollisionView::Hidden);
+            let only_collision = collision.is_some() && self.collision_view == CollisionView::Only;
+            if !only_collision {
+                if let Some(sky) = &self.sky {
+                    pass.set_bind_group(0, &self.sky_globals.bind_group, &[]);
+                    draw(&mut pass, sky, &self.sky_pipelines);
+                }
+                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+                draw(&mut pass, &self.world, &self.world_pipelines);
             }
-            pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
-            draw(&mut pass, &self.world, &self.world_pipelines);
+            if let Some(collision) = collision {
+                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+                pass.set_pipeline(if only_collision {
+                    &collision.solid
+                } else {
+                    &collision.overlay
+                });
+                pass.set_vertex_buffer(0, collision.vertices.slice(..));
+                pass.draw(0..collision.count, 0..1);
+            }
         }
         self.queue.submit([encoder.finish()]);
     }
+}
+
+/// Draws collision triangles: translucent over the level (`overlay`), or
+/// solid on their own.
+fn make_collision_pipeline(
+    device: &wgpu::Device,
+    globals_layout: &wgpu::BindGroupLayout,
+    color_format: wgpu::TextureFormat,
+    overlay: bool,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("collision.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("collision"),
+        bind_group_layouts: &[globals_layout],
+        push_constant_ranges: &[],
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("collision"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<CollisionVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some(if overlay { "fs_overlay" } else { "fs_solid" }),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: overlay.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: !overlay,
+            depth_compare: wgpu::CompareFunction::GreaterEqual,
+            stencil: Default::default(),
+            // Pull the overlay slightly toward the camera (reversed Z: larger
+            // is closer) so it wins against coincident level geometry.
+            bias: if overlay {
+                wgpu::DepthBiasState {
+                    constant: 4,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                }
+            } else {
+                Default::default()
+            },
+        }),
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
 }
 
 fn draw(pass: &mut wgpu::RenderPass, level: &GpuLevel, pipelines: &[wgpu::RenderPipeline]) {
@@ -622,20 +728,43 @@ pub async fn request_device(
     Ok((adapter, device, queue))
 }
 
+/// What a screenshot shows and how big it is.
+pub struct Shot<'a> {
+    pub camera: &'a FlyCamera,
+    pub width: u32,
+    pub height: u32,
+    /// Animation time in seconds.
+    pub time: f32,
+}
+
 /// Renders one frame off-screen and saves it as a PNG.
 pub fn screenshot(
     world: &Level,
     sky: Option<&Level>,
-    camera: &FlyCamera,
-    width: u32,
-    height: u32,
-    time: f32,
+    collision: Option<(&[CollisionVertex], CollisionView)>,
+    shot: &Shot,
     out: &Path,
 ) -> Result<()> {
+    let Shot {
+        camera,
+        width,
+        height,
+        time,
+    } = *shot;
     let instance = wgpu::Instance::default();
     let (_adapter, device, queue) = pollster::block_on(request_device(&instance, None))?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut renderer = Renderer::new(device.clone(), queue.clone(), format, world, sky);
+    let mut renderer = Renderer::new(
+        device.clone(),
+        queue.clone(),
+        format,
+        world,
+        sky,
+        collision.map(|c| c.0),
+    );
+    if let Some((_, view)) = collision {
+        renderer.collision_view = view;
+    }
 
     let size = wgpu::Extent3d {
         width,
