@@ -1,10 +1,8 @@
 //! `desa-viewer`: fly around a level from the game's files.
 
 mod app;
-mod camera;
-mod collision;
-mod level;
-mod renderer;
+
+use desa_viewer::{collision, level, nodes, renderer};
 
 use std::path::PathBuf;
 
@@ -12,9 +10,9 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use glam::Vec3;
 
-use camera::FlyCamera;
-use collision::CollisionView;
-use level::Level;
+use desa_viewer::camera::FlyCamera;
+use desa_viewer::collision::CollisionView;
+use desa_viewer::level::Level;
 
 #[derive(Parser)]
 #[command(
@@ -55,6 +53,21 @@ struct Args {
     /// How to show collision at start (press K to cycle)
     #[arg(long, value_enum, default_value = "hidden")]
     show_collision: CollisionView,
+    /// Level script with the NodeArray (default: <X>/levels/<name>/<name>.qb beside the <X>Scn folder)
+    #[arg(long)]
+    nodes: Option<PathBuf>,
+    /// Don't load rails and spawn points
+    #[arg(long, conflicts_with = "nodes")]
+    no_nodes: bool,
+    /// Hide rails
+    #[arg(long)]
+    hide_rails: bool,
+    /// Hide spawn points
+    #[arg(long)]
+    hide_spawns: bool,
+    /// Minimum light level, 0 to 1, for seeing into dark areas (screenshots)
+    #[arg(long, default_value_t = 0.0)]
+    brighten: f32,
 }
 
 fn main() -> Result<()> {
@@ -108,10 +121,41 @@ fn main() -> Result<()> {
         }
     });
 
-    let (center, radius) = world.focus;
-    let start = args.camera.unwrap_or_else(|| {
-        FlyCamera::looking_at(center + Vec3::new(0.0, radius * 0.5, radius * 1.2), center)
+    let nodes_path = if args.no_nodes {
+        None
+    } else {
+        args.nodes.clone().or_else(|| nodes::find(&args.scene))
+    };
+    let level_nodes = nodes_path.and_then(|path| match nodes::LevelNodes::load(&path) {
+        Ok(n) => {
+            println!(
+                "nodes: {} rail segments, {} spawn points from {}",
+                n.rails.len(),
+                n.spawns.len(),
+                path.display()
+            );
+            Some(n)
+        }
+        Err(err) => {
+            eprintln!("warning: {err:#}");
+            None
+        }
     });
+    let markers = level_nodes
+        .as_ref()
+        .map(|n| n.geometry(!args.hide_rails, !args.hide_spawns))
+        .unwrap_or_default();
+
+    // Start at the level's spawn point when there is one.
+    let (center, radius) = world.focus;
+    let start = args
+        .camera
+        .unwrap_or_else(|| match level_nodes.as_ref().and_then(|n| n.start()) {
+            Some(spawn) => spawn.camera_clear_of(collision.as_deref().unwrap_or_default()),
+            None => {
+                FlyCamera::looking_at(center + Vec3::new(0.0, radius * 0.5, radius * 1.2), center)
+            }
+        });
 
     match &args.screenshot {
         Some(out) => {
@@ -119,9 +163,11 @@ fn main() -> Result<()> {
             let collision = collision.as_deref().map(|c| (c, args.show_collision));
             let shot = renderer::Shot {
                 camera: &start,
+                markers: &markers,
                 width,
                 height,
                 time: args.time,
+                brighten: args.brighten,
             };
             renderer::screenshot(&world, sky.as_ref(), collision, &shot, out)?;
             println!(
@@ -138,7 +184,15 @@ fn main() -> Result<()> {
                 app::CONTROLS,
                 collision::LEGEND
             );
-            app::run(name, world, sky, collision, args.show_collision, start)
+            app::run(
+                name,
+                world,
+                sky,
+                collision,
+                markers,
+                args.show_collision,
+                start,
+            )
         }
     }
 }

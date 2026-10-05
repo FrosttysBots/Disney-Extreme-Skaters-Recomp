@@ -15,10 +15,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-use crate::camera::FlyCamera;
-use crate::collision::{CollisionVertex, CollisionView};
-use crate::level::Level;
-use crate::renderer::{Renderer, request_device};
+use desa_viewer::camera::FlyCamera;
+use desa_viewer::collision::{CollisionView, ColorVertex};
+use desa_viewer::level::Level;
+use desa_viewer::renderer::{Renderer, request_device};
 
 pub const CONTROLS: &str = "\
 Controls:
@@ -39,7 +39,8 @@ pub fn run(
     name: String,
     world: Level,
     sky: Option<Level>,
-    collision: Option<Vec<CollisionVertex>>,
+    collision: Option<Vec<ColorVertex>>,
+    markers: Vec<ColorVertex>,
     collision_view: CollisionView,
     start: FlyCamera,
 ) -> Result<()> {
@@ -51,6 +52,7 @@ pub fn run(
         world: Some(world),
         sky,
         collision,
+        markers,
         collision_view,
         start,
         camera: start,
@@ -83,7 +85,8 @@ struct App {
     /// Moved into the renderer once the window exists.
     world: Option<Level>,
     sky: Option<Level>,
-    collision: Option<Vec<CollisionVertex>>,
+    collision: Option<Vec<ColorVertex>>,
+    markers: Vec<ColorVertex>,
     collision_view: CollisionView,
     start: FlyCamera,
     camera: FlyCamera,
@@ -141,6 +144,7 @@ impl App {
             self.collision.as_deref(),
         );
         renderer.collision_view = self.collision_view;
+        renderer.set_markers(&self.markers);
         self.sky = None;
         self.collision = None;
         self.gpu = Some(Gpu {

@@ -1,7 +1,7 @@
 struct Globals {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
-    // x: seconds since start
+    // x: seconds since start, y: minimum light level
     time: vec4<f32>,
 };
 
@@ -62,7 +62,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // UVs have a bottom-left origin; textures are uploaded top row first.
     out.uv = vec2<f32>(uv.x, 1.0 - uv.y);
     // Vertex colors use 0x80 as full brightness, so they can brighten up to 2x.
-    out.color = in.color * (255.0 / 128.0);
+    // time.y is an optional minimum light level for seeing into dark areas.
+    let lit = in.color * (255.0 / 128.0);
+    out.color = vec4<f32>(max(lit.rgb, vec3<f32>(globals.time.y)), lit.a);
     return out;
 }
 

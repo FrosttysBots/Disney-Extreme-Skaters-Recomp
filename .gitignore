@@ -9,3 +9,6 @@
 *.ciso
 *.nkit.*
 /extracted/
+
+# Built programs for sharing
+/dist/

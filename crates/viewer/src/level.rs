@@ -99,24 +99,31 @@ impl Level {
     pub fn load(scene_path: &Path, textures_path: Option<&Path>) -> Result<Level> {
         let data = fs::read(scene_path)
             .with_context(|| format!("could not read {}", scene_path.display()))?;
-        let scene = Scene::parse(&data)
-            .with_context(|| format!("could not parse {}", scene_path.display()))?;
-
         let tex_path = match textures_path {
             Some(p) => Some(p.to_path_buf()),
             None => sibling(scene_path, "scn.ngc", "tex.ngc"),
         };
         let tex_data = match &tex_path {
-            Some(p) => fs::read(p).with_context(|| format!("could not read {}", p.display()))?,
+            Some(p) => {
+                Some(fs::read(p).with_context(|| format!("could not read {}", p.display()))?)
+            }
             None => {
                 eprintln!("warning: no textures found for {}", scene_path.display());
-                Vec::new()
+                None
             }
         };
-        let dictionary = if tex_data.is_empty() {
-            None
-        } else {
-            Some(TexDictionary::parse(&tex_data).context("could not parse the texture file")?)
+        Self::from_bytes(&data, tex_data.as_deref())
+            .with_context(|| format!("could not load {}", scene_path.display()))
+    }
+
+    /// Builds a level from the contents of a `.scn.ngc` and its `.tex.ngc`.
+    pub fn from_bytes(scene: &[u8], textures: Option<&[u8]>) -> Result<Level> {
+        let scene = Scene::parse(scene).context("could not parse the scene")?;
+        let dictionary = match textures {
+            Some(data) => {
+                Some(TexDictionary::parse(data).context("could not parse the texture file")?)
+            }
+            None => None,
         };
 
         let mut level = Level {

@@ -6,6 +6,41 @@ built by studying the GameCube release. It runs on Neversoft's THPS4-era engine.
 This repository contains **only original code**. To play or develop, you
 supply your own disc image; game assets are never committed (see `.gitignore`).
 
+## Map Viewer
+
+`DESA Map Viewer.exe` lets you fly around every level, straight from your
+disc image; nothing needs unpacking first.
+
+```
+cargo build --release -p desa_viewer
+```
+
+This builds `target/release/desa-map-viewer.exe`, which needs no installs.
+On first run it looks for the disc image (`.iso`) next to itself and in the
+folders above it; otherwise use **Open disc image...** in the panel. It
+remembers the disc, the last level and the camera speed in
+`%APPDATA%\desa-map-viewer\settings.txt`.
+
+The side panel lists the 11 levels and has toggles for the sky, rails
+(magenta tubes), spawn points (green = player 1 start, blue = others) and
+collision, a brighten slider for dark areas, camera speed, and every
+spawn point by name to jump to.
+
+| Control | Action |
+|---|---|
+| Hold right mouse | Look around |
+| W A S D | Move |
+| E / Space, Q / Ctrl | Up, down |
+| Shift | Move 5x faster |
+| Mouse wheel | Change speed |
+| Tab | Next spawn point |
+| K | Cycle collision view |
+| R | Back to the start |
+| F1 | Hide or show the panel |
+
+`desa-map-viewer --level HUB --screenshot out.png` renders one frame,
+panel included, without opening a window.
+
 ## Crates
 
 | Crate | What it does |
@@ -16,7 +51,7 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 | `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
 | `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
-| `desa_viewer` | `desa-viewer`: a real-time level viewer (wgpu) with a free-fly camera |
+| `desa_viewer` | Level rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
@@ -106,6 +141,15 @@ PNG without opening a window, which is handy for comparing changes:
 ```
 cargo run --release -p desa_viewer -- extracted/unpacked/HUBScn/Levels/HUB/HUB.scn.ngc --camera=-1400,900,4000,40,-8 --screenshot hub.png
 ```
+
+It also draws the level's rails and spawn points from its node array
+(`<X>/levels/<name>/<name>.qb`), and starts the camera at the player 1
+spawn; `--no-nodes`, `--hide-rails` and `--hide-spawns` turn them off.
+Node positions use the opposite Z direction from the meshes: mirroring Z
+puts 96% of the hub's rail nodes on a collision surface, against 0% as
+stored. Spawn headings follow the engine's +Z-forward convention mirrored
+the same way; the spawn views look right, but that convention hasn't been
+checked against the running game.
 
 Every material pass is drawn with its blend mode (opaque, add, subtract,
 alpha blend, modulate, brighten, and their fixed-alpha variants), its own UV
@@ -233,8 +277,9 @@ from 1,079 files.
 
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static models,
    levels, collision and a level viewer (done). Next: skinned models.
-2. **Level loading.** Rails, spawn points and objects from the level node
-   arrays, the collision BSP tree, fog and vertex-color animation.
+2. **Level loading.** Rails and spawn points (done). Next: objects and
+   pedestrians from the node arrays, the collision BSP tree, fog and
+   vertex-color animation.
 3. **QB scripts.** Decompiling and data parsing (done). Next: an
    interpreter that runs the game's scripts.
 4. **Skater physics.** Match the original's constants and update loop,

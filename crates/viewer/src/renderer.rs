@@ -18,7 +18,7 @@ use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::camera::FlyCamera;
-use crate::collision::{CollisionVertex, CollisionView};
+use crate::collision::{CollisionView, ColorVertex};
 use crate::level::{Level, PassDraw, TextureData, Vertex, blend};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -172,16 +172,17 @@ pub struct Renderer {
     sky_globals: Globals,
     world: GpuLevel,
     sky: Option<GpuLevel>,
-    collision: Option<GpuCollision>,
+    collision: Option<(wgpu::Buffer, u32)>,
+    /// Rails and spawn markers.
+    markers: Option<(wgpu::Buffer, u32)>,
+    color_overlay: wgpu::RenderPipeline,
+    color_solid: wgpu::RenderPipeline,
     pub collision_view: CollisionView,
+    pub show_sky: bool,
+    /// Minimum vertex lighting (0 = as the game lights it). Raising it
+    /// shows detail in dark corners.
+    pub min_light: f32,
     depth: Option<(wgpu::TextureView, u32, u32)>,
-}
-
-struct GpuCollision {
-    vertices: wgpu::Buffer,
-    count: u32,
-    overlay: wgpu::RenderPipeline,
-    solid: wgpu::RenderPipeline,
 }
 
 impl Renderer {
@@ -191,7 +192,7 @@ impl Renderer {
         color_format: wgpu::TextureFormat,
         world: &Level,
         sky: Option<&Level>,
-        collision: Option<&[CollisionVertex]>,
+        collision: Option<&[ColorVertex]>,
     ) -> Self {
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
@@ -251,18 +252,9 @@ impl Renderer {
         let sky_globals = make_globals(&device, &globals_layout);
         let world = upload_level(&device, &queue, &pass_layout, &sampler, world);
         let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky));
-        let collision = collision
-            .filter(|v| !v.is_empty())
-            .map(|vertices| GpuCollision {
-                vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("collision"),
-                    contents: bytemuck::cast_slice(vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-                count: vertices.len() as u32,
-                overlay: make_collision_pipeline(&device, &globals_layout, color_format, true),
-                solid: make_collision_pipeline(&device, &globals_layout, color_format, false),
-            });
+        let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
+        let color_overlay = make_collision_pipeline(&device, &globals_layout, color_format, true);
+        let color_solid = make_collision_pipeline(&device, &globals_layout, color_format, false);
 
         Self {
             device,
@@ -274,15 +266,45 @@ impl Renderer {
             world,
             sky,
             collision,
+            markers: None,
+            color_overlay,
+            color_solid,
             collision_view: CollisionView::Hidden,
+            show_sky: true,
+            min_light: 0.0,
             depth: None,
         }
+    }
+
+    pub fn has_collision(&self) -> bool {
+        self.collision.is_some()
+    }
+
+    /// Replaces the rail and spawn geometry (empty hides it).
+    pub fn set_markers(&mut self, vertices: &[ColorVertex]) {
+        self.markers = color_buffer(&self.device, "markers", vertices);
     }
 
     /// Renders one frame into `target` and submits it. `time` drives
     /// scrolling textures.
     pub fn render(
         &mut self,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        camera: &FlyCamera,
+        time: f32,
+    ) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.encode(&mut encoder, target, width, height, camera, time);
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Records one frame into `encoder` without submitting, so callers can
+    /// draw more (such as a user interface) on top.
+    pub fn encode(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         width: u32,
         height: u32,
@@ -317,11 +339,12 @@ impl Renderer {
             aspect,
             NEAR,
         );
+        let min_light = self.min_light;
         let write = |globals: &Globals, view: Mat4| {
             let data = GlobalsData {
                 view_proj: (projection * view).to_cols_array(),
                 view: view.to_cols_array(),
-                time: [time, 0.0, 0.0, 0.0],
+                time: [time, min_light, 0.0, 0.0],
             };
             self.queue
                 .write_buffer(&globals.buffer, 0, bytemuck::bytes_of(&data));
@@ -329,7 +352,6 @@ impl Renderer {
         write(&self.world_globals, camera.view());
         write(&self.sky_globals, camera.rotation_view());
 
-        let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let (depth_view, _, _) = self.depth.as_ref().unwrap();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -362,29 +384,49 @@ impl Renderer {
                 .filter(|_| self.collision_view != CollisionView::Hidden);
             let only_collision = collision.is_some() && self.collision_view == CollisionView::Only;
             if !only_collision {
-                if let Some(sky) = &self.sky {
+                if let Some(sky) = self.sky.as_ref().filter(|_| self.show_sky) {
                     pass.set_bind_group(0, &self.sky_globals.bind_group, &[]);
                     draw(&mut pass, sky, &self.sky_pipelines);
                 }
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
                 draw(&mut pass, &self.world, &self.world_pipelines);
             }
-            if let Some(collision) = collision {
-                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+            pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+            if let Some((buffer, count)) = &self.markers {
+                pass.set_pipeline(&self.color_solid);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
+            }
+            if let Some((buffer, count)) = collision {
                 pass.set_pipeline(if only_collision {
-                    &collision.solid
+                    &self.color_solid
                 } else {
-                    &collision.overlay
+                    &self.color_overlay
                 });
-                pass.set_vertex_buffer(0, collision.vertices.slice(..));
-                pass.draw(0..collision.count, 0..1);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
             }
         }
-        self.queue.submit([encoder.finish()]);
     }
 }
 
-/// Draws collision triangles: translucent over the level (`overlay`), or
+fn color_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    vertices: &[ColorVertex],
+) -> Option<(wgpu::Buffer, u32)> {
+    if vertices.is_empty() {
+        return None;
+    }
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    Some((buffer, vertices.len() as u32))
+}
+
+/// Draws colored triangles: translucent over the level (`overlay`), or
 /// solid on their own.
 fn make_collision_pipeline(
     device: &wgpu::Device,
@@ -406,7 +448,7 @@ fn make_collision_pipeline(
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<CollisionVertex>() as u64,
+                array_stride: std::mem::size_of::<ColorVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4],
             }],
@@ -721,6 +763,7 @@ pub async fn request_device(
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
             memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
             trace: wgpu::Trace::Off,
         })
         .await
@@ -731,25 +774,31 @@ pub async fn request_device(
 /// What a screenshot shows and how big it is.
 pub struct Shot<'a> {
     pub camera: &'a FlyCamera,
+    /// Rail and spawn geometry (may be empty).
+    pub markers: &'a [ColorVertex],
     pub width: u32,
     pub height: u32,
     /// Animation time in seconds.
     pub time: f32,
+    /// Minimum light level (see `Renderer::min_light`).
+    pub brighten: f32,
 }
 
 /// Renders one frame off-screen and saves it as a PNG.
 pub fn screenshot(
     world: &Level,
     sky: Option<&Level>,
-    collision: Option<(&[CollisionVertex], CollisionView)>,
+    collision: Option<(&[ColorVertex], CollisionView)>,
     shot: &Shot,
     out: &Path,
 ) -> Result<()> {
     let Shot {
         camera,
+        markers,
         width,
         height,
         time,
+        brighten,
     } = *shot;
     let instance = wgpu::Instance::default();
     let (_adapter, device, queue) = pollster::block_on(request_device(&instance, None))?;
@@ -765,6 +814,8 @@ pub fn screenshot(
     if let Some((_, view)) = collision {
         renderer.collision_view = view;
     }
+    renderer.set_markers(markers);
+    renderer.min_light = brighten;
 
     let size = wgpu::Extent3d {
         width,
@@ -789,6 +840,23 @@ pub fn screenshot(
         time,
     );
 
+    save_png(&device, &queue, &target, width, height, out)
+}
+
+/// Copies a rendered `Rgba8Unorm` texture back from the GPU and saves it as a PNG.
+pub fn save_png(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    out: &Path,
+) -> Result<()> {
+    let size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
     // Rows in a texture-to-buffer copy must be padded to 256 bytes.
     let row = 4 * width;
     let padded_row = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
@@ -801,7 +869,7 @@ pub fn screenshot(
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &target,
+            texture: target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -823,7 +891,7 @@ pub fn screenshot(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
-    device.poll(wgpu::PollType::Wait)?;
+    device.poll(wgpu::PollType::wait_indefinitely())?;
     receiver.recv()?.context("could not read back the frame")?;
 
     let mapped = slice.get_mapped_range();

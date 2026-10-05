@@ -12,7 +12,8 @@ use crate::level::find_ignoring_case;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-pub struct CollisionVertex {
+/// A position and color, used for collision, rails and markers.
+pub struct ColorVertex {
     pub position: [f32; 3],
     pub color: [u8; 4],
 }
@@ -46,10 +47,14 @@ Collision colors:
   purple   not skatable
   gray     everything else";
 
-pub fn load(path: &Path) -> Result<Vec<CollisionVertex>> {
+pub fn load(path: &Path) -> Result<Vec<ColorVertex>> {
     let data = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
-    let collision =
-        Collision::parse(&data).with_context(|| format!("could not parse {}", path.display()))?;
+    from_bytes(&data).with_context(|| format!("could not load {}", path.display()))
+}
+
+/// Builds the colored triangles from the contents of a `.col.ngc`.
+pub fn from_bytes(data: &[u8]) -> Result<Vec<ColorVertex>> {
+    let collision = Collision::parse(data).context("could not parse the collision file")?;
 
     let light = Vec3::new(0.4, 0.8, 0.3).normalize();
     let mut vertices = Vec::with_capacity(collision.face_count() * 3);
@@ -65,7 +70,7 @@ pub fn load(path: &Path) -> Result<Vec<CollisionVertex>> {
             let [r, g, b, a] = color(face.flags);
             let color = [r, g, b].map(|c| (f32::from(c) * shade) as u8);
             for corner in corners {
-                vertices.push(CollisionVertex {
+                vertices.push(ColorVertex {
                     position: corner.into(),
                     color: [color[0], color[1], color[2], a],
                 });
