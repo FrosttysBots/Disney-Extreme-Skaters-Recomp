@@ -61,6 +61,74 @@ pub fn info(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Lists materials by the surface area they cover, with each pass's
+/// texture (and whether the texture file has it), flags and blend values.
+pub fn materials(path: &Path, textures: Option<&Path>) -> Result<()> {
+    let scene = load(path)?;
+    let tex_path = match textures {
+        Some(p) => Some(p.to_path_buf()),
+        None => find_sibling_textures(path, stem(path)?),
+    };
+    let available: BTreeSet<u32> = match &tex_path {
+        Some(p) => {
+            let data = fs::read(p).with_context(|| format!("could not read {}", p.display()))?;
+            TexDictionary::parse(&data)?
+                .textures
+                .iter()
+                .map(|t| t.checksum)
+                .collect()
+        }
+        None => BTreeSet::new(),
+    };
+
+    // (triangles, area) per material.
+    let mut usage: std::collections::HashMap<u32, (usize, f64)> = Default::default();
+    for sector in &scene.sectors {
+        for mesh in &sector.meshes {
+            let entry = usage.entry(mesh.material).or_default();
+            for tri in mesh.triangles() {
+                let [a, b, c] = tri.map(|i| sector.positions[usize::from(i)].map(f64::from));
+                let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                let cross = [
+                    e1[1] * e2[2] - e1[2] * e2[1],
+                    e1[2] * e2[0] - e1[0] * e2[2],
+                    e1[0] * e2[1] - e1[1] * e2[0],
+                ];
+                entry.0 += 1;
+                entry.1 += 0.5 * cross.iter().map(|v| v * v).sum::<f64>().sqrt();
+            }
+        }
+    }
+    let mut rows: Vec<_> = usage.into_iter().collect();
+    rows.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+
+    println!(
+        "{:<10} {:>6} {:>12}  passes (texture flags blend alpha)",
+        "material", "tris", "area"
+    );
+    for (checksum, (tris, area)) in rows {
+        let passes = match scene.material(checksum) {
+            Some(m) => m
+                .passes
+                .iter()
+                .map(|p| {
+                    let tex = match p.texture {
+                        0 => "none".to_string(),
+                        t if available.contains(&t) => format!("{t:08x}"),
+                        t => format!("{t:08x}(missing)"),
+                    };
+                    format!("[{tex} {:#x} {} {}]", p.flags, p.blend_mode, p.fixed_alpha)
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => "(material not defined)".to_string(),
+        };
+        println!("{checksum:08x}   {tris:>6} {area:>12.0}  {passes}");
+    }
+    Ok(())
+}
+
 /// Writes `<out>/<name>.obj`, `<name>.mtl` and the PNGs it uses in
 /// `<out>/textures/`. Textures come from `textures`, or by default from
 /// `<name>.tex.ngc` next to the input.

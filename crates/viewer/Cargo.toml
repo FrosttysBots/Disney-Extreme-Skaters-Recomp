@@ -1,0 +1,22 @@
+[package]
+name = "desa_viewer"
+description = "Real-time level viewer for Disney's Extreme Skate Adventure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "desa-viewer"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+bytemuck = { version = "1.25.2", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
+glam = "0.34.0"
+ngc_model = { version = "0.1.0", path = "../ngc_model" }
+ngc_texture = { version = "0.1.0", path = "../ngc_texture" }
+png = "0.18.1"
+pollster = "1.0.1"
+wgpu = "26.0.1"
+winit = "0.30.13"

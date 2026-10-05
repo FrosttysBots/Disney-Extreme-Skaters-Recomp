@@ -62,6 +62,13 @@ enum Command {
 enum ModelCommand {
     /// Summarize a model or scene: counts and bounds
     Info { file: PathBuf },
+    /// List materials by area covered, with their passes and textures
+    Materials {
+        file: PathBuf,
+        /// Texture dictionary to check against (default: <name>.tex.ngc next to the file)
+        #[arg(long)]
+        textures: Option<PathBuf>,
+    },
     /// Export a model or scene as OBJ + MTL + PNG textures
     Export {
         file: PathBuf,
@@ -104,6 +111,9 @@ fn main() -> Result<()> {
         },
         Command::Model { command } => match command {
             ModelCommand::Info { file } => models::info(&file),
+            ModelCommand::Materials { file, textures } => {
+                models::materials(&file, textures.as_deref())
+            }
             ModelCommand::Export {
                 file,
                 out,

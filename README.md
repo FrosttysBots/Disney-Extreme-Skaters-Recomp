@@ -14,6 +14,7 @@ supply your own disc image; game assets are never committed (see `.gitignore`).
 | `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
 | `ngc_model` | Parses `.mdl.ngc` models and `.scn.ngc` level scenes: materials, vertex arrays, triangle strips |
+| `desa_viewer` | `desa-viewer`: a real-time level viewer (wgpu) with a free-fly camera |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
@@ -77,6 +78,39 @@ Vertex colors (the levels' baked lighting) are written as OBJ vertex colors.
 `tools/render_obj.py` and `tools/render_textured.py` render quick previews of
 an exported OBJ with Python and Pillow, for checking results without Blender.
 
+## Level viewer
+
+Fly around any level with its sky, textures and baked lighting:
+
+```
+cargo run --release -p desa_viewer -- extracted/unpacked/HUBScn/Levels/HUB/HUB.scn.ngc
+```
+
+| Control | Action |
+|---|---|
+| Hold right mouse | Look around |
+| W A S D | Move |
+| E / Space, Q / Ctrl | Up, down |
+| Shift | Move 5x faster |
+| Mouse wheel | Change speed |
+| C | Print the camera as a `--camera` value |
+| R / Esc | Reset the camera / quit |
+
+The sky is found automatically (`<name>_sky/<name>_sky.scn.ngc` next to the
+level's folder); `--no-sky` or `--sky` override it. To render one frame to a
+PNG without opening a window, which is handy for comparing changes:
+
+```
+cargo run --release -p desa_viewer -- extracted/unpacked/HUBScn/Levels/HUB/HUB.scn.ngc --camera=-1400,900,4000,40,-8 --screenshot hub.png
+```
+
+Every material pass is drawn with its blend mode (opaque, add, subtract,
+alpha blend, modulate, brighten, and their fixed-alpha variants), its own UV
+set, scrolling UVs and environment mapping. Not drawn yet: vertex-color
+animation, fog, and the objects placed by scripts (pedestrians, goal items).
+`desa model materials <file>` lists a level's materials by area covered,
+which helps track down rendering problems.
+
 ## Model formats
 
 `.mdl.ngc` (objects) and `.scn.ngc` (levels) share one big-endian layout; the
@@ -130,10 +164,10 @@ from 1,079 files.
 
 ## Roadmap
 
-1. **Asset tools.** Disc reading, PRG unpacking, textures, and static
-   models and levels (done). Next: skinned models, collision, and a level
-   viewer.
-2. **Level loading.** Render whole levels with collision and a free camera.
+1. **Asset tools.** Disc reading, PRG unpacking, textures, static models
+   and levels, and a level viewer (done). Next: skinned models and collision.
+2. **Level loading.** Collision, object placement from the level scripts,
+   fog and vertex-color animation.
 3. **QB scripts.** Parse and run Neversoft's compiled script format.
 4. **Skater physics.** Match the original's constants and update loop,
    verified against Dolphin frame by frame.
