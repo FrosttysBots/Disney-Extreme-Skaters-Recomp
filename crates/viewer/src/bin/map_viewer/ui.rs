@@ -27,6 +27,9 @@ pub struct CharacterModel {
     /// Seconds into the animation.
     pub time: f32,
     pub duration: f32,
+    /// Whether the character has blink frames, and whether to use them.
+    pub can_blink: bool,
+    pub blink: bool,
 }
 
 /// Everything the panel shows or edits.
@@ -236,6 +239,13 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .text("seconds")
             .fixed_decimals(2),
     );
+    ui.add_enabled_ui(model.can_blink, |ui| {
+        ui.checkbox(&mut model.blink, "Blink").on_hover_text(
+            "Uses the blink frames every character ships with. The GameCube \
+             game's code never uses them, so the original may not blink; the \
+             timing here is our own.",
+        );
+    });
     if ui
         .button("Look at the character")
         .on_hover_text("The character stands on the last spawn point you went to (Tab).")

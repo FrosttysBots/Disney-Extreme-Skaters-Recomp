@@ -44,6 +44,9 @@ fn real_characters() {
             files.animations.len()
         );
         assert!(character.animations.len() >= 100);
+        // Every character but these four has blink frames.
+        let no_blink = ["tantor", "tarzan", "woody", "zurg"].contains(&info.id.as_str());
+        assert_eq!(character.blink.is_none(), no_blink, "{} blink", info.id);
 
         let mesh = &character.mesh;
         let rest = longest_edge(&mesh.indices, &mesh.vertices);

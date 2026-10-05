@@ -27,6 +27,8 @@ pub struct Vertex {
 
 /// RGBA8 pixels for every mip level, top row first.
 pub struct TextureData {
+    /// The texture's name checksum (0 for the built-in white texture).
+    pub checksum: u32,
     pub width: u32,
     pub height: u32,
     pub levels: Vec<Vec<u8>>,
@@ -131,6 +133,7 @@ impl Level {
             indices: Vec::new(),
             batches: Vec::new(),
             textures: vec![TextureData {
+                checksum: 0,
                 width: 1,
                 height: 1,
                 levels: vec![vec![255; 4]],
@@ -205,6 +208,15 @@ impl Level {
 
         level.focus = focus(&level.vertices);
         Ok(level)
+    }
+
+    /// The slot in `textures` of the texture with this name checksum.
+    pub fn texture_slot(&self, checksum: u32) -> Option<usize> {
+        self.textures
+            .iter()
+            .skip(1)
+            .position(|t| t.checksum == checksum)
+            .map(|i| i + 1)
     }
 
     /// Adds `other`'s geometry after this one's (a character and its board).
@@ -301,6 +313,7 @@ fn decode_texture(dict: &TexDictionary, checksum: u32) -> Option<TextureData> {
         .map_err(|e| eprintln!("warning: texture {checksum:08x}: {e}"))
         .ok()?;
     Some(TextureData {
+        checksum,
         width: texture.width,
         height: texture.height,
         levels,

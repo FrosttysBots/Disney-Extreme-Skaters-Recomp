@@ -61,7 +61,7 @@ struct Args {
     /// For --screenshot: the character's animation (default StandIdle)
     #[arg(long, requires = "screenshot")]
     animation: Option<String>,
-    /// For --screenshot: seconds into the animation
+    /// For --screenshot: seconds into the animation (and blinking)
     #[arg(long, requires = "screenshot", default_value_t = 0.0)]
     time: f32,
 }
@@ -286,6 +286,8 @@ impl<'a> App<'a> {
                     speed: 1.0,
                     time: 0.0,
                     duration: 0.0,
+                    can_blink: false,
+                    blink: true,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -415,6 +417,11 @@ impl<'a> App<'a> {
                 model.duration = character.animations[model.animation].1.duration;
                 model.time = 0.0;
                 model.current = Some(index);
+                model.can_blink = character.blink.is_some();
+                // The spawn marker would stand right through the character.
+                if self.character.is_none() {
+                    self.model.show_spawns = false;
+                }
                 self.shown_animation = model.animation;
                 if let Some(level) = &mut self.level {
                     level.renderer.set_character(Some(&character.mesh));
@@ -427,9 +434,10 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Advances the character's animation and uploads the posed mesh.
-    fn animate(&mut self, dt: f32) {
-        let (Some(character), Some(level)) = (&self.character, &self.level) else {
+    /// Advances the character's animation, uploads the posed mesh and
+    /// shows the eyes for `clock` seconds since the viewer started.
+    fn animate(&mut self, dt: f32, clock: f32) {
+        let (Some(character), Some(level)) = (&self.character, &mut self.level) else {
             return;
         };
         let model = &mut self.model.character;
@@ -447,6 +455,14 @@ impl<'a> App<'a> {
         level
             .renderer
             .pose_character(&character.pose(model.animation, model.time, self.placement));
+        if let Some(blink) = character.blink {
+            let eyes = if model.blink {
+                blink.texture_at(clock)
+            } else {
+                blink.eyes
+            };
+            level.renderer.swap_character_texture(blink.eyes, eyes);
+        }
     }
 
     /// Pushes panel settings into the renderer.
@@ -575,7 +591,7 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.sync_view();
-        self.animate(dt);
+        self.animate(dt, self.started.elapsed().as_secs_f32());
         let p = self.camera.position;
         self.model.camera_text = format!(
             "x {:.0}  y {:.0}  z {:.0}\nyaw {:.0}  pitch {:.0}",
@@ -874,9 +890,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     let (_adapter, device, queue) = pollster::block_on(request_device(&instance, None))?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (mut loaded, stats) = load_level(&mut data, &levels[index], &device, &queue, format)?;
+    // A spawn marker would stand right where the character does.
     loaded
         .renderer
-        .set_markers(&loaded.nodes.geometry(true, true));
+        .set_markers(&loaded.nodes.geometry(true, args.character.is_none()));
 
     let mut settings = Settings::default();
     let mut app = App::new(&mut settings);
@@ -911,7 +928,8 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         app.placement = loaded.home;
         camera = camera_facing(loaded.home);
         app.level = Some(loaded);
-        app.animate(0.0);
+        // The blink clock follows --time too, so blinks can be captured.
+        app.animate(0.0, args.time);
         loaded = app.level.take().unwrap();
     }
 

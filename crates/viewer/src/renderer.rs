@@ -143,6 +143,12 @@ impl PassParams {
 struct GpuPass {
     kind: Kind,
     bind_group: wgpu::BindGroup,
+    /// The texture slot the material uses, and the one currently bound
+    /// (they differ while a texture is swapped, as when blinking).
+    texture: usize,
+    shown: usize,
+    /// This pass's slot in `GpuLevel::params`.
+    params_slot: u64,
 }
 
 struct GpuBatch {
@@ -157,6 +163,9 @@ struct GpuLevel {
     indices: wgpu::Buffer,
     /// Opaque batches in file order, then transparent ones by draw order.
     batches: Vec<GpuBatch>,
+    /// Kept for rebinding passes to other textures.
+    views: Vec<wgpu::TextureView>,
+    params: wgpu::Buffer,
 }
 
 struct Globals {
@@ -314,6 +323,31 @@ impl Renderer {
         if let Some(character) = &self.character {
             self.queue
                 .write_buffer(&character.vertices, 0, bytemuck::cast_slice(vertices));
+        }
+    }
+
+    /// Draws the character's passes that use texture slot `from` with
+    /// slot `to` instead (`to == from` restores them). Slots index the
+    /// textures of the mesh given to [`set_character`](Self::set_character).
+    pub fn swap_character_texture(&mut self, from: usize, to: usize) {
+        let Some(character) = &mut self.character else {
+            return;
+        };
+        if to >= character.views.len() {
+            return;
+        }
+        for pass in character.batches.iter_mut().flat_map(|b| &mut b.passes) {
+            if pass.texture == from && pass.shown != to {
+                pass.bind_group = pass_bind_group(
+                    &self.device,
+                    &self.pass_layout,
+                    &character.views[to],
+                    &self.sampler,
+                    &character.params,
+                    pass.params_slot,
+                );
+                pass.shown = to;
+            }
         }
     }
 
@@ -686,34 +720,21 @@ fn upload_level(
                 .iter()
                 .enumerate()
                 .map(|(i, pass)| {
-                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("pass"),
-                        layout: pass_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&views[pass.texture]),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer: &params_buffer,
-                                    offset: slot * PARAMS_STRIDE,
-                                    size: wgpu::BufferSize::new(
-                                        std::mem::size_of::<PassParams>() as u64
-                                    ),
-                                }),
-                            },
-                        ],
-                    });
+                    let bind_group = pass_bind_group(
+                        device,
+                        pass_layout,
+                        &views[pass.texture],
+                        sampler,
+                        &params_buffer,
+                        slot,
+                    );
                     slot += 1;
                     GpuPass {
                         kind: Kind::of(pass.blend_mode, i == 0),
                         bind_group,
+                        texture: pass.texture,
+                        shown: pass.texture,
+                        params_slot: slot - 1,
                     }
                 })
                 .collect();
@@ -737,7 +758,41 @@ fn upload_level(
         vertices,
         indices,
         batches,
+        views,
+        params: params_buffer,
     }
+}
+
+fn pass_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    texture: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    params: &wgpu::Buffer,
+    params_slot: u64,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("pass"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(texture),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: params,
+                    offset: params_slot * PARAMS_STRIDE,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<PassParams>() as u64),
+                }),
+            },
+        ],
+    })
 }
 
 fn upload_texture(

@@ -31,7 +31,11 @@ spawn point by name to jump to.
 Under **Character**, pick a character and one of their 125-133
 animations, then play, pause, change the speed or drag the time slider.
 The character stands on the level's start, and moves to each spawn point
-you go to. **Look at the character** puts the camera in front of them.
+you go to (the spawn markers are switched off then, since they'd stand
+right through the character). **Look at the character** puts the camera in
+front of them, and **Blink** makes them blink every few seconds (see
+[Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
+frames.
 
 | Control | Action |
 |---|---|
@@ -302,6 +306,21 @@ decoder was checked against the game's own (at `0x80067BE8` in `main.dol`).
 
 Result on the US disc: all 53 skeletons and 2,197 bone animations parse.
 
+### Blinking
+
+Most characters' eyes are a small mesh textured with `eyes.png`. The same
+model carries three more frames on tiny quads hidden inside the body:
+`eyes00` (open), `eyes01` (half shut) and `eyes03` (shut). The names come
+from the created-skater script `disneytricks.qb`, which swaps all four
+together, and the texture checksums are the same in every character.
+
+The GameCube executable never refers to these textures: there is no
+checksum, name or format string for them, and
+`CSkinComponent::replace_texture` only prints "STUB FUNCTION called". So
+the GameCube release may not blink at all. The Map Viewer plays the frames
+anyway (half shut, shut, half shut, about 1/6 second in all, every 1.5 to
+5.5 seconds) on a timing of our own; untick **Blink** to turn it off.
+
 ## Texture formats
 
 Both files are big-endian; see the module docs in `crates/ngc_texture` for
@@ -338,7 +357,7 @@ from 1,079 files.
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
    skinned models, levels, collision, a level viewer, skeletons and
    animations, and animated characters in the Map Viewer (done). Next:
-   camera paths, blinking, and the skins' extra-influence block.
+   camera paths and the skins' extra-influence block.
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.
