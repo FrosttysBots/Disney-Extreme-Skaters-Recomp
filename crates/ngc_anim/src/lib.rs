@@ -8,15 +8,18 @@
 //!   the compressed streams and sampled at any time.
 //! - [`pose`]: turns sampled bone transforms into model-space matrices
 //!   and skinning matrices.
+//! - [`CameraPath`]: the same file type used for scripted cameras.
 //!
 //! The animation format was worked out from the data and then confirmed
 //! against the game's decoder in `main.dol` (around `0x80067BE8`).
 
 pub mod animation;
+pub mod camera;
 pub mod pose;
 pub mod skeleton;
 
 pub use animation::{Animation, BoneTrack, KeyTables, RotationKey, TranslationKey};
+pub use camera::{CameraPath, CameraSample, FovKey, is_camera_path};
 pub use skeleton::{Bone, Skeleton};
 
 #[derive(Debug, thiserror::Error)]

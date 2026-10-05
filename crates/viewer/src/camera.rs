@@ -1,4 +1,27 @@
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
+
+/// A camera placed by a script or camera path: any orientation (it looks
+/// down its local -Z), and its own field of view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScriptedCamera {
+    pub rotation: Quat,
+    pub position: Vec3,
+    /// Vertical field of view in radians.
+    pub fov_y: f32,
+}
+
+impl ScriptedCamera {
+    /// A fly camera at the same spot, looking the same way (minus roll).
+    pub fn to_fly(&self) -> FlyCamera {
+        FlyCamera::looking_at(self.position, self.position + self.rotation * Vec3::NEG_Z)
+    }
+}
+
+/// The vertical field of view that shows `horizontal` across a 4:3 screen,
+/// as the game did on a television. Wider windows then see more at the sides.
+pub fn vertical_fov(horizontal: f32) -> f32 {
+    2.0 * ((horizontal / 2.0).tan() * 0.75).atan()
+}
 
 /// A free-flying camera in the game's Y-up, right-handed space.
 /// Yaw 0 looks down -Z; positive yaw turns right, positive pitch looks up.

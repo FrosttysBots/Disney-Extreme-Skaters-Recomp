@@ -19,6 +19,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Parser;
 use glam::{Mat4, Quat, Vec3};
+use ngc_anim::CameraPath;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -28,7 +29,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-use desa_viewer::camera::FlyCamera;
+use desa_viewer::camera::{FlyCamera, ScriptedCamera, vertical_fov};
 use desa_viewer::character::Character;
 use desa_viewer::collision::{self, CollisionView};
 use desa_viewer::level::Level;
@@ -58,10 +59,14 @@ struct Args {
     /// Render one frame, panel included, to this PNG and exit
     #[arg(long)]
     screenshot: Option<PathBuf>,
+    /// For --screenshot: view from this camera path (by name) at --time
+    #[arg(long, requires = "screenshot")]
+    camera_path: Option<String>,
     /// For --screenshot: the character's animation (default StandIdle)
     #[arg(long, requires = "screenshot")]
     animation: Option<String>,
-    /// For --screenshot: seconds into the animation (and blinking)
+    /// For --screenshot: seconds into the animation (and blinking, and the
+    /// camera path)
     #[arg(long, requires = "screenshot", default_value_t = 0.0)]
     time: f32,
 }
@@ -129,6 +134,8 @@ struct LoadedLevel {
     start: FlyCamera,
     /// Where a character stands until you go to a spawn point.
     home: Mat4,
+    /// The level's camera paths, by name.
+    camera_paths: Vec<(String, CameraPath)>,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -164,6 +171,11 @@ fn load_level(
         || FlyCamera::looking_at(center + Vec3::new(0.0, radius * 0.5, radius * 1.2), center),
         |spawn| spawn.camera_clear_of(collision.as_deref().unwrap_or_default()),
     );
+    let camera_paths: Vec<(String, CameraPath)> = files
+        .cameras
+        .iter()
+        .filter_map(|(name, data)| Some((name.clone(), CameraPath::parse(data).ok()?)))
+        .collect();
     let home = nodes
         .start()
         .map_or(Mat4::from_translation(center), placement_at);
@@ -194,6 +206,7 @@ fn load_level(
             nodes,
             start,
             home,
+            camera_paths,
             markers: (false, false),
         },
         stats,
@@ -207,6 +220,26 @@ fn placement_at(spawn: &Spawn) -> Mat4 {
         Quat::from_rotation_arc(Vec3::Z, spawn.facing()),
         spawn.position,
     )
+}
+
+/// Field of view for camera paths that don't set one (the engine's usual 72
+/// degrees, horizontal).
+const DEFAULT_PATH_FOV: f32 = 72.0;
+
+/// How long the viewer plays a camera path: until a second after its last
+/// key (its stated duration often runs much longer; see `ngc_anim::camera`).
+fn path_length(path: &CameraPath) -> f32 {
+    (path.last_key_time() + 1.0).min(path.duration.max(0.0))
+}
+
+/// Where a camera path puts the camera at `seconds`.
+fn path_camera(path: &CameraPath, seconds: f32) -> ScriptedCamera {
+    let at = path.sample(seconds);
+    ScriptedCamera {
+        rotation: at.rotation,
+        position: at.position,
+        fov_y: vertical_fov(at.fov.unwrap_or(DEFAULT_PATH_FOV.to_radians())),
+    }
 }
 
 /// A camera in front of a character placed by `placement`, looking at it.
@@ -277,6 +310,11 @@ impl<'a> App<'a> {
                 camera_text: String::new(),
                 message: None,
                 panel_open: true,
+                camera_paths: ui::CameraPathModel {
+                    paths: Vec::new(),
+                    playing: None,
+                    time: 0.0,
+                },
                 character: ui::CharacterModel {
                     characters: Vec::new(),
                     current: None,
@@ -357,6 +395,15 @@ impl<'a> App<'a> {
                     self.model.collision = CollisionView::Hidden;
                 }
                 self.model.set_spawns(&level.nodes.spawns);
+                self.model.camera_paths = ui::CameraPathModel {
+                    paths: level
+                        .camera_paths
+                        .iter()
+                        .map(|(name, path)| (name.clone(), path_length(path)))
+                        .collect(),
+                    playing: None,
+                    time: 0.0,
+                };
                 self.model.message = None;
                 self.next_spawn = 0;
                 self.level = Some(level);
@@ -367,7 +414,42 @@ impl<'a> App<'a> {
         }
     }
 
+    fn play_camera_path(&mut self, index: usize) {
+        self.model.camera_paths.playing = Some(index);
+        self.model.camera_paths.time = 0.0;
+    }
+
+    /// Stops a camera path, leaving the free camera where the path was.
+    fn stop_camera_path(&mut self) {
+        self.model.camera_paths.playing = None;
+        if let Some(level) = &mut self.level {
+            if let Some(scripted) = level.renderer.scripted_camera.take() {
+                self.camera = scripted.to_fly();
+            }
+        }
+    }
+
+    /// Advances the playing camera path, if any, and hands it to the renderer.
+    fn play(&mut self, dt: f32) {
+        let Some(index) = self.model.camera_paths.playing else {
+            return;
+        };
+        let Some(level) = &mut self.level else { return };
+        let Some((_, path)) = level.camera_paths.get(index) else {
+            self.model.camera_paths.playing = None;
+            return;
+        };
+        let time = &mut self.model.camera_paths.time;
+        level.renderer.scripted_camera = Some(path_camera(path, *time));
+        if *time >= path_length(path) {
+            self.stop_camera_path();
+        } else {
+            *time = (*time + dt).min(path_length(path));
+        }
+    }
+
     fn go_to_spawn(&mut self, index: usize) {
+        self.stop_camera_path();
         if let Some(spawn) = self.level.as_ref().and_then(|l| l.nodes.spawns.get(index)) {
             self.camera = spawn.camera_clear_of(&self.level.as_ref().unwrap().collision);
             self.placement = placement_at(spawn);
@@ -577,6 +659,11 @@ impl<'a> App<'a> {
                 direction += dir;
             }
         }
+        // Flying or looking around takes over from a camera path.
+        if self.model.camera_paths.playing.is_some() && (direction != Vec3::ZERO || self.looking) {
+            self.stop_camera_path();
+            return;
+        }
         let boost = if pressed(KeyCode::ShiftLeft) || pressed(KeyCode::ShiftRight) {
             5.0
         } else {
@@ -590,6 +677,7 @@ impl<'a> App<'a> {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.update(dt);
+        self.play(dt);
         self.sync_view();
         self.animate(dt, self.started.elapsed().as_secs_f32());
         let p = self.camera.position;
@@ -644,7 +732,10 @@ impl<'a> App<'a> {
                 ui::Action::OpenFolder => self.pick_data(true),
                 ui::Action::LoadLevel(i) => self.start_load(i),
                 ui::Action::GoToSpawn(i) => self.go_to_spawn(i),
+                ui::Action::PlayCameraPath(i) => self.play_camera_path(i),
+                ui::Action::StopCameraPath => self.stop_camera_path(),
                 ui::Action::ResetCamera => {
+                    self.stop_camera_path();
                     if let Some(level) = &self.level {
                         self.camera = level.start;
                     }
@@ -694,6 +785,7 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::KeyR if !repeat => {
+                self.stop_camera_path();
                 if let Some(level) = &self.level {
                     self.camera = level.start;
                 }
@@ -971,6 +1063,29 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
+    if let Some(name) = &args.camera_path {
+        let path = loaded
+            .camera_paths
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, p)| p)
+            .with_context(|| format!("no camera path named {name}"))?;
+        let at = path_camera(path, args.time);
+        loaded.renderer.scripted_camera = Some(at);
+        app.model.camera_paths.paths = loaded
+            .camera_paths
+            .iter()
+            .map(|(n, p)| (n.clone(), path_length(p)))
+            .collect();
+        app.model.camera_paths.playing = app
+            .model
+            .camera_paths
+            .paths
+            .iter()
+            .position(|(n, _)| n.eq_ignore_ascii_case(name));
+        app.model.camera_paths.time = args.time;
+    }
+
     let view = target.create_view(&Default::default());
     paint(
         &device,

@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! u32  version (1)
-//! u32  flags (0x06800000 for bone animations; camera paths use others)
+//! u32  flags (0x06800000 for bone animations; see `camera` for paths)
 //! f32  duration in seconds
 //! u32  bone count
 //! u32  rotation key count, u32 translation key count (totals)
@@ -114,7 +114,7 @@ impl Animation {
         let flags = be32(4)?;
         if flags != BONE_ANIMATION_FLAGS {
             return Err(Error::Unsupported(format!(
-                "animation flags {flags:#010x} (camera paths aren't supported yet)"
+                "animation flags {flags:#010x} (camera paths are read by CameraPath)"
             )));
         }
         let duration = f32::from_bits(be32(8)?);
@@ -290,7 +290,7 @@ fn bracket<K>(keys: &[K], frame: f32, frame_of: impl Fn(&K) -> f32) -> Option<(&
     ))
 }
 
-fn sample_rotation(keys: &[RotationKey], frame: f32) -> Quat {
+pub(crate) fn sample_rotation(keys: &[RotationKey], frame: f32) -> Quat {
     match bracket(keys, frame, |k| f32::from(k.frame)) {
         Some((a, b, t)) => {
             // Blend along the shorter path, as the game does.
@@ -305,7 +305,7 @@ fn sample_rotation(keys: &[RotationKey], frame: f32) -> Quat {
     }
 }
 
-fn sample_translation(keys: &[TranslationKey], frame: f32) -> Vec3 {
+pub(crate) fn sample_translation(keys: &[TranslationKey], frame: f32) -> Vec3 {
     match bracket(keys, frame, |k| f32::from(k.frame)) {
         Some((a, b, t)) => a.translation.lerp(b.translation, t),
         None => Vec3::ZERO,

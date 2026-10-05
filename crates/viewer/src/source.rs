@@ -41,6 +41,9 @@ pub struct LevelFiles {
     pub sky: Option<(Vec<u8>, Option<Vec<u8>>)>,
     pub collision: Option<Vec<u8>>,
     pub nodes: Option<Vec<u8>>,
+    /// Camera paths (cutscenes, goal intros, fly-throughs) by name, from
+    /// the level's own archive.
+    pub cameras: Vec<(String, Vec<u8>)>,
 }
 
 /// The raw files for one playable character.
@@ -184,13 +187,32 @@ impl GameData {
             }
             None => None,
         };
-        let nodes = match self.read_archive(&format!("{id}.prg"))? {
+        let (nodes, cameras) = match self.read_archive(&format!("{id}.prg"))? {
             Some(data) => {
                 let archive =
                     Archive::parse(&data).with_context(|| format!("could not read {id}.prg"))?;
-                entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?
+                let nodes = entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?;
+                let mut cameras = Vec::new();
+                for e in archive.entries() {
+                    let path = e.path();
+                    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+                    let Some(stem) = file_name
+                        .to_ascii_lowercase()
+                        .strip_suffix(".ska.ngc")
+                        .map(str::len)
+                    else {
+                        continue;
+                    };
+                    let contents = e.contents()?;
+                    if ngc_anim::is_camera_path(&contents) {
+                        // Some names end in a space.
+                        cameras.push((file_name[..stem].trim().to_string(), contents.into_owned()));
+                    }
+                }
+                cameras.sort_by_key(|c| c.0.to_ascii_lowercase());
+                (nodes, cameras)
             }
-            None => None,
+            None => (None, Vec::new()),
         };
 
         Ok(LevelFiles {
@@ -199,6 +221,7 @@ impl GameData {
             sky,
             collision,
             nodes,
+            cameras,
         })
     }
 

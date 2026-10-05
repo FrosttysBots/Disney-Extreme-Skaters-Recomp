@@ -37,6 +37,10 @@ front of them, and **Blink** makes them blink every few seconds (see
 [Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
 frames.
 
+Under **Camera paths**, each level lists its cutscene, goal and warp
+cameras (7 to 46 per level). Click one to watch it; moving or looking
+around takes over from wherever it is.
+
 | Control | Action |
 |---|---|
 | Hold right mouse | Look around |
@@ -54,7 +58,8 @@ frames.
 `desa-map-viewer --level HUB --screenshot out.png` renders one frame,
 panel included, without opening a window. Add
 `--character jessie --animation Ollie --time 0.4` to show a character
-there, with the camera looking at them.
+there, with the camera looking at them, or `--camera-path Cam_Plane
+--time 8` to view from a camera path.
 
 ## Crates
 
@@ -301,10 +306,20 @@ decoder was checked against the game's own (at `0x80067BE8` in `main.dol`).
   `default.ska.ngc` at time 0. The two weights of each skinned vertex are
   stored in reverse bone order. Getting any of these wrong tears the mesh
   apart at the joints.
-- **Not supported yet:** the 292 camera paths (header flags `0x1E000000`),
-  which use a different layout.
+- **Camera paths** (header flags `0x1E000000`) are the same file type
+  with plain big-endian floats: one track of rotation and translation
+  keys, plus "custom" keys that set the field of view. The camera looks
+  down its local -Z after the same conjugation as bones; with that, the
+  view rays of the 93 moving paths meet at their subject (median error
+  0.4 degrees, against 50 or more for any other choice). Positions are in
+  mesh space, unlike node positions. Frame numbers have the `0x20` ->
+  `0x00` corruption and are repaired by keeping them in order. Many paths
+  hold their last key for much longer than they move (the hub's warp
+  shots say 55.9 seconds but stop at 11), leaving it to the scripts to
+  cut away. Details are in `crates/ngc_anim/src/camera.rs`.
 
-Result on the US disc: all 53 skeletons and 2,197 bone animations parse.
+Result on the US disc: all 53 skeletons, 2,197 bone animations and 292
+camera paths parse.
 
 ### Blinking
 
@@ -342,7 +357,7 @@ from 1,079 files.
 
 | Extension | Count | Probably |
 |---|---|---|
-| `.ska.ngc` | 2489 | Animations: 2,197 skeletal (decoded) and 292 camera paths |
+| `.ska.ngc` | 2489 | Animations: 2,197 skeletal and 292 camera paths (decoded) |
 | `.dsp` | 736 | GameCube ADPCM sound effects |
 | `.img.ngc` / `.tex.ngc` | 679 / 408 | Images and texture dictionaries |
 | `.qb` | 347 | Compiled QB scripts |
@@ -356,8 +371,8 @@ from 1,079 files.
 
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
    skinned models, levels, collision, a level viewer, skeletons and
-   animations, and animated characters in the Map Viewer (done). Next:
-   camera paths and the skins' extra-influence block.
+   animations, camera paths, and animated characters in the Map Viewer
+   (done). Next: the skins' extra-influence block.
 2. **Level loading.** Rails and spawn points (done). Next: objects and
    pedestrians from the node arrays, the collision BSP tree, fog and
    vertex-color animation.

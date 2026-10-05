@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use ngc_anim::{Animation, KeyTables, Skeleton, pose};
+use ngc_anim::{Animation, CameraPath, KeyTables, Skeleton, is_camera_path, pose};
 use ngc_model::Scene;
 
 /// Finds `<ancestor>/skeletons/<rest...>` above `start`, ignoring case.
@@ -54,6 +54,30 @@ fn load_animation(path: &Path, tables: &KeyTables) -> Result<Animation> {
 }
 
 pub fn info(path: &Path, tables: Option<&Path>) -> Result<()> {
+    let data = read(path)?;
+    if is_camera_path(&data) {
+        let camera = CameraPath::parse(&data)
+            .with_context(|| format!("could not parse {}", path.display()))?;
+        let mut fov: Vec<String> = camera
+            .fov
+            .iter()
+            .map(|k| format!("{:.0}", k.fov.to_degrees()))
+            .collect();
+        fov.dedup();
+        println!(
+            "camera path: {:.2} seconds (keys end at {:.2}), {} rotation keys, {} translation keys, field of view {} degrees",
+            camera.duration,
+            camera.last_key_time(),
+            camera.rotations.len(),
+            camera.translations.len(),
+            if fov.is_empty() {
+                "unset".into()
+            } else {
+                fov.join(", ")
+            }
+        );
+        return Ok(());
+    }
     let tables = load_tables(tables, path)?;
     let anim = load_animation(path, &tables)?;
     let rotation_keys: usize = anim.tracks.iter().map(|t| t.rotations.len()).sum();

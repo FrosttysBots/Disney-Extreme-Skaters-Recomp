@@ -18,7 +18,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-use crate::camera::FlyCamera;
+use crate::camera::{FlyCamera, ScriptedCamera};
 use crate::collision::{CollisionView, ColorVertex};
 use crate::level::{Level, PassDraw, TextureData, Vertex, blend};
 
@@ -193,6 +193,9 @@ pub struct Renderer {
     color_solid: wgpu::RenderPipeline,
     pub collision_view: CollisionView,
     pub show_sky: bool,
+    /// When set, frames are drawn from this camera instead of the one
+    /// passed to `render` / `encode` (for playing camera paths).
+    pub scripted_camera: Option<ScriptedCamera>,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
@@ -288,6 +291,7 @@ impl Renderer {
             color_solid,
             collision_view: CollisionView::Hidden,
             show_sky: true,
+            scripted_camera: None,
             min_light: 0.0,
             depth: None,
         }
@@ -400,11 +404,20 @@ impl Renderer {
         }
 
         let aspect = width as f32 / height.max(1) as f32;
-        let projection = glam::camera::rh::proj::directx::perspective_infinite_reverse(
-            FOV_Y_DEGREES.to_radians(),
-            aspect,
-            NEAR,
-        );
+        let (view, rotation_view, fov_y) = match self.scripted_camera {
+            Some(c) => (
+                Mat4::from_rotation_translation(c.rotation, c.position).inverse(),
+                Mat4::from_quat(c.rotation.conjugate()),
+                c.fov_y,
+            ),
+            None => (
+                camera.view(),
+                camera.rotation_view(),
+                FOV_Y_DEGREES.to_radians(),
+            ),
+        };
+        let projection =
+            glam::camera::rh::proj::directx::perspective_infinite_reverse(fov_y, aspect, NEAR);
         let min_light = self.min_light;
         let write = |globals: &Globals, view: Mat4| {
             let data = GlobalsData {
@@ -415,8 +428,8 @@ impl Renderer {
             self.queue
                 .write_buffer(&globals.buffer, 0, bytemuck::bytes_of(&data));
         };
-        write(&self.world_globals, camera.view());
-        write(&self.sky_globals, camera.rotation_view());
+        write(&self.world_globals, view);
+        write(&self.sky_globals, rotation_view);
 
         {
             let (depth_view, _, _) = self.depth.as_ref().unwrap();

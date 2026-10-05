@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use ngc_anim::{Animation, KeyTables, Skeleton};
+use ngc_anim::{Animation, CameraPath, KeyTables, Skeleton, is_camera_path};
 
 fn collect(dir: &Path, suffix: &str, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -17,7 +17,7 @@ fn collect(dir: &Path, suffix: &str, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Parses every skeleton and bone animation from a real disc. Run with
+/// Parses every skeleton, bone animation and camera path from a real disc. Run with
 /// `cargo test -p ngc_anim -- --ignored` after unpacking into `extracted/unpacked`.
 #[test]
 #[ignore = "needs the unpacked game files"]
@@ -42,9 +42,37 @@ fn real_skeletons_and_animations() {
 
     let mut anims = Vec::new();
     collect(root, ".ska.ngc", &mut anims);
-    let (mut bone_anims, mut cameras) = (0, 0);
+    let (mut bone_anims, mut cameras, mut repaired) = (0, 0, 0);
     for path in &anims {
-        match Animation::parse(&std::fs::read(path).unwrap(), &tables) {
+        let data = std::fs::read(path).unwrap();
+        if is_camera_path(&data) {
+            let camera =
+                CameraPath::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            for keys in [
+                camera
+                    .rotations
+                    .iter()
+                    .map(|k| i32::from(k.frame))
+                    .collect::<Vec<_>>(),
+                camera
+                    .translations
+                    .iter()
+                    .map(|k| i32::from(k.frame))
+                    .collect(),
+            ] {
+                assert!(
+                    keys.windows(2).all(|w| w[0] < w[1]),
+                    "{} frames: {keys:?}",
+                    path.display()
+                );
+            }
+            let at = camera.sample(camera.duration / 2.0);
+            assert!(at.rotation.is_normalized() && at.position.is_finite());
+            repaired += camera.repaired_frames;
+            cameras += 1;
+            continue;
+        }
+        match Animation::parse(&data, &tables) {
             Ok(a) => {
                 bone_anims += 1;
                 let pose = a.sample(a.duration / 2.0);
@@ -54,12 +82,11 @@ fn real_skeletons_and_animations() {
                     path.display()
                 );
             }
-            Err(ngc_anim::Error::Unsupported(_)) => cameras += 1,
             Err(e) => panic!("{}: {e}", path.display()),
         }
     }
     println!(
-        "{} skeletons, {bone_anims} bone animations, {cameras} camera paths skipped",
+        "{} skeletons, {bone_anims} bone animations, {cameras} camera paths ({repaired} frames repaired)",
         skeletons.len()
     );
 }
