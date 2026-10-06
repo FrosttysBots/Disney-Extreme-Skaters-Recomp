@@ -52,6 +52,8 @@ pub struct CharacterModel {
     pub special: (f32, bool),
     /// The AutoKick option.
     pub auto_kick: bool,
+    /// Where the skater is and what it's doing, for bug reports.
+    pub skate_status: String,
     pub combo: Option<String>,
 }
 
@@ -411,6 +413,8 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         "The game's controller option: the skater pushes by itself while under          its kick speed. Off, hold W to push.",
     );
     if model.skating {
+        ui.label(egui::RichText::new(&model.skate_status).small().monospace())
+            .on_hover_text("Where the skater is and what it's doing: handy for bug reports.");
         return;
     }
     if ui

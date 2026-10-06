@@ -540,6 +540,7 @@ impl<'a> App<'a> {
                     combo: None,
                     special: (0.0, false),
                     auto_kick: true,
+                    skate_status: String::new(),
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -824,6 +825,26 @@ impl<'a> App<'a> {
         self.placement = skater.placement();
         self.model.character.balance = skater.balance_meter();
         self.model.character.score = skater.score;
+        let p = skater.position;
+        self.model.character.skate_status = format!(
+            "at {:.0} {:.0} {:.0}\n{:?}, speed {:.0}{}{}{}",
+            p.x,
+            p.y,
+            p.z,
+            skater.action,
+            skater.speed(),
+            if skater.vert.is_some() {
+                ", vert air"
+            } else {
+                ""
+            },
+            skater
+                .balance_trick
+                .as_ref()
+                .filter(|_| skater.manual || skater.grind.is_some())
+                .map_or(String::new(), |t| format!(", {}", t.name)),
+            if skater.special { ", SPECIAL" } else { "" },
+        );
         self.model.character.special = (skater.special_meter / 3000.0, skater.special);
         self.model.character.combo = combo_text(skater);
 
