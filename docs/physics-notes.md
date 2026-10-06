@@ -305,8 +305,8 @@ on-ground update switches on.
   30 degrees) and bailing otherwise (`FiftyFiftyFall`). Manuals start
   with up then down (or down then up) within 400 ms (`ManualTricks`).
   Ported: all of that, the combo carrying the lean over until a landing
-  without a manual; `SkateInAble` approximated, and bails as a 1.5 s
-  stop. Not ported: lips, the other control scheme, special manuals.
+  without a manual; `SkateInAble` approximated, and bails lasting their
+  fall and get-up animations. Not ported: lips, the other control scheme, special manuals.
 - **Tricks** are scripts. `AirTricks` (`airtricks.q`) maps a button and a
   direction (`AirTrickLogic`, within 400 ms) to a slot (`Air_SquareD`);
   the profile's `default_trick_mapping` (`JessieTricks`) puts a trick in
@@ -386,8 +386,15 @@ on-ground update switches on.
   `CrouchBumpDown` or `Land1`/`2` otherwise. Pushing needs the
   controller's AutoKick option (`+0x3A38`, set by `AutoKickOn`): on, the
   can-push test (0x800F43F0) passes under the kick speed with no button.
-  Ported: all of these (the skate crate's `anims` module picks them),
-  AutoKick on by default, and the yaw bail; not the pitch and roll bails.
+  A push, a landing, an ollie and a bail play through before anything
+  less important takes over (the scripts wait on `AnimFinished`), and
+  `DoAPush` runs a whole `PushCycle` before coasting. `GeneralBail` turns
+  the skater to face its velocity (`TurnToFaceVelocity`) and
+  `DoingTrickBail` falls forwards (`Bail1` or `Bail2`, at random) or,
+  landing backwards, backwards (`BailBackward`), the bail lasting the
+  fall and the get-up. Ported: all of these (the skate crate's `anims`
+  module picks them, with priorities and play-through), AutoKick on by
+  default, and the yaw bail; not the pitch and roll bails.
 - **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
   the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
   none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left

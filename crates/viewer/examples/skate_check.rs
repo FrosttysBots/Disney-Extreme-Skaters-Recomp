@@ -2,13 +2,15 @@
 //! - rail approaches: roll beside each rail, ollie towards it holding the
 //!   grind button, and count how often it grinds;
 //! - random skating (pushing, steering, ollies, grinds, manuals, tricks):
-//!   frames where the skater crossed ground without landing on it.
+//!   frames where the skater crossed ground without landing on it, got
+//!   stuck, or the chase camera ended up behind a wall or shook.
 //!
 //! `cargo run --release -p desa_viewer --example skate_check [game data] [level] [runs]`
 //!
 //! `MISSES=1` lists the rail approaches that didn't grind; `TRACE=run:frame`
 //! prints 25 frames of a random run from there (and why the ground was
-//! lost); `PROBE=x,y,z` lists the faces around a spot.
+//! lost); `SHAKES=1` lists where the camera shook; `PROBE=x,y,z` lists the
+//! faces around a spot.
 use std::path::Path;
 
 use desa_viewer::nodes::LevelNodes;
@@ -135,7 +137,7 @@ fn main() {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         (seed >> 8) as f32 / (1u32 << 24) as f32
     };
-    let (mut throughs, mut resets, mut hidden, mut stuck) = (0, 0, 0, 0);
+    let (mut throughs, mut resets, mut hidden, mut stuck, mut shakes) = (0, 0, 0, 0, 0);
     for run in 0..runs {
         let mut skater = Skater::new(start.position, facing.x.atan2(facing.z));
         skater.tricks = tricks.clone();
@@ -148,6 +150,9 @@ fn main() {
         let mut chase = ChaseCamera::behind(&skater, &physics);
         // Where it was five seconds ago, to catch it stuck.
         let mut history = std::collections::VecDeque::new();
+        let mut eyes = std::collections::VecDeque::new();
+        let mut last_jerk = Vec3::ZERO;
+        let mut reversals = 0;
         let mut takeoff = start.position;
         let mut checked = false;
         for frame in 0..3600 {
@@ -189,6 +194,33 @@ fn main() {
             if world.ray(chase.target, chase.eye).is_some() {
                 hidden += 1;
             }
+            // Shaking: the camera jerking one way then straight back (its
+            // movement's change large and opposite, frame after frame).
+            eyes.push_back(chase.eye);
+            if eyes.len() > 3 {
+                eyes.pop_front();
+                let jerk = eyes[2] - 2.0 * eyes[1] + eyes[0];
+                // Back and forth three frames running is a shake; one
+                // reversal is just the camera reacting.
+                reversals = if jerk.length() > 2.0 && jerk.dot(last_jerk) < -4.0 {
+                    reversals + 1
+                } else {
+                    0
+                };
+                if reversals >= 3 {
+                    shakes += 1;
+                    if std::env::var("SHAKES").is_ok() && shakes <= 40 {
+                        println!(
+                            "run {run} frame {frame}: shake {jerk:.1} ({:?}, ground {}, grind {}, speed {:.0}, at {after:.0})",
+                            skater.action,
+                            skater.on_ground,
+                            skater.grind.is_some(),
+                            skater.speed()
+                        );
+                    }
+                }
+                last_jerk = jerk;
+            }
             let trace = std::env::var("TRACE").ok().and_then(|t| {
                 let (r, f) = t.split_once(':')?;
                 Some((r.parse::<u32>().ok()?, f.parse::<u32>().ok()?))
@@ -196,8 +228,9 @@ fn main() {
             skater.trace = trace.is_some_and(|(r, f)| r == run && (f..f + 25).contains(&frame));
             if trace.is_some_and(|(r, f)| r == run && (f..f + 25).contains(&frame)) {
                 println!(
-                    "{frame}: {:?} ground {} grind {:?} v {:.0} at {after:.1} (input push {} crouch {} grind {})",
+                    "{frame}: {:?} heading {:.3} ground {} grind {:?} v {:.0} at {after:.1} (input push {} crouch {} grind {})",
                     skater.action,
+                    skater.heading,
                     skater.on_ground,
                     skater.grind.map(|g| g.segment),
                     skater.velocity,
@@ -256,6 +289,6 @@ fn main() {
         }
     }
     println!(
-        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames, stuck {stuck} times"
+        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames, camera shaking {shakes} frames, stuck {stuck} times"
     );
 }

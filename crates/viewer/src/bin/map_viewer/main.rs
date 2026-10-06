@@ -708,6 +708,13 @@ impl<'a> App<'a> {
         // The character's tricks, timed by its animations.
         let mut tricks = TrickBook::new(program, id, &stats);
         if let Some(character) = &self.character {
+            // And its animations' lengths, to play pushes, landings and
+            // bails through.
+            skater.anim_lengths = character
+                .animations
+                .iter()
+                .map(|(name, a)| (name.clone(), a.duration))
+                .collect();
             tricks.set_durations(|anim| {
                 character
                     .animations

@@ -38,6 +38,7 @@
 //!   angle it hit at, slows it the more head-on it was, and puts it 6 units
 //!   out; skatable ground ahead (a ramp's curve) is stepped onto.
 
+use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI};
 
 use glam::{Mat4, Quat, Vec3};
@@ -193,6 +194,18 @@ const SPECIAL_MANUAL_TWEAK: u32 = 5;
 /// Points a frame on a lip (`LipMacro2`'s `TweakTrick 10`).
 const LIP_TWEAK: u32 = 10;
 
+/// Where to look beside the skater for ground across a crack in the
+/// collision.
+const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0, -1.5)];
+
+/// Slower than this into a wall the skater just stops against it.
+const CREEP_SPEED: f32 = 50.0;
+
+/// A push without its animation lasts this long, and the next starts under
+/// this fraction of the kick speed.
+const PUSH_TIME: f32 = 0.8;
+const PUSH_AGAIN: f32 = 0.9;
+
 /// Reverting: the button within 200 ms before landing (`{ Press, R2, 200 }`
 /// in `GROUNDTRICKS.q`), or within the 5 frames after (`Land2`'s
 /// `RevertTime = 5`); worth 100 (`Revert`'s `SetTrickScore 100`).
@@ -244,6 +257,9 @@ pub struct Skater {
     pub auto_kick: bool,
     /// Pushing this step.
     pub pushing: bool,
+    /// Seconds left of the push under way (`DoAPush` plays a whole
+    /// `PushCycle` before coasting again).
+    push_left: f32,
     /// Seconds in the air so far, and how it came down last.
     pub air_time: f32,
     pub landing: Landing,
@@ -258,6 +274,11 @@ pub struct Skater {
     /// The animation showing, and seconds into it.
     pub anim: Anim,
     pub anim_time: f32,
+    /// How long the character's animations run, by name (given by whoever
+    /// has them loaded): for playing pushes, landings and bails through.
+    pub anim_lengths: HashMap<String, f32>,
+    /// The fall and get-up of the current bail.
+    pub bail_anims: (&'static str, &'static str),
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -336,6 +357,7 @@ impl Skater {
             trace: false,
             auto_kick: true,
             pushing: false,
+            push_left: 0.0,
             air_time: 0.0,
             landing: Landing::default(),
             ollied: false,
@@ -346,8 +368,12 @@ impl Skater {
                 first: "StandIdle",
                 then: None,
                 looping: true,
+                priority: 0,
+                commit: false,
             },
             anim_time: 0.0,
+            anim_lengths: HashMap::new(),
+            bail_anims: ("Bail1", "BailGetUp1"),
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -522,6 +548,45 @@ impl Skater {
         self.trick = (!done).then_some(playing);
     }
 
+    /// How long an animation runs (0 if it isn't known).
+    pub fn anim_length(&self, name: &str) -> f32 {
+        self.anim_lengths.get(name).copied().unwrap_or(0.0)
+    }
+
+    /// How long the current bail lasts: its fall and getting up (the
+    /// scripts wait for both), or `BAIL_TIME` without the animations.
+    fn bail_time(&self) -> f32 {
+        let (fall, get_up) = match self.action {
+            Action::BailManual => ("BailManual", "BailManualGetUp"),
+            Action::BailGrind => ("BailGrind", "BailGrindGetUp"),
+            _ => self.bail_anims,
+        };
+        let length = self.anim_length(fall) + self.anim_length(get_up);
+        if length > 0.0 { length } else { BAIL_TIME }
+    }
+
+    /// Into a bail (`GeneralBail`): turned to face the way the skater's
+    /// going (`TurnToFaceVelocity`) and falling forwards (`Bail1` or
+    /// `Bail2`), or, coming down backwards, falling backwards
+    /// (`BailBackward`), as `DoingTrickBail` and `YawBail` pick.
+    fn start_bail(&mut self, action: Action, backwards: bool) {
+        if backwards && action == Action::Bail {
+            self.bail_anims = ("BailBackward", "BailBackwardGetUp");
+        } else {
+            let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
+            if flat.length() > 10.0 {
+                self.heading = flat.x.atan2(flat.z);
+            }
+            // `GotoRandomScript [ TFBBail1 TFBBail2 ]`.
+            self.bail_anims = if (self.clock * 60.0) as u32 % 2 == 0 {
+                ("Bail1", "BailGetUp1")
+            } else {
+                ("Bail2", "BailGetUp2")
+            };
+        }
+        self.set_action(action);
+    }
+
     /// The steering held (-1 left to 1 right).
     pub fn turn_input(&self) -> f32 {
         self.last_input.turn
@@ -667,7 +732,7 @@ impl Skater {
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
         ) {
-            if self.action_time < BAIL_TIME {
+            if self.action_time < self.bail_time() {
                 Input {
                     brake: true,
                     ..Input::default()
@@ -727,7 +792,12 @@ impl Skater {
         }
         self.update_special();
         let anim = anims::choose(self);
-        if anim == self.anim {
+        // A committed animation plays its first part through unless
+        // something more important cuts in.
+        let hold = self.anim.commit
+            && anim.priority <= self.anim.priority
+            && self.anim_time < self.anim_length(self.anim.first);
+        if anim == self.anim || hold {
             self.anim_time += STEP;
         } else {
             self.anim = anim;
@@ -1264,7 +1334,7 @@ impl Skater {
                 Lean::OffTop => {
                     self.manual = false;
                     self.end_combo(false);
-                    self.set_action(Action::BailManual);
+                    self.start_bail(Action::BailManual, false);
                 }
                 // Off the bottom: `ManualLand`, back on four wheels.
                 Lean::OffBottom => {
@@ -1312,7 +1382,21 @@ impl Skater {
             Action::BailManual | Action::BailGrind | Action::Bail
         );
         let push = (input.push || self.auto_kick) && !input.brake && !self.manual && !bailing;
-        self.pushing = false;
+        let top = if input.crouch {
+            p.max_crouched_kick_speed
+        } else {
+            p.max_standing_kick_speed
+        };
+        // A push, once started, runs its whole kick; a new one starts only
+        // once the skater has slowed a little under the kick speed, so it
+        // coasts between pushes rather than twitching at the speed.
+        if !push {
+            self.push_left = 0.0;
+        } else if self.push_left <= 0.0 && velocity.length() < top * PUSH_AGAIN {
+            self.push_left = self.anim_length("PushCycle1").max(PUSH_TIME);
+        }
+        self.pushing = self.push_left > 0.0;
+        self.push_left = (self.push_left - STEP).max(0.0);
         if push {
             let (top, accel, friction) = if input.crouch {
                 (
@@ -1329,10 +1413,9 @@ impl Skater {
             };
             // Push along the current velocity while under the kick speed
             // (0x800F43F0, 0x800F44CC), with drag (0x800F4CF0).
-            if velocity.length() <= top {
+            if self.pushing && velocity.length() <= top {
                 let direction = velocity.try_normalize().unwrap_or(forward);
                 velocity += direction * accel * STEP;
-                self.pushing = true;
             }
             velocity = drag(velocity, friction);
         }
@@ -1405,6 +1488,12 @@ impl Skater {
                     // Skatable ground ahead, like the curve of a ramp:
                     // step onto it.
                     target = hit.point + hit.normal * 0.1;
+                } else if speed.abs() < CREEP_SPEED && !self.pushing {
+                    // Barely moving (rolled into a wall by a slope, say):
+                    // just stopped, not turned (a push still turns it away), which in a corner would turn
+                    // it off one wall then the other, frame after frame.
+                    speed = 0.0;
+                    target = self.position;
                 } else {
                     let (turn, angle) = wall_bounce(forward, up, hit.normal, p);
                     self.heading += turn;
@@ -1422,8 +1511,17 @@ impl Skater {
                             Action::FlailRight
                         });
                     }
-                    // Out of the wall a little, at the skater's feet.
-                    target = hit.point - lift + hit.normal * 6.0;
+                    // Kept a little out from the wall: pushed out of it only
+                    // as far as needed (not moved up to the hit, which in a
+                    // corner sends it back and forth between two walls).
+                    // Across, flat: a sloping wall's tilt would otherwise
+                    // count as being out of it.
+                    let normal =
+                        Vec3::new(hit.normal.x, 0.0, hit.normal.z).normalize_or(hit.normal);
+                    let out = (target + lift - hit.point).dot(normal);
+                    if out < 6.0 {
+                        target += normal * (6.0 - out);
+                    }
                 }
             }
         }
@@ -1452,6 +1550,25 @@ impl Skater {
                         |hit| !is_wall(hit, p),
                     )
                     .filter(|hit| hit.point.y >= target.y)
+            })
+            // And a seam: the levels' collision has hairline cracks
+            // between faces, which a line straight down can fall through;
+            // ground a step to the side, at the same height, holds it.
+            .or_else(|| {
+                SEAM_PROBES.iter().find_map(|&(x, z)| {
+                    let at = target + Vec3::new(x, 0.0, z);
+                    world
+                        .ray_past(
+                            at + up * p.ground_snap_up,
+                            at - up * p.ground_snap_down,
+                            |hit| !is_wall(hit, p),
+                        )
+                        .filter(|hit| !is_wall(hit, p))
+                        .map(|hit| Hit {
+                            point: hit.point - Vec3::new(x, 0.0, z),
+                            ..hit
+                        })
+                })
             });
         match ground {
             Some(hit) => {
@@ -1549,10 +1666,13 @@ impl Skater {
         self.air_time += STEP;
         // Landing within the next 0.2 seconds (`GetAirTimeLeft`)?
         let fall = self.velocity.y.min(0.0) * 0.2 + 0.5 * p.air_gravity * 0.04;
+        // Once the legs stretch for the landing they stay so (no flicker
+        // when the ground's at the edge of reach).
         self.landing_soon = self.velocity.y < 0.0
-            && world
-                .ray(self.position, self.position + Vec3::Y * fall)
-                .is_some();
+            && (self.landing_soon
+                || world
+                    .ray(self.position, self.position + Vec3::Y * fall)
+                    .is_some());
         self.air_tricks(input);
         // Spinning at the air rotation stat (0x800EE4CC); the turn counts
         // towards the latest trick's spin.
@@ -1623,7 +1743,7 @@ impl Skater {
                     self.bail_on_landing = false;
                     self.trick = None;
                     self.end_combo(false);
-                    self.set_action(Action::BailGrind);
+                    self.start_bail(Action::BailGrind, false);
                     return;
                 }
                 // How it came down (`Land`, `Land2`): facing against the
@@ -1647,7 +1767,8 @@ impl Skater {
                 if self.bail_on() || yaw_bail {
                     self.trick = None;
                     self.end_combo(false);
-                    self.set_action(Action::Bail);
+                    let backwards = self.landing.backwards;
+                    self.start_bail(Action::Bail, backwards);
                     return;
                 }
                 self.trick = None;

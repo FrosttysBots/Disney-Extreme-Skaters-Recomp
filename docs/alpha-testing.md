@@ -51,8 +51,9 @@ skater is and what it's doing.
   goals and gameplay modes.
 - Approximations of our own: how far the camera follows (the game's
   settings, not its code), lips start at coping rails in vert air (the
-  game checks four angles), bails are a short stop rather than the full
-  fall and get-up, and the skater is put back at the nearest spawn when it
+  game checks four angles), a skater barely rolling into a wall just stops
+  against it, ground is found across hairline cracks in the levels'
+  collision, and the skater is put back at the nearest spawn when it
   falls out of a level (the game uses out-of-bounds triggers).
 - Skating starts from the character's spot rather than the game's level
   start, and goals, pedestrians' reactions and moving objects don't
@@ -68,5 +69,5 @@ somewhere odd are the most useful things to report.
 Developers can reproduce reports with
 `cargo run --release -p desa_viewer --example skate_check -- extracted <level>`
 (random skating with checks for falling through the ground, getting stuck
-and the camera behind walls; `PROBE=x,y,z` lists the collision around a
-spot), and screenshot a scripted run with `--skate` and `--skate-keys`.
+the camera behind walls or shaking; `PROBE=x,y,z` lists the collision
+around a spot), and screenshot a scripted run with `--skate` and `--skate-keys`.

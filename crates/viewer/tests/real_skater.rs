@@ -2,6 +2,7 @@ use std::path::Path;
 
 use desa_viewer::nodes::LevelNodes;
 use desa_viewer::source::GameData;
+use glam::Vec3;
 use qb::vm::Program;
 use skate::{Action, Input, Physics, Rails, Segment, Skater, Stats, World};
 
@@ -204,6 +205,18 @@ fn real_skater_on_the_hub() {
     assert!(trickster.last_combo.as_ref().is_some_and(|c| c.bailed));
     assert_eq!(trickster.action, Action::Bail);
     assert_eq!(trickster.score, 500, "the bail scores nothing");
+    // Bailing forwards turns her to face the way she's sliding
+    // (`TurnToFaceVelocity`), so she gets up facing it, not back the way
+    // she came.
+    let sliding = Vec3::new(trickster.velocity.x, 0.0, trickster.velocity.z);
+    if sliding.length() > 10.0 {
+        let facing = trickster.forward().dot(sliding.normalize());
+        assert!(facing > 0.99, "bailed facing {facing} along the slide");
+    }
+    assert!(matches!(
+        trickster.bail_anims,
+        ("Bail1", "BailGetUp1") | ("Bail2", "BailGetUp2")
+    ));
 
     // A flip while spinning: the spin counts in 180s and multiplies it.
     let mut spinner = Skater::new(start.position, facing.x.atan2(facing.z));
@@ -443,6 +456,39 @@ fn real_skater_on_the_hub() {
         skater.position.z
     );
     assert!(skater.position.y > -10_000.0, "still in the level");
+
+    // Stopped facing into a corner (by the Hub's fountain steps), with a
+    // slope rolling her into it: she stays put, not turned off one wall
+    // then the other every frame (which shook the camera).
+    let mut cornered = Skater::new(Vec3::ZERO, 0.0);
+    cornered.auto_kick = false;
+    cornered.place(Vec3::new(5835.5, 30.0, 5917.2), -0.01, &physics, &world);
+    let mut spun = 0.0f32;
+    for _ in 0..120 {
+        let heading = cornered.heading;
+        cornered.update(Input::default(), &physics, &world, 1.0 / 60.0);
+        spun = spun.max((cornered.heading - heading).abs());
+    }
+    println!("in the corner: turned at most {spun:.3} in a frame");
+    assert!(spun < 0.1, "turning on the spot in a corner");
+
+    // AutoKick pushes play their whole kick (`DoAPush` waits for the
+    // animation), not one frame on, one off at the kick speed.
+    let mut kicker = Skater::new(start.position, facing.x.atan2(facing.z));
+    kicker.anim_lengths.insert("PushCycle1".into(), 1.2);
+    let (mut run, mut shortest) = (0, usize::MAX);
+    for _ in 0..1200 {
+        kicker.update(Input::default(), &physics, &world, 1.0 / 60.0);
+        if kicker.pushing {
+            run += 1;
+        } else if run > 0 {
+            shortest = shortest.min(run);
+            run = 0;
+        }
+    }
+    println!("AutoKick: shortest push {shortest} frames");
+    assert!(shortest != usize::MAX, "pushed and coasted");
+    assert!(shortest >= 70, "a push cut short: {shortest} frames");
 
     // Drop onto the longest level rail, moving along it, holding grind.
     let rail = rails

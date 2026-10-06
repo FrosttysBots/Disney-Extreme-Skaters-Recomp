@@ -7,36 +7,62 @@
 use crate::skater::{Action, Skater};
 
 /// An animation to show: `first` plays once (from `time`), then `then`
-/// loops; or `first` loops itself.
+/// loops; or `first` loops itself. A `commit`ted one plays its first part
+/// to the end before anything of the same or lower `priority` takes over
+/// (the scripts wait for `AnimFinished`): a push, a landing, a bail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Anim {
     pub first: &'static str,
     pub then: Option<&'static str>,
     pub looping: bool,
+    pub priority: u8,
+    pub commit: bool,
 }
 
+/// What can cut in on what: coasting and pushing, then steering and
+/// crouching, landing and the like, the air, and balancing and bails.
+const GROUND: u8 = 0;
+const STEER: u8 = 1;
+const LAND: u8 = 2;
+const AIR: u8 = 3;
+const TRICK: u8 = 4;
+
 impl Anim {
-    const fn cycle(name: &'static str) -> Anim {
+    const fn cycle(name: &'static str, priority: u8) -> Anim {
         Anim {
             first: name,
             then: None,
             looping: true,
+            priority,
+            commit: false,
         }
     }
 
-    const fn once(name: &'static str) -> Anim {
+    const fn once(name: &'static str, priority: u8) -> Anim {
         Anim {
             first: name,
             then: None,
             looping: false,
+            priority,
+            commit: false,
         }
     }
 
-    const fn into(first: &'static str, then: &'static str) -> Anim {
+    const fn into(first: &'static str, then: &'static str, priority: u8) -> Anim {
         Anim {
             first,
             then: Some(then),
             looping: false,
+            priority,
+            commit: false,
+        }
+    }
+
+    /// Plays its first part through.
+    const fn committed(self) -> Anim {
+        Anim {
+            commit: true,
+            ..self
         }
     }
 }
@@ -60,76 +86,83 @@ pub fn choose(skater: &Skater) -> Anim {
     let turn = skater.turn_input();
     let crouched = skater.is_crouched();
     match skater.action {
-        Action::BailManual => Anim::into("BailManual", "BailManualGetUp"),
-        Action::BailGrind => Anim::into("BailGrind", "BailGrindGetUp"),
-        Action::Bail => Anim::into("Bail1", "BailGetUp1"),
-        Action::FlailLeft if crouched => Anim::once("CrouchFlailLeft"),
-        Action::FlailRight if crouched => Anim::once("CrouchFlailRight"),
-        Action::FlailLeft => Anim::once("StandFlailLeft"),
-        Action::FlailRight => Anim::once("StandFlailRight"),
-        Action::Grinding => Anim::into("GrindIn1", "GrindRange1"),
-        Action::Manual if skater.special_manual => {
-            Anim::into("SpecialManualIn", "SpecialManualRange")
+        Action::BailManual => Anim::into("BailManual", "BailManualGetUp", TRICK).committed(),
+        Action::BailGrind => Anim::into("BailGrind", "BailGrindGetUp", TRICK).committed(),
+        Action::Bail => {
+            let (fall, get_up) = skater.bail_anims;
+            Anim::into(fall, get_up, TRICK).committed()
         }
-        Action::Manual => Anim::into("ManualIn1", "ManualRange1"),
-        Action::Lip => Anim::once("LipRange1"),
-        Action::Revert { frontside: true } => Anim::into("RevertFS", "StandIdle"),
-        Action::Revert { frontside: false } => Anim::into("RevertBS", "StandIdle"),
-        // `Land2`.
+        Action::FlailLeft if crouched => Anim::once("CrouchFlailLeft", LAND).committed(),
+        Action::FlailRight if crouched => Anim::once("CrouchFlailRight", LAND).committed(),
+        Action::FlailLeft => Anim::once("StandFlailLeft", LAND).committed(),
+        Action::FlailRight => Anim::once("StandFlailRight", LAND).committed(),
+        Action::Grinding => Anim::into("GrindIn1", "GrindRange1", TRICK),
+        Action::Manual if skater.special_manual => {
+            Anim::into("SpecialManualIn", "SpecialManualRange", TRICK)
+        }
+        Action::Manual => Anim::into("ManualIn1", "ManualRange1", TRICK),
+        Action::Lip => Anim::once("LipRange1", TRICK),
+        Action::Revert { frontside: true } => Anim::into("RevertFS", "StandIdle", LAND).committed(),
+        Action::Revert { frontside: false } => {
+            Anim::into("RevertBS", "StandIdle", LAND).committed()
+        }
+        // `Land2`: the landing plays through (`WaitAnimWhilstChecking`).
         Action::Landing => {
             let l = skater.landing;
-            if l.backwards {
-                Anim::into("LandBackward1", "StandIdle")
+            let anim = if l.backwards {
+                Anim::into("LandBackward1", "StandIdle", LAND)
             } else if l.sketchy {
-                Anim::into("LandSketchy", "StandIdle")
+                Anim::into("LandSketchy", "StandIdle", LAND)
             } else if l.little_air {
                 if crouched {
-                    Anim::into("CrouchBumpDown", "CrouchIdle")
+                    Anim::into("CrouchBumpDown", "CrouchIdle", LAND)
                 } else {
-                    Anim::into("LandSmall", "StandIdle")
+                    Anim::into("LandSmall", "StandIdle", LAND)
                 }
             } else if l.short {
-                Anim::into("CrouchBumpDown", "StandIdle")
+                Anim::into("CrouchBumpDown", "StandIdle", LAND)
             } else {
-                Anim::into("Land1", "StandIdle")
-            }
+                Anim::into("Land1", "StandIdle", LAND)
+            };
+            anim.committed()
         }
         // `GroundGone` and `Airborne`: off an edge `Stand2InAir`, after an
-        // ollie its own animation, then turning or idling, and legs
-        // stretched for the landing.
+        // ollie its own animation (both played through), then turning or
+        // idling, and legs stretched for the landing.
         Action::Air => {
             if skater.landing_soon() {
-                Anim::once("StretchLegsInit")
+                Anim::once("StretchLegsInit", AIR)
             } else if turn < 0.0 {
-                Anim::once("AirTurnLeft")
+                Anim::once("AirTurnLeft", AIR)
             } else if turn > 0.0 {
-                Anim::once("AirTurnRight")
+                Anim::once("AirTurnRight", AIR)
             } else if skater.ollied() {
-                Anim::into("Ollie", "AirIdle")
+                Anim::into("Ollie", "AirIdle", AIR).committed()
             } else {
-                Anim::into("Stand2InAir", "AirIdle")
+                Anim::into("Stand2InAir", "AirIdle", AIR).committed()
             }
         }
-        // `OnGroundAI`.
+        // `OnGroundAI`: steering and crouching cut in on pushing; a push
+        // plays through (`DoAPush` waits for `AnimFinished`).
         _ => {
             if turn < 0.0 {
                 if crouched {
-                    Anim::into("CrouchTurnLeft", "CrouchTurnLeftIdle")
+                    Anim::into("CrouchTurnLeft", "CrouchTurnLeftIdle", STEER)
                 } else {
-                    Anim::into("StandTurnLeft", "StandTurnLeftIdle")
+                    Anim::into("StandTurnLeft", "StandTurnLeftIdle", STEER)
                 }
             } else if turn > 0.0 {
                 if crouched {
-                    Anim::into("CrouchTurnRight", "CrouchTurnRightIdle")
+                    Anim::into("CrouchTurnRight", "CrouchTurnRightIdle", STEER)
                 } else {
-                    Anim::into("StandTurnRight", "StandTurnRightIdle")
+                    Anim::into("StandTurnRight", "StandTurnRightIdle", STEER)
                 }
             } else if crouched {
-                Anim::into("Crouch", "CrouchIdle")
+                Anim::into("Crouch", "CrouchIdle", STEER)
             } else if skater.pushing {
-                Anim::cycle("PushCycle1")
+                Anim::cycle("PushCycle1", GROUND).committed()
             } else {
-                Anim::cycle("StandIdle")
+                Anim::cycle("StandIdle", GROUND)
             }
         }
     }
