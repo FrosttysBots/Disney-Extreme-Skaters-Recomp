@@ -49,6 +49,15 @@ impl Combo {
         });
     }
 
+    /// Points added to the latest trick (the score object's `TweakTrick`,
+    /// 0x800B0BA0): each frame of a grind (`SetGrindTweak`, 7), a manual
+    /// (`DoBalanceTrick Tweak`, 1) or a held grab (`GrabTweak`, 20).
+    pub fn tweak(&mut self, points: u32) {
+        if let Some(last) = self.tricks.last_mut() {
+            last.score += points;
+        }
+    }
+
     /// Credits the spin so far to the latest trick: `degrees` turned, in
     /// 180s with `spin_count_slop` (0x800B0A00). It only ever goes up.
     pub fn spin(&mut self, degrees: f32) {
@@ -93,6 +102,18 @@ impl Combo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tweaks_add_to_the_latest_trick() {
+        let mut combo = Combo::default();
+        combo.add("Grab", 200, false);
+        combo.add("Grind", 100, true);
+        for _ in 0..60 {
+            combo.tweak(7);
+        }
+        assert_eq!(combo.tricks[0].score, 200);
+        assert_eq!(combo.tricks[1].score, 100 + 420);
+    }
 
     #[test]
     fn repeats_degrade_and_spins_multiply() {

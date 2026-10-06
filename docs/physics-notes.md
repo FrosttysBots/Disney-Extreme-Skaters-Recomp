@@ -332,8 +332,12 @@ on-ground update switches on.
   first after a `BlockSpin` one (grinds and manuals) and carries on to
   the tricks after it. The multiplier (`+0x58`) goes up one per trick;
   the combo scores the sum times it, and the same difference feeds the
-  special meter (`+0x64`, capped at 3000). Ported, without the special
-  meter, `NoDegrade`, and grind and manual points over time.
+  special meter (`+0x64`, capped at 3000). Tweaks (0x800B0BA0) add points
+  straight to the latest trick each frame: the grind update adds the
+  grind's `SetGrindTweak` (7, 36 for specials; stored at `+0x3AC4`), the
+  balance update the trick's `DoBalanceTrick Tweak` (1 in a manual, 5 for
+  specials), and a held grab its `GrabTweak` (`GRABTWEAK_MEDIUM`, 20).
+  Ported, without the special meter and `NoDegrade`.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

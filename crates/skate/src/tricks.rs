@@ -91,6 +91,8 @@ pub struct Trick {
     pub speed: f32,
     /// How many frames from the end bailing turns off.
     pub trickslack: f32,
+    /// Points a frame while a grab is held (`GrabTweak`).
+    pub tweak: u32,
 }
 
 /// A character's tricks and the combinations that do them.
@@ -304,5 +306,7 @@ fn parse_trick(trick: &Value, flip_speed: f32) -> Option<Trick> {
             Kind::Flip => 10.0,
             Kind::Grab => 0.0,
         }),
+        // `GrabTrick`'s default, `GRABTWEAK_MEDIUM`.
+        tweak: number("GrabTweak").unwrap_or(20.0) as u32,
     })
 }

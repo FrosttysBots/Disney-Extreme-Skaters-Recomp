@@ -145,6 +145,12 @@ const STEP: f32 = 1.0 / 60.0;
 /// stand-in for the game's bail and get-up animations).
 const BAIL_TIME: f32 = 1.5;
 
+/// Points a frame for grinding (`Grind GrindTweak = 7` in
+/// `grindscripts.q`, 36 for specials) and balancing a manual
+/// (`DoBalanceTrick ... Tweak = 1`, 5 for specials).
+const GRIND_TWEAK: u32 = 7;
+const MANUAL_TWEAK: u32 = 1;
+
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
 /// in the game's `manualtricks.q`).
 const MANUAL_WINDOW: f32 = 0.4;
@@ -357,6 +363,8 @@ impl Skater {
             }
             (Kind::Grab, Phase::Hold) => {
                 playing.time += step;
+                // Held: `TweakTrick <GrabTweak>` every frame.
+                self.combo_tricks.tweak(trick.tweak);
                 if !input.grab {
                     playing.phase = Phase::Out;
                     playing.time = length;
@@ -609,6 +617,8 @@ impl Skater {
         let lean = self
             .balance
             .update(input.turn > 0.0, input.turn < 0.0, &p.grind_balance, STEP);
+        // Each grinding frame adds the grind's tweak (0x801033B0).
+        self.combo_tricks.tweak(GRIND_TWEAK);
         if lean != Lean::Balanced {
             let right = Vec3::new(-travel.z, 0.0, travel.x);
             let (side, turn) = if lean == Lean::OffTop {
@@ -736,7 +746,9 @@ impl Skater {
                 .balance
                 .update(input.push, input.brake, &p.manual_balance, STEP)
             {
-                Lean::Balanced => {}
+                // Balanced: `DoBalanceTrick Tweak = 1` adds a point a
+                // frame (0x800CAD30 calls `TweakTrick`).
+                Lean::Balanced => self.combo_tricks.tweak(MANUAL_TWEAK),
                 // Off the top: the game's `BailManual`.
                 Lean::OffTop => {
                     self.manual = false;
