@@ -530,6 +530,7 @@ impl<'a> App<'a> {
                     balance: None,
                     score: 0,
                     combo: None,
+                    special: (0.0, false),
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -740,6 +741,7 @@ impl<'a> App<'a> {
         self.placement = skater.placement();
         self.model.character.balance = skater.balance_meter();
         self.model.character.score = skater.score;
+        self.model.character.special = (skater.special_meter / 3000.0, skater.special);
         self.model.character.combo = combo_text(skater);
 
         // Animation: by what the skater is doing.
@@ -752,6 +754,9 @@ impl<'a> App<'a> {
             SkateAction::FlailLeft => (&["FlailLeft"], false),
             SkateAction::FlailRight => (&["FlailRight"], false),
             SkateAction::Grinding => (&["GrindIn1", "GrindRange1"], false),
+            SkateAction::Manual if skater.special_manual => {
+                (&["SpecialManualIn", "SpecialManualRange"], false)
+            }
             SkateAction::Manual => (&["ManualIn1", "ManualRange1"], false),
             SkateAction::BailManual => (&["BailManual", "BailManualGetUp"], false),
             SkateAction::BailGrind => (&["BailGrind", "BailGrindGetUp"], false),

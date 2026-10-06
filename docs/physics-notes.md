@@ -337,7 +337,18 @@ on-ground update switches on.
   grind's `SetGrindTweak` (7, 36 for specials; stored at `+0x3AC4`), the
   balance update the trick's `DoBalanceTrick Tweak` (1 in a manual, 5 for
   specials), and a held grab its `GrabTweak` (`GRABTWEAK_MEDIUM`, 20).
-  Ported, without the special meter and `NoDegrade`.
+  The special meter (score object `+0x64`, full flag `+0x68`): with
+  `NewSpecial = 1` (PHYSICS.q) it gains whatever the combo's total gains
+  as it's recomputed, fills at 3000 (`0xBB8`) and then allows specials;
+  each frame (0x800AFCF0) it drains 50 a second, or 200 while full; a bail
+  empties it. Specials are `TripleInOrder` combinations (two directions
+  then a button within 400 ms): each character's slots come from the goal
+  that unlocks them (`goal_get_special_trick_display_text`: Jessie's grab
+  is `SpAir_D_R_Square`, her manual `SpMan_R_L_Triangle`, her lip
+  `SpLip_L_D_Triangle`), filled by `Trick_<name>SpGrab`, `...SpManual`,
+  `...SpLip`. Special grabs tweak 30 a frame (`GRABTWEAK_SPECIAL`),
+  special manuals 5. Ported, with every special unlocked, without lips
+  and `NoDegrade`.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

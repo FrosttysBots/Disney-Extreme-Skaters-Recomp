@@ -111,6 +111,22 @@ pub enum Phase {
     Out,
 }
 
+/// A press that can be part of a special's combination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Press {
+    Dir(Dir),
+    Flip,
+    Grind,
+}
+
+/// The special meter: full at 3000 (`0xBB8` in the score object), draining
+/// 50 a second, or 200 while full (0x800AFCF0).
+const SPECIAL_FULL: f32 = 3000.0;
+const SPECIAL_DRAIN: f32 = 50.0;
+const SPECIAL_DRAIN_FULL: f32 = 200.0;
+/// The window for a special's three presses (`TripleInOrder ... 400`).
+const SPECIAL_WINDOW: f32 = 0.4;
+
 /// A finished combo: its tricks and what it scored (nothing if it ended in
 /// a bail).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -153,6 +169,7 @@ const GRIND_TWEAK: u32 = 7;
 /// How long a press of the grind button keeps looking for a rail.
 const GRIND_WINDOW: f32 = 0.5;
 const MANUAL_TWEAK: u32 = 1;
+const SPECIAL_MANUAL_TWEAK: u32 = 5;
 
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
 /// in the game's `manualtricks.q`).
@@ -218,6 +235,18 @@ pub struct Skater {
     pub last_combo: Option<Landed>,
     /// Degrees turned in the air since leaving the ground or a rail.
     air_spin: f32,
+    /// The special meter (up to 3000) and whether it's full (specials
+    /// allowed until it drains).
+    pub special_meter: f32,
+    pub special: bool,
+    /// The combo total last frame, to fill the meter by what it gained.
+    last_total: u32,
+    /// In the special manual.
+    pub special_manual: bool,
+    /// Recent presses, for the specials' three-press combinations, with
+    /// the clock they're timed by.
+    presses: Vec<(Press, f32)>,
+    clock: f32,
     pub score: u32,
     leftover: f32,
 }
@@ -256,6 +285,12 @@ impl Skater {
             combo_tricks: Combo::default(),
             last_combo: None,
             air_spin: 0.0,
+            special_meter: 0.0,
+            special: false,
+            last_total: 0,
+            special_manual: false,
+            presses: Vec::new(),
+            clock: 0.0,
             score: 0,
             leftover: 0.0,
         }
@@ -306,6 +341,12 @@ impl Skater {
     fn end_combo(&mut self, landed: bool) {
         self.combo = false;
         self.air_spin = 0.0;
+        self.last_total = 0;
+        // A bail empties the special meter.
+        if !landed {
+            self.special_meter = 0.0;
+            self.special = false;
+        }
         if self.combo_tricks.is_empty() {
             return;
         }
@@ -327,7 +368,15 @@ impl Skater {
         if (flip || grab) && free {
             let button = if flip { Button::Flip } else { Button::Grab };
             let dir = Dir::from_held(input.push, input.brake, input.turn < 0.0, input.turn > 0.0);
-            if let Some(index) = self.tricks.air_trick(button, dir) {
+            // With the meter full, the special's combination does it.
+            let special = self
+                .tricks
+                .special_air
+                .filter(|&(a, b, _)| {
+                    self.special && flip && self.pressed_in_order(a, b, Press::Flip)
+                })
+                .map(|(_, _, i)| i);
+            if let Some(index) = special.or_else(|| self.tricks.air_trick(button, dir)) {
                 self.trick = Some(Playing {
                     trick: index,
                     time: 0.0,
@@ -477,6 +526,26 @@ impl Skater {
         } else {
             self.since_down + STEP
         };
+        self.clock += STEP;
+        if !self.manual {
+            self.special_manual = false;
+        }
+        let last = self.last_input;
+        let edges = [
+            (input.push && !last.push, Press::Dir(Dir::Up)),
+            (input.brake && !last.brake, Press::Dir(Dir::Down)),
+            (input.turn < 0.0 && last.turn >= 0.0, Press::Dir(Dir::Left)),
+            (input.turn > 0.0 && last.turn <= 0.0, Press::Dir(Dir::Right)),
+            (input.flip && !last.flip, Press::Flip),
+            (input.grind && !last.grind, Press::Grind),
+        ];
+        for (pressed, press) in edges {
+            if pressed {
+                self.presses.push((press, self.clock));
+            }
+        }
+        let clock = self.clock;
+        self.presses.retain(|&(_, t)| clock - t <= 1.0);
         self.since_grind = if input.grind && !self.last_input.grind {
             0.0
         } else {
@@ -539,6 +608,43 @@ impl Skater {
                 }
             }
         }
+        self.update_special();
+    }
+
+    /// The special meter, after each step (the score object, with
+    /// `NewSpecial = 1`): it gains whatever the combo's total gained, fills
+    /// at 3000, and drains.
+    fn update_special(&mut self) {
+        let total = self.combo_tricks.total();
+        if total > self.last_total {
+            self.special_meter += (total - self.last_total) as f32;
+        }
+        self.last_total = total;
+        if self.special_meter >= SPECIAL_FULL {
+            self.special_meter = SPECIAL_FULL;
+            self.special = true;
+        }
+        let drain = if self.special {
+            SPECIAL_DRAIN_FULL
+        } else {
+            SPECIAL_DRAIN
+        };
+        self.special_meter -= drain * STEP;
+        if self.special_meter <= 0.0 {
+            self.special_meter = 0.0;
+            self.special = false;
+        }
+    }
+
+    /// Whether the presses ended with `first`, `second` and then `button`
+    /// (just now), within the special window (`TripleInOrder`).
+    fn pressed_in_order(&self, first: Dir, second: Dir, button: Press) -> bool {
+        let n = self.presses.len();
+        if n < 3 || self.presses[n - 1].0 != button || self.presses[n - 1].1 != self.clock {
+            return false;
+        }
+        let (a, b) = (self.presses[n - 3], self.presses[n - 2]);
+        a.0 == Press::Dir(first) && b.0 == Press::Dir(second) && self.clock - a.1 <= SPECIAL_WINDOW
     }
 
     /// The ollie's speed (0x800F62C4): stronger the longer the crouch, up
@@ -758,6 +864,17 @@ impl Skater {
             self.credit(self.tricks.manual.clone(), true);
             self.set_action(Action::Manual);
         }
+        // The special manual: its combination while in a manual, with the
+        // meter full (the `Manual` script's `SpecialManualTricks`).
+        if self.manual && !self.special_manual && self.special {
+            if let Some((a, b, trick)) = self.tricks.special_manual.clone() {
+                if self.pressed_in_order(a, b, Press::Grind) {
+                    self.special_manual = true;
+                    self.balance.start(&p.manual_balance, false);
+                    self.credit(Some(trick), true);
+                }
+            }
+        }
         if self.manual {
             match self
                 .balance
@@ -765,7 +882,11 @@ impl Skater {
             {
                 // Balanced: `DoBalanceTrick Tweak = 1` adds a point a
                 // frame (0x800CAD30 calls `TweakTrick`).
-                Lean::Balanced => self.combo_tricks.tweak(MANUAL_TWEAK),
+                Lean::Balanced => self.combo_tricks.tweak(if self.special_manual {
+                    SPECIAL_MANUAL_TWEAK
+                } else {
+                    MANUAL_TWEAK
+                }),
                 // Off the top: the game's `BailManual`.
                 Lean::OffTop => {
                     self.manual = false;

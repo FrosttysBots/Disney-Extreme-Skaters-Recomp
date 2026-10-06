@@ -107,6 +107,11 @@ pub struct TrickBook {
     /// The names and scores of the character's first grind and manual.
     pub grind: Option<(String, u32)>,
     pub manual: Option<(String, u32)>,
+    /// The character's special grab (two directions in order, then flip)
+    /// and special manual (two directions, then grind), once the special
+    /// meter is full.
+    pub special_air: Option<(Dir, Dir, usize)>,
+    pub special_manual: Option<(Dir, Dir, (String, u32))>,
     /// How long each animation runs, in seconds, from whoever has the
     /// character's animations loaded (see [`TrickBook::set_durations`]).
     durations: Vec<(u32, f32)>,
@@ -207,6 +212,25 @@ impl TrickBook {
         };
         book.grind = named("Grind1");
         book.manual = named("Manual1");
+
+        // Specials: the game gives each character its own slot when a goal
+        // unlocks it; here they're all unlocked.
+        if let Some((air, manual)) = special_slots(character) {
+            let trick = |kind: &str| program.value(checksum(&format!("Trick_{character}Sp{kind}")));
+            if let Some(trick) = trick("Grab").and_then(|t| parse_trick(t, flip_speed)) {
+                book.tricks.push(trick);
+                book.special_air = Some((air.0, air.1, book.tricks.len() - 1));
+            }
+            if let Some(trick) = trick("Manual") {
+                let params = trick.get(checksum("params"));
+                let score = params
+                    .and_then(|p| p.get(checksum("score")))
+                    .and_then(Value::as_int)
+                    .unwrap_or(0);
+                book.special_manual =
+                    Some((manual.0, manual.1, (trick_name(trick), score.max(0) as u32)));
+            }
+        }
         book
     }
 
@@ -247,6 +271,31 @@ impl TrickBook {
                 .map(|&(_, i)| i),
         }
     }
+}
+
+/// Each character's special grab and special manual slots: the two
+/// directions before the button (Square, then Triangle). The game assigns
+/// them as goals unlock them (`goal_get_special_trick_display_text` in
+/// `GOAL_UTILITIES.q`, which spells them `SpAir_D_R_Square`,
+/// `SpMan_R_L_Triangle`...).
+fn special_slots(character: &str) -> Option<((Dir, Dir), (Dir, Dir))> {
+    use Dir::{Down as D, Left as L, Right as R, Up as U};
+    Some(match character.to_ascii_lowercase().as_str() {
+        "buzz" => ((U, R), (L, U)),
+        "woody" => ((L, R), (D, U)),
+        "jessie" => ((D, R), (R, L)),
+        "zurg" => ((R, U), (U, R)),
+        "tarzan" => ((U, D), (L, L)),
+        "tantor" => ((U, U), (R, D)),
+        "jane" => ((R, L), (L, U)),
+        "terk" => ((U, R), (D, D)),
+        "simba" => ((U, L), (L, R)),
+        "timon" => ((R, U), (L, L)),
+        "rafiki" => ((L, U), (R, R)),
+        "nala" => ((R, L), (D, D)),
+        "kid" => ((L, R), (U, U)),
+        _ => return None,
+    })
 }
 
 /// A name's value, following names that stand for other values
@@ -306,7 +355,12 @@ fn parse_trick(trick: &Value, flip_speed: f32) -> Option<Trick> {
             Kind::Flip => 10.0,
             Kind::Grab => 0.0,
         }),
-        // `GrabTrick`'s default, `GRABTWEAK_MEDIUM`.
-        tweak: number("GrabTweak").unwrap_or(20.0) as u32,
+        // `GrabTrick`'s default, `GRABTWEAK_MEDIUM`; `GRABTWEAK_SPECIAL` for
+        // specials.
+        tweak: number("GrabTweak").unwrap_or(if params.has_flag(checksum("IsSpecial")) {
+            30.0
+        } else {
+            20.0
+        }) as u32,
     })
 }

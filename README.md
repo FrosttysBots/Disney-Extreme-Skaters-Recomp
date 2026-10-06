@@ -133,6 +133,7 @@ around takes over from wherever it is.
 | W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind (in the air), stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
 | Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
+| Two directions, then Q (or E in a manual) | With the special meter full: the character's special grab (or manual) |
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -559,9 +560,11 @@ units high and grinds the Hub's long rails.
 with addresses. Combos score as the game does: repeats degrade (100% down
 to 50%), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
 earn points every frame, and the total is the points times the number of
-tricks. Not yet: transfers, lips, special tricks and the
-special meter
-and bails, moving objects, and a frame-by-frame check against Dolphin.
+tricks. The special meter fills with points; full, each character's
+special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
+manual right, left, grind for "Happy Trails") are on until it drains. Not
+yet: transfers, lips, moving objects, and a frame-by-frame check against
+Dolphin.
 Turning rates are read as radians a second and the camera distances as
 feet, both guesses for now.
 

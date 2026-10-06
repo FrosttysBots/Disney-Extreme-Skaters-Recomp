@@ -48,6 +48,8 @@ pub struct CharacterModel {
     pub balance: Option<f32>,
     /// Points banked, and the combo on screen.
     pub score: u32,
+    /// The special meter (0 to 1) and whether it's full.
+    pub special: (f32, bool),
     pub combo: Option<String>,
 }
 
@@ -136,6 +138,36 @@ fn trick_text(ctx: &egui::Context, score: u32, combo: Option<&str>) {
     }
 }
 
+/// The special meter, under the score: it fills with points and, full
+/// (glowing), allows the character's special tricks until it drains.
+fn special_meter(ctx: &egui::Context, (fill, full): (f32, bool)) {
+    egui::Area::new(egui::Id::new("special"))
+        .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 12.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 3.0, egui::Color32::from_black_alpha(160));
+            let mut bar = rect.shrink(2.0);
+            bar.set_width(bar.width() * fill.clamp(0.0, 1.0));
+            let colour = if full {
+                egui::Color32::from_rgb(255, 210, 40)
+            } else {
+                egui::Color32::from_rgb(70, 140, 255)
+            };
+            painter.rect_filled(bar, 2.0, colour);
+            if full {
+                painter.text(
+                    rect.left_center() - egui::vec2(8.0, 0.0),
+                    egui::Align2::RIGHT_CENTER,
+                    "SPECIAL",
+                    egui::FontId::proportional(13.0),
+                    colour,
+                );
+            }
+        });
+}
+
 /// The balance meter, bottom centre: a bar with a marker that slides to
 /// either end as the skater leans.
 fn balance_meter(ctx: &egui::Context, meter: f32) {
@@ -180,6 +212,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     }
     if model.character.skating {
         trick_text(ctx, model.character.score, model.character.combo.as_deref());
+        special_meter(ctx, model.character.special);
     }
     if !model.panel_open {
         return actions;

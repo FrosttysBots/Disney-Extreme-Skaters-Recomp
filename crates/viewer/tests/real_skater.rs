@@ -199,6 +199,60 @@ fn real_skater_on_the_hub() {
         assert_eq!(landed.total, 375);
     }
 
+    // The special grab: down, right, then flip, with the special meter
+    // full; without it, the same presses do an ordinary trick.
+    let special_attempt = |full: bool| {
+        let mut skater = Skater::new(start.position, facing.x.atan2(facing.z));
+        skater.tricks = trickster.tricks.clone();
+        for _ in 0..90 {
+            skater.update(push, &physics, &world, 1.0 / 60.0);
+        }
+        if full {
+            skater.special_meter = 3000.0;
+            skater.special = true;
+        }
+        let crouch = Input {
+            crouch: true,
+            ..Input::default()
+        };
+        for _ in 0..12 {
+            skater.update(crouch, &physics, &world, 1.0 / 60.0);
+        }
+        let down = Input {
+            brake: true,
+            ..Input::default()
+        };
+        let right = Input {
+            turn: 1.0,
+            ..Input::default()
+        };
+        let flip = Input {
+            flip: true,
+            ..Input::default()
+        };
+        for input in [
+            Input::default(),
+            down,
+            Input::default(),
+            right,
+            Input::default(),
+            flip,
+        ] {
+            skater.update(input, &physics, &world, 1.0 / 60.0);
+        }
+        let trick = skater
+            .trick
+            .map(|t| skater.tricks.tricks[t.trick].name.clone());
+        (trick, skater.special)
+    };
+    let (with_meter, still_special) = special_attempt(true);
+    let (without, _) = special_attempt(false);
+    println!(
+        "special: {with_meter:?} (meter still full: {still_special}), without the meter: {without:?}"
+    );
+    assert_eq!(with_meter.as_deref(), Some("Sit a Spell"));
+    assert_ne!(without.as_deref(), Some("Sit a Spell"));
+
     // A manual: tap up, then down, and let it ride. Left alone it falls
     // off the meter within seconds; balanced, it lasts.
     let manual_frames = |skater: &mut Skater, careful: bool| {
