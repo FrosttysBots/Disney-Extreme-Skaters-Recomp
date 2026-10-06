@@ -149,6 +149,9 @@ const BAIL_TIME: f32 = 1.5;
 /// `grindscripts.q`, 36 for specials) and balancing a manual
 /// (`DoBalanceTrick ... Tweak = 1`, 5 for specials).
 const GRIND_TWEAK: u32 = 7;
+
+/// How long a press of the grind button keeps looking for a rail.
+const GRIND_WINDOW: f32 = 0.5;
 const MANUAL_TWEAK: u32 = 1;
 
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
@@ -178,9 +181,11 @@ pub struct Skater {
     pub grind: Option<Grind>,
     /// Seconds since it last left a rail.
     since_rail: f32,
-    /// Where it last stood on the ground, to go back to if it falls out of
-    /// the level.
+    /// Where it last stood on the ground: the nearest spawn to it is where
+    /// it goes back to if it falls out of the level.
     last_ground: Vec3,
+    /// The level's spawn points (position and heading), for that.
+    pub spawns: Vec<(Vec3, f32)>,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -197,6 +202,8 @@ pub struct Skater {
     /// up-down (or down-up) press.
     since_up: f32,
     since_down: f32,
+    /// Seconds since the grind button was pressed.
+    since_grind: f32,
     last_input: Input,
     /// Falling off a rail: bail on landing.
     bail_on_landing: bool,
@@ -232,6 +239,7 @@ impl Skater {
             grind: None,
             since_rail: f32::MAX,
             last_ground: position,
+            spawns: Vec::new(),
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -239,6 +247,7 @@ impl Skater {
             combo: false,
             since_up: f32::MAX,
             since_down: f32::MAX,
+            since_grind: f32::MAX,
             last_input: Input::default(),
             bail_on_landing: false,
             tricks: TrickBook::default(),
@@ -468,6 +477,11 @@ impl Skater {
         } else {
             self.since_down + STEP
         };
+        self.since_grind = if input.grind && !self.last_input.grind {
+            0.0
+        } else {
+            self.since_grind + STEP
+        };
         self.pressed = (
             input.flip && !self.last_input.flip,
             input.grab && !self.last_input.grab,
@@ -516,7 +530,10 @@ impl Skater {
             // Onto a rail met on the way (main.dol 0x801078A8), only from
             // the air (the main update asks with 0, which skips it on the
             // ground), and not too soon after leaving one.
-            if input.grind && !self.on_ground && self.since_rail >= p.regrind_time {
+            // The button held, or pressed within the last half second
+            // (`{ Press, Triangle, 500 }` in the game's `GrindTricks`).
+            let armed = input.grind || self.since_grind <= GRIND_WINDOW;
+            if armed && !self.on_ground && self.since_rail >= p.regrind_time {
                 if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
                     self.start_grind(hit, input, p, world);
                 }
@@ -858,6 +875,11 @@ impl Skater {
             }
             self.velocity = velocity;
             self.on_ground = false;
+            // Off the ground by a unit, as the game lands the skater a unit
+            // above it: standing exactly on the surface, the first line of
+            // the jump can catch the floor from below (rounding puts the
+            // feet a hair under it) and push the skater through it.
+            self.position += up;
             self.up = Vec3::Y;
             self.set_action(Action::Air);
             return;
@@ -1084,17 +1106,46 @@ impl Skater {
             return;
         }
         self.position = target;
-        // Fell out of the level, off its edge or through a gap: back to
-        // where it last stood. (The game uses its own out-of-bounds
-        // triggers, not ported; this is the crate's safety net.)
-        if self.position.y < world.floor() - 500.0 {
-            self.vert = None;
-            self.position = self.last_ground;
-            self.velocity = Vec3::ZERO;
-            self.up = Vec3::Y;
-            self.on_ground = true;
-            self.set_action(Action::Standing);
+        // Fell out of the level, off its edge or through a gap: well below
+        // where it last stood with nothing at all underneath, or below the
+        // level altogether. (The game uses its own out-of-bounds triggers,
+        // not ported; this is the crate's safety net.)
+        let lost = self.position.y < self.last_ground.y - 1000.0
+            && world
+                .ray(self.position, self.position - Vec3::Y * 100_000.0)
+                .is_none();
+        if lost || self.position.y < world.floor() - 500.0 {
+            self.respawn(p, world);
         }
+    }
+
+    /// Back on the level at the spawn point nearest to where the skater
+    /// last stood (or there, without spawns), on the ground under it,
+    /// facing the spawn's way and at rest.
+    pub fn respawn(&mut self, p: &Physics, world: &World) {
+        let (position, heading) = self
+            .spawns
+            .iter()
+            .copied()
+            .min_by(|a, b| {
+                a.0.distance_squared(self.last_ground)
+                    .total_cmp(&b.0.distance_squared(self.last_ground))
+            })
+            .unwrap_or((self.last_ground, self.heading));
+        let ground = world
+            .ray(position + Vec3::Y * 100.0, position - Vec3::Y * 1000.0)
+            .filter(|hit| !is_wall(hit, p));
+        self.position = ground.map_or(position, |hit| hit.point);
+        self.heading = heading;
+        self.vert = None;
+        self.grind = None;
+        self.manual = false;
+        self.trick = None;
+        self.end_combo(false);
+        self.velocity = Vec3::ZERO;
+        self.up = ground.map_or(Vec3::Y, |hit| hit.normal);
+        self.on_ground = true;
+        self.set_action(Action::Standing);
     }
 }
 
@@ -1105,6 +1156,16 @@ impl Skater {
 /// further at a sharp change of slope (as far as moving on along the old
 /// slope would leave it above the new one).
 fn sticks(hit: &Hit, from: Vec3, to: Vec3, facing: Vec3, up: Vec3, p: &Physics) -> bool {
+    // Ground at or above where the skater is going isn't falling away,
+    // whichever way it faces: at the foot of a slope the move along it
+    // ends a little under the flat. (The game's test goes by the facing
+    // alone, which rolling backwards into the foot of a slope reads as the
+    // ground falling away; flying off from under the flat, nothing would
+    // catch the skater.)
+    let height = up.dot(to - hit.point);
+    if height < 0.0 {
+        return true;
+    }
     // Facing the same way as the new normal: the ground falls away ahead.
     let falling_away = facing.dot(hit.normal) > 0.0;
     let on_new = along_keeping_length(facing, hit.normal);
@@ -1113,8 +1174,7 @@ fn sticks(hit: &Hit, from: Vec3, to: Vec3, facing: Vec3, up: Vec3, p: &Physics) 
     if falling_away && cos > 0.0 && cos < p.ground_stick_angle.to_radians().cos() {
         return false;
     }
-    let height = up.dot(to - hit.point);
-    if height > 0.0 {
+    {
         let angle = cos.clamp(-1.0, 1.0).acos();
         let reach = (from.distance(to) * angle.tan()).max(p.ground_snap_down);
         if to.distance(hit.point) > reach {

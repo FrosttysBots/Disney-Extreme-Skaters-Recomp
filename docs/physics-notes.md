@@ -347,6 +347,21 @@ on-ground update switches on.
   building speed without end. Then it tries a grind (0x801078A8, with 0:
   only from the air). `Skater_default_head_height` isn't read by the
   physics: the knee-height line is the only check ahead.
+- **Falling through the ground (fixed).** Two ways the port let the
+  skater through: an ollie from flat ground started exactly on the floor,
+  so the first air step's line could catch the floor from below and the
+  wall response pushed the skater 9 units through it (the skater now
+  takes off a unit up, as the game lands it a unit up); and rolling
+  backwards into the foot of a slope, the facing-based stick test read the
+  flat as ground falling away and launched the skater from just under it
+  (ground above where the skater is going now always sticks).
+  `cargo run --release -p desa_viewer --example skate_check` skates a
+  level at random and reports any frame through the ground, and how often
+  rail approaches grind. The grind button now looks for a rail for half a
+  second after it's pressed (`{ Press, Triangle, 500 }`), as well as while
+  held; falling out of the level puts the skater on the ground at the
+  nearest spawn, as soon as it's 1000 below where it last stood with
+  nothing underneath.
 - **Rails inside ledges.** Many rails run a few units below the top edge
   of the ledge or kerb they follow, so a skater leaving one starts just
   inside it, where the port's two-sided ray casts find the ledge's

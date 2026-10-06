@@ -106,7 +106,9 @@ front of them, and **Blink** makes them blink every few seconds (see
 frames.
 
 **Skate** puts the character on the level: W pushes, S brakes, A/D steer,
-holding Space crouches and letting go ollies, holding E grinds rails,
+holding Space crouches and letting go ollies, E grinds (ollie at a rail and
+press E: like the game, grinds start in the air, within half a second of the
+press),
 tapping W then S starts a manual, Q flips and F grabs in the air (with a
 direction: W, S, A, D), and Esc stops. Manuals balance with W and S, grinds
 with A and D, on a meter at the bottom of the screen; the combo and the
@@ -128,7 +130,7 @@ around takes over from wherever it is.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
-| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind, stop |
+| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind (in the air), stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
 | Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
 | P | Play or pause the character |

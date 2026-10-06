@@ -694,6 +694,17 @@ impl<'a> App<'a> {
             });
         }
         skater.tricks = tricks;
+        // Falling out of the level puts the skater back at the nearest
+        // spawn point.
+        skater.spawns = level
+            .nodes
+            .spawns
+            .iter()
+            .map(|spawn| {
+                let facing = spawn.facing();
+                (spawn.position, facing.x.atan2(facing.z))
+            })
+            .collect();
         self.stop_camera_path();
         self.skating = Some((skater, physics, self.camera.position));
         self.model.character.skating = true;

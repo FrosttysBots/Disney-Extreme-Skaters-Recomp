@@ -100,7 +100,8 @@ P: play or pause the character
 F1: hide or show this panel
 Skating: W push, S brake, A/D steer,
   Space crouch (let go: ollie),
-  hold E to grind, tap W then S to manual
+  E to grind (ollie at a rail, then E),
+  tap W then S to manual
   (balance: W/S in a manual, A/D on a rail),
   in the air Q flip, F grab (+ W/S/A/D),
   Esc stop";
@@ -360,7 +361,7 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .button(label)
             .on_hover_text(
                 "Skate the character around the level: W push, S brake, A/D steer, \
-                 hold Space to crouch and let go to ollie, hold E to grind rails, \
+                 hold Space to crouch and let go to ollie, ollie at a rail and press E to grind, \
                  tap W then S to manual (balance with W/S, or A/D on a rail), \
                  Q to flip and F to grab in the air (with W/S/A/D), Esc to stop. The game's own physics, as far as it's been read.",
             )
