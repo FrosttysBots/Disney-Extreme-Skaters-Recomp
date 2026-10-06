@@ -347,8 +347,30 @@ on-ground update switches on.
   is `SpAir_D_R_Square`, her manual `SpMan_R_L_Triangle`, her lip
   `SpLip_L_D_Triangle`), filled by `Trick_<name>SpGrab`, `...SpManual`,
   `...SpLip`. Special grabs tweak 30 a frame (`GRABTWEAK_SPECIAL`),
-  special manuals 5. Ported, with every special unlocked, without lips
-  and `NoDegrade`.
+  special manuals 5. Ported, with every special unlocked (the special lip
+  too), without `NoDegrade`.
+- **Lips.** State 3 (0x80103418) is the lip, not a wall ride. Grind start
+  (0x80108470) turns a rail into a lip when the skater is rising, flat
+  against the ramp (matrix up Y under `sin(LipPlayerHorizontalAngle)`,
+  47 degrees), facing up, on a steep ramp (ground normal Y under
+  `cos(LipRampVertAngle)`, 68.5) and not twisted (side Y under
+  `sin(LipAllowAngle)`, 35, or `LipAllowAngle_Override`, 60, for flagged
+  rail nodes): velocity zeroed, state 3, at the rail point, and the
+  `LipTrick` script with the `Lip_Triangle` slot's params. `LipTrick`
+  waits five frames for `SpecialLipTricks` (two directions then Triangle
+  within 1000 ms) or `LipTricks` (`{ Press, Left, 500 }` and so on, slots
+  `Lip_TriangleL`...), else goes on to `LipMacro2`: way-in animation,
+  then balancing (`LipParams`, Right and Left, the range animation played
+  backwards along the meter) with `TweakTrick 10` a frame. Ollying ends
+  it with `LipOut` (`NoOllie` tricks) or `OllieLipOut`; off the meter one
+  way `LipOut`, the other a spine transfer if the deck's skateable or
+  `LipBail`. `LipOut` plays the way out and puts the skater back in the
+  air a unit up and out, turned to drop back in. Ported: lips from vert
+  air at coping rails (the angle tests approximated by vert air rising
+  at a level rail), the trick choice, balance, tweaks and the ways off,
+  without spine transfers (the unsafe side bails) and lip combos. On the
+  Hub, every quarter pipe with a coping rail lips
+  (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`).
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

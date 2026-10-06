@@ -761,6 +761,7 @@ impl<'a> App<'a> {
             SkateAction::BailManual => (&["BailManual", "BailManualGetUp"], false),
             SkateAction::BailGrind => (&["BailGrind", "BailGrindGetUp"], false),
             SkateAction::Bail => (&["Bail1", "BailGetUp1"], false),
+            SkateAction::Lip => (&["LipRange1"], false),
         };
         let mut time = skater.action_time;
         let mut chosen = None;
@@ -776,6 +777,23 @@ impl<'a> App<'a> {
             }
             chosen = Some((index, duration));
             break;
+        }
+        // A lip trick shows its own animations: in, held along the meter,
+        // and out.
+        let by_checksum = |anim: u32| {
+            character
+                .animations
+                .iter()
+                .position(|(name, _)| qb::checksum(name) == anim)
+        };
+        let length =
+            |anim: u32| by_checksum(anim).map_or(1.0, |i| character.animations[i].1.duration);
+        if let Some((anim, at)) = skater.lip_pose(length) {
+            if let Some(index) = by_checksum(anim) {
+                let duration = character.animations[index].1.duration;
+                chosen = Some((index, duration));
+                time = at.clamp(0.0, duration * 0.999);
+            }
         }
         // An air trick shows its own animation.
         if let Some((anim, at, looping)) = skater.trick_pose() {
@@ -797,7 +815,7 @@ impl<'a> App<'a> {
             // A balance pose (`ManualRange1`, `GrindRange1`) follows the
             // balance meter from one end of the animation to the other,
             // as the game plays its range animations.
-            let range = character.animations[index].0.contains("Range");
+            let range = character.animations[index].0.contains("Range") && skater.lip.is_none();
             if let Some(meter) = skater.balance_meter().filter(|_| range) {
                 time = (meter + 1.0) / 2.0 * duration;
                 duration = duration.max(f32::EPSILON);

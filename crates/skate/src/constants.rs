@@ -175,6 +175,8 @@ pub struct Physics {
     /// (`GrindParams`, by the rail balance stat).
     pub manual_balance: BalanceParams,
     pub grind_balance: BalanceParams,
+    /// Balancing lip tricks (`LipParams`, by the lip balance stat).
+    pub lip_balance: BalanceParams,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -244,6 +246,7 @@ impl Physics {
             regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
             manual_balance: BalanceParams::new(program, "ManualParams", stats),
             grind_balance: BalanceParams::new(program, "GrindParams", stats),
+            lip_balance: BalanceParams::new(program, "LipParams", stats),
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),

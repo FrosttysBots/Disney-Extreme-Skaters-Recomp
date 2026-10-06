@@ -95,6 +95,19 @@ pub struct Trick {
     pub tweak: u32,
 }
 
+/// A lip trick (`LipMacro2`): its name and score, its animations in, held
+/// (balanced along the meter) and out, and whether ollying ends it
+/// without an ollie (`NoOllie`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LipTrick {
+    pub name: String,
+    pub score: u32,
+    pub init: Option<u32>,
+    pub range: u32,
+    pub out: Option<u32>,
+    pub no_ollie: bool,
+}
+
 /// A character's tricks and the combinations that do them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrickBook {
@@ -112,6 +125,12 @@ pub struct TrickBook {
     /// meter is full.
     pub special_air: Option<(Dir, Dir, usize)>,
     pub special_manual: Option<(Dir, Dir, (String, u32))>,
+    /// Lip tricks: by the direction pressed before reaching the coping
+    /// (`LipTricks`: `{ Press, Left, 500 }` and so on), the plain one with
+    /// none (`Lip_Triangle`), and the special (two directions then grind,
+    /// within a second, `SpecialLipTricks`).
+    pub lips: Vec<(Option<Dir>, LipTrick)>,
+    pub special_lip: Option<(Dir, Dir, LipTrick)>,
     /// How long each animation runs, in seconds, from whoever has the
     /// character's animations loaded (see [`TrickBook::set_durations`]).
     durations: Vec<(u32, f32)>,
@@ -213,6 +232,28 @@ impl TrickBook {
         book.grind = named("Grind1");
         book.manual = named("Manual1");
 
+        // Lips, by slot.
+        for (slot_name, dir) in [
+            ("Lip_Triangle", None),
+            ("Lip_TriangleU", Some(Dir::Up)),
+            ("Lip_TriangleD", Some(Dir::Down)),
+            ("Lip_TriangleL", Some(Dir::Left)),
+            ("Lip_TriangleR", Some(Dir::Right)),
+            ("Lip_TriangleUL", Some(Dir::UpLeft)),
+            ("Lip_TriangleUR", Some(Dir::UpRight)),
+            ("Lip_TriangleDL", Some(Dir::DownLeft)),
+            ("Lip_TriangleDR", Some(Dir::DownRight)),
+        ] {
+            let lip = table
+                .get(checksum(slot_name))
+                .and_then(Value::as_name)
+                .and_then(|n| program.value(n))
+                .and_then(parse_lip);
+            if let Some(lip) = lip {
+                book.lips.push((dir, lip));
+            }
+        }
+
         // Specials: the game gives each character its own slot when a goal
         // unlocks it; here they're all unlocked.
         if let Some((air, manual)) = special_slots(character) {
@@ -229,6 +270,11 @@ impl TrickBook {
                     .unwrap_or(0);
                 book.special_manual =
                     Some((manual.0, manual.1, (trick_name(trick), score.max(0) as u32)));
+            }
+            if let (Some(trick), Some(slot)) = (trick("Lip"), special_lip_slot(character)) {
+                if let Some(lip) = parse_lip(trick) {
+                    book.special_lip = Some((slot.0, slot.1, lip));
+                }
             }
         }
         book
@@ -295,6 +341,49 @@ fn special_slots(character: &str) -> Option<((Dir, Dir), (Dir, Dir))> {
         "nala" => ((R, L), (D, D)),
         "kid" => ((L, R), (U, U)),
         _ => return None,
+    })
+}
+
+/// Each character's special lip slot (`SpLip_L_D_Triangle` for Jessie...),
+/// from the same goal script.
+fn special_lip_slot(character: &str) -> Option<(Dir, Dir)> {
+    use Dir::{Down as D, Left as L, Right as R, Up as U};
+    Some(match character.to_ascii_lowercase().as_str() {
+        "buzz" => (R, D),
+        "woody" => (U, D),
+        "jessie" => (L, D),
+        "zurg" => (D, D),
+        "tarzan" => (D, R),
+        "tantor" => (D, L),
+        "jane" => (R, R),
+        "terk" => (L, D),
+        "simba" => (D, U),
+        "timon" => (D, R),
+        "rafiki" => (U, D),
+        "nala" => (U, R),
+        "kid" => (D, L),
+        _ => return None,
+    })
+}
+
+/// A `LipMacro2` trick.
+fn parse_lip(trick: &Value) -> Option<LipTrick> {
+    if trick.get(checksum("scr")).and_then(Value::as_name) != Some(checksum("LipMacro2")) {
+        return None;
+    }
+    let params = trick.get(checksum("params"))?;
+    let anim = |key: &str| params.get(checksum(key)).and_then(Value::as_name);
+    Some(LipTrick {
+        name: trick_name(trick),
+        score: params
+            .get(checksum("score"))
+            .and_then(Value::as_int)
+            .unwrap_or(0)
+            .max(0) as u32,
+        init: anim("InitAnim"),
+        range: anim("anim")?,
+        out: anim("OutAnim"),
+        no_ollie: params.has_flag(checksum("NoOllie")),
     })
 }
 

@@ -46,7 +46,7 @@ use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
 use crate::rails::RailHit;
 use crate::score::Combo;
-use crate::tricks::{Button, Dir, Kind, TrickBook};
+use crate::tricks::{Button, Dir, Kind, LipTrick, TrickBook};
 use crate::world::{Hit, World};
 
 /// The controls held this step.
@@ -89,6 +89,17 @@ pub enum Action {
     BailGrind,
     /// Landed in the middle of a trick.
     Bail,
+    /// Stalled on the coping of a quarter pipe.
+    Lip,
+}
+
+/// A lip trick being held: the trick, the ramp's way out, and how long.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lip {
+    pub trick: LipTrick,
+    /// The ramp's normal, flattened: out of the ramp.
+    pub out: Vec3,
+    pub time: f32,
 }
 
 /// A trick being played: which, how far into its animation, and where.
@@ -170,6 +181,8 @@ const GRIND_TWEAK: u32 = 7;
 const GRIND_WINDOW: f32 = 0.5;
 const MANUAL_TWEAK: u32 = 1;
 const SPECIAL_MANUAL_TWEAK: u32 = 5;
+/// Points a frame on a lip (`LipMacro2`'s `TweakTrick 10`).
+const LIP_TWEAK: u32 = 10;
 
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
 /// in the game's `manualtricks.q`).
@@ -243,6 +256,10 @@ pub struct Skater {
     last_total: u32,
     /// In the special manual.
     pub special_manual: bool,
+    /// On a lip.
+    pub lip: Option<Lip>,
+    /// The lip trick's way out, playing in the air after it.
+    pub lip_out: Option<(u32, f32)>,
     /// Recent presses, for the specials' three-press combinations, with
     /// the clock they're timed by.
     presses: Vec<(Press, f32)>,
@@ -289,6 +306,8 @@ impl Skater {
             special: false,
             last_total: 0,
             special_manual: false,
+            lip: None,
+            lip_out: None,
             presses: Vec::new(),
             clock: 0.0,
             score: 0,
@@ -440,7 +459,8 @@ impl Skater {
 
     /// The balance meter from -1 to 1 while balancing a manual or a grind.
     pub fn balance_meter(&self) -> Option<f32> {
-        (self.manual || self.grind.is_some()).then(|| (self.balance.angle / METER).clamp(-1.0, 1.0))
+        (self.manual || self.grind.is_some() || self.lip.is_some())
+            .then(|| (self.balance.angle / METER).clamp(-1.0, 1.0))
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -587,14 +607,16 @@ impl Skater {
             self.velocity = limit_speed(self.velocity, p);
         }
         let before = self.position;
-        if self.grind.is_some() {
+        if self.lip.is_some() {
+            self.lip_step(input, p);
+        } else if self.grind.is_some() {
             self.grind_step(input, p, world);
         } else if self.on_ground {
             self.ground_step(input, p, world);
         } else {
             self.air_step(input, p, world);
         }
-        if self.grind.is_none() {
+        if self.grind.is_none() && self.lip.is_none() {
             self.since_rail = (self.since_rail + STEP).min(f32::MAX);
             // Onto a rail met on the way (main.dol 0x801078A8), only from
             // the air (the main update asks with 0, which skips it on the
@@ -604,7 +626,16 @@ impl Skater {
             let armed = input.grind || self.since_grind <= GRIND_WINDOW;
             if armed && !self.on_ground && self.since_rail >= p.regrind_time {
                 if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
-                    self.start_grind(hit, input, p, world);
+                    // Rising in vert air at the coping: a lip trick (the
+                    // game's grind start, 0x80108470, checks the skater is
+                    // flat against a steep ramp, facing up and rising).
+                    let level = world.rails.segments[hit.segment].direction().y.abs() < 0.3;
+                    match self.vert {
+                        Some(vert) if self.velocity.y > 0.0 && level => {
+                            self.start_lip(hit.point, vert.out, p)
+                        }
+                        _ => self.start_grind(hit, input, p, world),
+                    }
                 }
             }
         }
@@ -645,6 +676,146 @@ impl Skater {
         }
         let (a, b) = (self.presses[n - 3], self.presses[n - 2]);
         a.0 == Press::Dir(first) && b.0 == Press::Dir(second) && self.clock - a.1 <= SPECIAL_WINDOW
+    }
+
+    /// The direction pressed last, if within `window` seconds.
+    fn last_dir_within(&self, window: f32) -> Option<Dir> {
+        self.presses
+            .iter()
+            .rev()
+            .find_map(|&(press, t)| match press {
+                Press::Dir(d) if self.clock - t <= window => Some(d),
+                _ => None,
+            })
+    }
+
+    /// Whether `first`, `second` and then `button` were pressed in a row,
+    /// all within the last `window` seconds.
+    fn recently_in_order(&self, first: Dir, second: Dir, button: Press, window: f32) -> bool {
+        let recent: Vec<Press> = self
+            .presses
+            .iter()
+            .filter(|&&(_, t)| self.clock - t <= window)
+            .map(|&(p, _)| p)
+            .collect();
+        recent
+            .windows(3)
+            .any(|w| w == [Press::Dir(first), Press::Dir(second), button])
+    }
+
+    /// Onto the coping (the `LipTrick` script): the special lip if its
+    /// combination came within a second and the meter's full, else the one
+    /// for the direction pressed in the last half second, else the plain
+    /// one; held still on the coping, standing on the ramp's face.
+    fn start_lip(&mut self, at: Vec3, out: Vec3, p: &Physics) {
+        let special = self
+            .tricks
+            .special_lip
+            .clone()
+            .filter(|(a, b, _)| self.special && self.recently_in_order(*a, *b, Press::Grind, 1.0))
+            .map(|(_, _, lip)| lip);
+        let dir = self.last_dir_within(0.5);
+        let trick = special.or_else(|| {
+            let lips = &self.tricks.lips;
+            lips.iter()
+                .find(|(d, _)| dir.is_some() && *d == dir)
+                .or_else(|| lips.iter().find(|(d, _)| d.is_none()))
+                .map(|(_, lip)| lip.clone())
+        });
+        let Some(trick) = trick else {
+            return;
+        };
+        self.vert = None;
+        self.trick = None;
+        self.manual = false;
+        self.position = at;
+        self.velocity = Vec3::ZERO;
+        self.on_ground = false;
+        // Standing on the ramp's face, head up the ramp.
+        self.up = out;
+        self.heading = (-out.x).atan2(-out.z);
+        self.balance.start(&p.lip_balance, !self.combo);
+        self.combo = true;
+        self.credit(Some((trick.name.clone(), trick.score)), true);
+        self.lip = Some(Lip {
+            trick,
+            out,
+            time: 0.0,
+        });
+        self.set_action(Action::Lip);
+    }
+
+    /// On the coping (`LipMacro2`): balanced with right and left
+    /// (`LipParams`), 10 points a frame; ollying drops back in (or ollies
+    /// out), and off the meter it drops back in one way and bails the
+    /// other.
+    fn lip_step(&mut self, input: Input, p: &Physics) {
+        let Some(mut lip) = self.lip.clone() else {
+            return;
+        };
+        lip.time += STEP;
+        self.combo_tricks.tweak(LIP_TWEAK);
+        let lean = self
+            .balance
+            .update(input.turn > 0.0, input.turn < 0.0, &p.lip_balance, STEP);
+        let ollie = self.crouched && !input.crouch;
+        self.crouched = input.crouch;
+        match lean {
+            // `LipOut`: back into the ramp.
+            Lean::OffBottom => self.leave_lip(&lip, 0.0),
+            // `LipBail` (no skating in onto the deck yet).
+            Lean::OffTop => {
+                self.bail_on_landing = true;
+                self.leave_lip(&lip, 0.0);
+            }
+            Lean::Balanced if ollie => {
+                // `OllieLipOut` ollies out; `NoOllie` lips just drop in.
+                let pop = if lip.trick.no_ollie {
+                    0.0
+                } else {
+                    self.jump_speed(p)
+                };
+                self.leave_lip(&lip, pop);
+            }
+            Lean::Balanced => self.lip = Some(lip),
+        }
+    }
+
+    /// Off the coping, back into the ramp (`LipOut`: a unit up and out,
+    /// turned round to come down facing down the ramp), in vert air.
+    fn leave_lip(&mut self, lip: &Lip, rise: f32) {
+        self.lip = None;
+        self.since_rail = 0.0;
+        self.position += lip.out + Vec3::Y;
+        self.velocity = Vec3::Y * rise;
+        self.heading = lip.out.x.atan2(lip.out.z);
+        self.up = Vec3::Y;
+        self.vert = Some(VertAir {
+            out: lip.out,
+            offset: self.position.dot(lip.out),
+        });
+        self.lip_out = lip.trick.out.map(|anim| (anim, 0.0));
+        self.set_action(Action::Air);
+    }
+
+    /// The lip's animation: its way in, then its range held along the
+    /// balance meter (backwards, `PlayRangeAnimBackwards`), or its way out
+    /// after it.
+    pub fn lip_pose(&self, length: impl Fn(u32) -> f32) -> Option<(u32, f32)> {
+        if let Some(lip) = &self.lip {
+            if let Some(init) = lip.trick.init {
+                if lip.time < length(init) {
+                    return Some((init, lip.time));
+                }
+            }
+            let meter = (self.balance.angle / METER).clamp(-1.0, 1.0);
+            return Some((
+                lip.trick.range,
+                (1.0 - meter) / 2.0 * length(lip.trick.range),
+            ));
+        }
+        let (anim, time) = self.lip_out?;
+        (time < length(anim)).then_some((anim, time))
     }
 
     /// The ollie's speed (0x800F62C4): stronger the longer the crouch, up
@@ -1124,6 +1295,9 @@ impl Skater {
     }
 
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
+        if let Some((_, time)) = self.lip_out.as_mut() {
+            *time += STEP;
+        }
         self.air_tricks(input);
         // Spinning at the air rotation stat (0x800EE4CC); the turn counts
         // towards the latest trick's spin.
@@ -1183,6 +1357,7 @@ impl Skater {
                 }
                 self.on_ground = true;
                 self.vert = None;
+                self.lip_out = None;
                 self.crouched = input.crouch;
                 if self.bail_on_landing {
                     self.bail_on_landing = false;
@@ -1260,6 +1435,8 @@ impl Skater {
         self.heading = heading;
         self.vert = None;
         self.grind = None;
+        self.lip = None;
+        self.lip_out = None;
         self.manual = false;
         self.trick = None;
         self.end_combo(false);

@@ -134,6 +134,7 @@ around takes over from wherever it is.
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
 | Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
 | Two directions, then Q (or E in a manual) | With the special meter full: the character's special grab (or manual) |
+| E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -562,9 +563,11 @@ to 50%), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
 earn points every frame, and the total is the points times the number of
 tricks. The special meter fills with points; full, each character's
 special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
-manual right, left, grind for "Happy Trails") are on until it drains. Not
-yet: transfers, lips, moving objects, and a frame-by-frame check against
-Dolphin.
+manual right, left, grind for "Happy Trails") are on until it drains.
+Lip tricks stall on the coping of quarter pipes with a rail along it:
+press E (with a direction for other lips) as you launch off the lip, then
+balance with A and D. Not yet: transfers, spine transfers, moving objects,
+and a frame-by-frame check against Dolphin.
 Turning rates are read as radians a second and the camera distances as
 feet, both guesses for now.
 
