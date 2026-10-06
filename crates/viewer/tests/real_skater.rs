@@ -6,7 +6,8 @@ use qb::vm::Program;
 use skate::{Action, Input, Physics, Skater, Stats, World};
 
 /// Skates Jessie from the Hub's start: push for three seconds, then ollie,
-/// and check she rolls along the ground, speeds up, leaves it and lands.
+/// and check she rolls along the ground, speeds up, leaves it and lands;
+/// then push on, bouncing off walls, and check she stays in the level.
 /// Run with `cargo test --release -p desa_viewer -- --ignored`.
 #[test]
 #[ignore = "needs the game data"]
@@ -81,4 +82,26 @@ fn real_skater_on_the_hub() {
         skater.action,
         Action::Landing | Action::Rolling | Action::Standing
     ));
+
+    // Keep pushing: sooner or later a wall turns her away.
+    let mut flails = 0;
+    let mut turned = 0.0f32;
+    for _ in 0..1200 {
+        let heading = skater.heading;
+        let was = skater.action;
+        skater.update(push, &physics, &world, 1.0 / 60.0);
+        turned = turned.max((skater.heading - heading).abs());
+        let flailing = matches!(skater.action, Action::FlailLeft | Action::FlailRight);
+        if flailing && was != skater.action {
+            flails += 1;
+        }
+    }
+    println!(
+        "20 s more pushing: {flails} flails off walls, sharpest turn {:.0} degrees in a frame, at {:.0} {:.0} {:.0}",
+        turned.to_degrees(),
+        skater.position.x,
+        skater.position.y,
+        skater.position.z
+    );
+    assert!(skater.position.y > -10_000.0, "still in the level");
 }

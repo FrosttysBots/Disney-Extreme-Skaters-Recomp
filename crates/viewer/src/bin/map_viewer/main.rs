@@ -703,6 +703,8 @@ impl<'a> App<'a> {
             SkateAction::Crouching => (&["CrouchIdle", "Crouch"], true),
             SkateAction::Air => (&["Ollie", "AirIdle"], false),
             SkateAction::Landing => (&["Land1", "LandSmall"], false),
+            SkateAction::FlailLeft => (&["FlailLeft"], false),
+            SkateAction::FlailRight => (&["FlailRight"], false),
         };
         let mut time = skater.action_time;
         let mut chosen = None;

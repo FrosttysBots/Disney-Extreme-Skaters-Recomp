@@ -131,7 +131,22 @@ pub struct Physics {
     pub ground_stick_angle: f32,
     pub ground_snap_down: f32,
     pub min_distance_to_wall: f32,
+    /// The wall check on the ground (main.dol 0x800F7D38): a line this
+    /// high along the skater's up, from where it was to where it's going
+    /// and `forward_collision_length` further.
     pub forward_collision_height: f32,
+    pub forward_collision_length: f32,
+    /// Faces whose normal rises less than this many degrees above the
+    /// horizontal are walls, unless their flags say otherwise
+    /// (0x800F66F0).
+    pub wall_non_skatable_angle: f32,
+    /// Bouncing off a wall (0x800F6860): the skater turns by this times
+    /// the angle it hit at, and hits more head-on than this many degrees
+    /// lose speed (all of it head-on). Faster than the flail speed, it
+    /// flails.
+    pub wall_bounce_angle_multiplier: f32,
+    pub wall_bounce_dont_slow_angle: f32,
+    pub wall_bounce_dont_flail_speed: f32,
     pub head_height: f32,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
@@ -186,6 +201,11 @@ impl Physics {
             ground_snap_down: plain("Physics_Ground_Snap_Down", 8.2),
             min_distance_to_wall: plain("Skater_Min_Distance_To_Wall", 8.0),
             forward_collision_height: plain("Skater_First_Forward_Collision_Height", 8.1),
+            forward_collision_length: plain("Skater_First_Forward_Collision_Length", 10.0),
+            wall_non_skatable_angle: plain("Wall_Non_Skatable_Angle", 25.0),
+            wall_bounce_angle_multiplier: plain("Wall_Bounce_Angle_Multiplier", 1.1),
+            wall_bounce_dont_slow_angle: plain("Wall_Bounce_Dont_Slow_Angle", 30.0),
+            wall_bounce_dont_flail_speed: plain("Wall_Bounce_Dont_Flail_Speed", 100.0),
             head_height: plain("Skater_default_head_height", 77.0),
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),

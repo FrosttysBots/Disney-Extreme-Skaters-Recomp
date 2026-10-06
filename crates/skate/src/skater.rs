@@ -10,8 +10,9 @@
 //! limits, steering (sharp while braking, building up when nearly
 //! stopped), air spins at the air rotation stat, and air gravity divided
 //! by the hang-time stat, braking, and the ollie's strength from how long
-//! the skater crouched. Ground snapping, walls and the rest
-//! of the air update are still this crate's own.
+//! the skater crouched. On the ground, walls bounce as
+//! in the game. Ground snapping and the rest of the air update are still
+//! this crate's own.
 //!
 //! - **On the ground** the skater follows the surface: each step it moves
 //!   along its heading, then looks for ground from `ground_snap_up` above
@@ -22,15 +23,20 @@
 //! - **Jumping**: crouch, then let go to ollie at `jump_speed` off the
 //!   ground's normal.
 //! - **In the air** gravity is `air_gravity` and steering spins at
-//!   `air_rotation`; landing on ground facing up enough puts it back on
-//!   the ground, keeping the speed along the surface.
-//! - **Walls** (steep faces at knee height ahead) stop it, keeping
-//!   `min_distance_to_wall`.
+//!   `air_rotation`; landing on ground facing up enough (or on a ramp's
+//!   vert face) puts it back on the ground, keeping the speed along the
+//!   surface. Anything else it would pass through stops it instead.
+//! - **Walls** on the ground are the game's (0x800F7D38): a line at knee
+//!   height along the move; a wall turns the skater away by 1.1 times the
+//!   angle it hit at, slows it the more head-on it was, and puts it 6 units
+//!   out; skatable ground ahead (a ramp's curve) is stepped onto.
+
+use std::f32::consts::{FRAC_PI_2, PI};
 
 use glam::{Mat4, Quat, Vec3};
 
 use crate::constants::Physics;
-use crate::world::World;
+use crate::world::{Hit, World};
 
 /// The controls held this step.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -54,6 +60,9 @@ pub enum Action {
     Air,
     /// Just landed.
     Landing,
+    /// Bounced off a wall fast enough to flail (turning left or right).
+    FlailLeft,
+    FlailRight,
 }
 
 /// Steeper than this (cosine of the angle from vertical) is a wall.
@@ -247,17 +256,43 @@ impl Skater {
         }
         self.crouched = input.crouch;
 
-        // Walls ahead at knee height.
-        let knee = self.position + up * p.forward_collision_height;
-        let reach = speed.abs() * STEP + p.min_distance_to_wall;
-        let ahead = forward * speed.signum();
-        if let Some(hit) = world.ray(knee, knee + ahead * reach) {
-            if hit.normal.y.abs() < WALL_COSINE {
-                speed = 0.0;
+        // Walls (main.dol 0x800F7D38): a line at knee height from here to
+        // where the skater is going, and the collision length on.
+        let mut forward = forward;
+        let mut target = self.position + forward * speed * STEP;
+        let mut flailed = None;
+        let lift = up * p.forward_collision_height;
+        if let Some(direction) = (target - self.position).try_normalize() {
+            let from = self.position + lift;
+            let to = target + lift + direction * p.forward_collision_length;
+            if let Some(hit) = world.ray(from, to) {
+                if !is_wall(&hit, p) && hit.normal.dot(up).abs() >= 0.01 {
+                    // Skatable ground ahead, like the curve of a ramp:
+                    // step onto it.
+                    target = hit.point + hit.normal * 0.1;
+                } else {
+                    let (turn, angle) = wall_bounce(forward, up, hit.normal, p);
+                    self.heading += turn;
+                    let flat = self.forward();
+                    forward = (flat - up * flat.dot(up)).normalize_or(flat);
+                    let before = speed.abs();
+                    let dont_slow = p.wall_bounce_dont_slow_angle.to_radians();
+                    if angle.abs() > dont_slow {
+                        speed *= 1.0 - (angle.abs() - dont_slow) / (FRAC_PI_2 - dont_slow);
+                    }
+                    if before > p.wall_bounce_dont_flail_speed {
+                        flailed = Some(if turn > 0.0 {
+                            Action::FlailLeft
+                        } else {
+                            Action::FlailRight
+                        });
+                    }
+                    // Out of the wall a little, at the skater's feet.
+                    target = hit.point - lift + hit.normal * 6.0;
+                }
             }
         }
 
-        let target = self.position + forward * speed * STEP;
         // Stand on whatever is under the new spot.
         let from = target + up * p.ground_snap_up;
         let to = target - up * p.ground_snap_down;
@@ -286,7 +321,13 @@ impl Skater {
             }
         }
 
-        let action = if self.action == Action::Landing && self.action_time < 0.3 {
+        let action = if let Some(flail) = flailed {
+            flail
+        } else if matches!(self.action, Action::FlailLeft | Action::FlailRight)
+            && self.action_time < 0.5
+        {
+            self.action
+        } else if self.action == Action::Landing && self.action_time < 0.3 {
             Action::Landing
         } else if input.crouch {
             Action::Crouching
@@ -318,25 +359,40 @@ impl Skater {
             }
         }
         let target = self.position + self.velocity * STEP;
-        if self.velocity.y <= 0.0 {
-            if let Some(hit) = world.ray(self.position + Vec3::Y * p.ground_snap_up, target) {
-                if hit.normal.y > WALL_COSINE {
-                    // Land: keep the speed along the surface.
-                    self.position = hit.point;
-                    self.up = hit.normal;
-                    let along = self.velocity - hit.normal * self.velocity.dot(hit.normal);
-                    self.velocity = along;
-                    if along.length() > 1.0 {
-                        let flat = Vec3::new(along.x, 0.0, along.z);
-                        if flat.length() > 1.0 {
-                            self.heading = flat.x.atan2(flat.z);
-                        }
+        let falling = self.velocity.y <= 0.0;
+        let start = if falling {
+            self.position + Vec3::Y * p.ground_snap_up
+        } else {
+            self.position
+        };
+        if let Some(hit) = world.ray(start, target) {
+            // Ground, or a ramp's vert face (landing back on a quarter pipe).
+            let vert = hit.flags & ngc_collision::face_flags::VERT != 0;
+            let landable = hit.normal.y > WALL_COSINE || (vert && hit.normal.y > 0.0);
+            if falling && landable {
+                // Land: keep the speed along the surface.
+                self.position = hit.point;
+                self.up = hit.normal;
+                let along = self.velocity - hit.normal * self.velocity.dot(hit.normal);
+                self.velocity = along;
+                if along.length() > 1.0 {
+                    let flat = Vec3::new(along.x, 0.0, along.z);
+                    if flat.length() > 1.0 {
+                        self.heading = flat.x.atan2(flat.z);
                     }
-                    self.on_ground = true;
-                    self.crouched = input.crouch;
-                    self.set_action(Action::Landing);
-                    return;
                 }
+                self.on_ground = true;
+                self.crouched = input.crouch;
+                self.set_action(Action::Landing);
+                return;
+            }
+            let into = self.velocity.dot(hit.normal);
+            if into < 0.0 {
+                // Too steep to land on, or hit from below: no going
+                // through it. Stop at it and lose the speed into it.
+                self.position = hit.point + hit.normal;
+                self.velocity -= hit.normal * into;
+                return;
             }
         }
         self.position = target;
@@ -345,6 +401,52 @@ impl Skater {
             self.velocity = Vec3::ZERO;
         }
     }
+}
+
+/// Whether a face the skater ran into is a wall (main.dol 0x800F66F0):
+/// skatable and vert faces never are, not-skatable and wall-ridable ones
+/// always are, and the rest by their slope.
+fn is_wall(hit: &Hit, p: &Physics) -> bool {
+    use ngc_collision::face_flags as f;
+    if hit.flags & (f::SKATABLE | f::VERT) != 0 {
+        false
+    } else if hit.flags & (f::NOT_SKATABLE | f::WALL_RIDABLE) != 0 {
+        true
+    } else {
+        hit.normal.y < p.wall_non_skatable_angle.to_radians().sin()
+    }
+}
+
+/// How much to turn off a wall, and the angle it was hit at (main.dol
+/// 0x800F6860): the angle between the skater's side and the wall's
+/// normal, folded to within a right angle, so 90 degrees is head-on and 0
+/// is skimming along it. The turn is that times
+/// `wall_bounce_angle_multiplier`, away from the wall.
+fn wall_bounce(forward: Vec3, up: Vec3, normal: Vec3, p: &Physics) -> (f32, f32) {
+    let side = up.cross(forward).normalize_or(Vec3::X);
+    let mut angle = side.dot(normal).clamp(-1.0, 1.0).acos();
+    if angle > FRAC_PI_2 {
+        angle -= PI;
+    }
+    let turn = angle.abs() * p.wall_bounce_angle_multiplier;
+    // The game's sign comes from its matrix; here, whichever way turns the
+    // skater away from the wall. Turning the heading by t turns the
+    // forward vector about Y.
+    let away = |t: f32| {
+        let (s, c) = t.sin_cos();
+        Vec3::new(
+            c * forward.x + s * forward.z,
+            0.0,
+            -s * forward.x + c * forward.z,
+        )
+        .dot(normal)
+    };
+    let turn = if away(turn) >= away(-turn) {
+        turn
+    } else {
+        -turn
+    };
+    (turn, angle)
 }
 
 /// Quadratic drag: `v -= v * |v| * k * 60 * step` (0x800F46C4).
@@ -394,5 +496,26 @@ mod tests {
         assert_eq!(v.y, -500.0);
         let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
+    }
+
+    #[test]
+    fn walls_turn_the_skater_away_by_the_angle_it_hit_at() {
+        let p = physics();
+        // Heading along +Z into a wall facing -Z: head-on.
+        let (_, angle) = wall_bounce(Vec3::Z, Vec3::Y, -Vec3::Z, &p);
+        assert!((angle.abs() - FRAC_PI_2).abs() < 1e-4);
+        // At 30 degrees to a wall on the right (facing -X).
+        let forward = Vec3::new(30f32.to_radians().sin(), 0.0, 30f32.to_radians().cos());
+        let (turn, angle) = wall_bounce(forward, Vec3::Y, -Vec3::X, &p);
+        assert!((angle.abs() - 30f32.to_radians()).abs() < 1e-4);
+        assert!((turn.abs() - 33f32.to_radians()).abs() < 1e-4);
+        // Turned away: now heading slightly away from the wall.
+        let (s, c) = turn.sin_cos();
+        let after = Vec3::new(
+            c * forward.x + s * forward.z,
+            0.0,
+            -s * forward.x + c * forward.z,
+        );
+        assert!(after.x < 0.0 && after.z > 0.9);
     }
 }

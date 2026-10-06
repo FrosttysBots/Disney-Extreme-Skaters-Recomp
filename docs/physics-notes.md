@@ -118,6 +118,37 @@ on-ground update switches on.
   and it's added straight up. Upside down (vert) there's more. Ported:
   the ground ollie.
 
+- **Walls on the ground** (0x800F7D38, from the ground update): a line
+  `Skater_First_Forward_Collision_Height` (8.1) up the skater's up axis,
+  from last frame's position to this frame's and
+  `Skater_First_Forward_Collision_Length` (10) on, ignoring
+  non-collidable faces. 0x800F66F0 sorts what it hits by the face's
+  flags: skatable or vert is ground, not-skatable or wall-ridable is a
+  wall, and otherwise it's a wall if its normal's Y is under
+  `sin(Wall_Non_Skatable_Angle)` (25 degrees). Ground ahead (not
+  perpendicular to the ground underfoot) moves the skater to the hit
+  plus 0.1 along its normal, which is how it gets onto a ramp's curve.
+  A wall goes to 0x800F6F98 (after a script event, type 6):
+  - 0x800F6860 takes the angle between the skater's side axis (matrix
+    row at `+0x44`) and the wall's normal, folded to within 90 degrees,
+    and turns the velocity and the skater's matrix about Y by it times
+    `Wall_Bounce_Angle_Multiplier` (1.1).
+  - Hit more head-on than `Wall_Bounce_Dont_Slow_Angle` (30 degrees),
+    the speed is scaled by `1 - (angle - 30) / (90 - 30)`: head-on stops.
+  - On the ground, faster than `Wall_Bounce_Dont_Flail_Speed` (100), the
+    skater plays `FlailLeft` or `FlailRight` (by the angle's sign and
+    `+0x362C`, which may be the stance) and 0x8010E340 is called with the
+    speed (a sound, perhaps).
+  - The skater is put at the hit point, back down to its feet, plus 6
+    along the wall's normal. Then a second line along the new direction:
+    if that hits a wall too and `+0x37BC` is set (a corner?), it turns by
+    180 degrees less the bounce.
+  Ported: all but the corner case, the script event and the sound; the
+  bounce's sign is chosen to turn away from the wall rather than read
+  from the matrix. The air version is 0x800F847C (it reads
+  `Skater_Min_Distance_To_Wall`), called from what looks like the air
+  update, 0x800FC7F8.
+
 ## Next
 
 Read the rest of the on-ground update and its helpers, then the air
