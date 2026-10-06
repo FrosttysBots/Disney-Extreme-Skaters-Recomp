@@ -211,6 +211,19 @@ impl Skater {
         } else {
             self.turn_time + STEP
         };
+        // The speed limits run every frame whatever the skater is doing
+        // (main.dol 0x8010B120 calls 0x800F4834 before the ground, air
+        // and rail updates), so chaining grinds and jumps can't build
+        // speed past `max_max_speed`. The ground step applies them itself.
+        if let Some(grind) = self.grind.as_mut() {
+            let velocity = self.velocity.normalize_or_zero() * grind.speed;
+            let limited = limit_speed(velocity, p);
+            if velocity.length() > 0.0 {
+                grind.speed *= limited.length() / velocity.length();
+            }
+        } else if !self.on_ground {
+            self.velocity = limit_speed(self.velocity, p);
+        }
         let before = self.position;
         if self.grind.is_some() {
             self.grind_step(input, p, world);
@@ -221,9 +234,10 @@ impl Skater {
         }
         if self.grind.is_none() {
             self.since_rail = (self.since_rail + STEP).min(f32::MAX);
-            // Onto a rail met on the way (main.dol 0x801078A8), not too
-            // soon after leaving one.
-            if input.grind && self.since_rail >= p.regrind_time {
+            // Onto a rail met on the way (main.dol 0x801078A8), only from
+            // the air (the main update asks with 0, which skips it on the
+            // ground), and not too soon after leaving one.
+            if input.grind && !self.on_ground && self.since_rail >= p.regrind_time {
                 if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
                     self.start_grind(hit, input, p, world);
                 }
@@ -832,6 +846,40 @@ mod tests {
         assert!(skater.grind.is_none(), "off at the right angle");
         assert_eq!(skater.action, Action::Air);
         assert!((skater.position.distance(c)) < 20.0, "{}", skater.position);
+    }
+
+    #[test]
+    fn speed_is_capped_in_the_air_and_on_rails_too() {
+        use crate::rails::{Rails, Segment};
+        let p = physics();
+        let empty = ngc_collision::Collision {
+            objects: Vec::new(),
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        };
+        let world = World::new(empty).with_rails(Rails::new(vec![Segment {
+            start: Vec3::new(0.0, 0.0, 0.0),
+            end: Vec3::new(100_000.0, 0.0, 0.0),
+        }]));
+        // Far too fast in the air: back under the hard cap at once.
+        let mut skater = Skater::new(Vec3::new(0.0, 5000.0, 0.0), 0.0);
+        skater.on_ground = false;
+        skater.velocity = Vec3::new(5000.0, 0.0, 0.0);
+        skater.update(Input::default(), &p, &world, STEP);
+        assert!(skater.velocity.x <= p.max_max_speed + 1.0);
+        // Grinding: chained boosts can't build speed past it either.
+        let mut skater = Skater::new(Vec3::new(10.0, 0.0, 0.0), FRAC_PI_2);
+        skater.on_ground = false;
+        skater.grind = Some(Grind {
+            segment: 0,
+            forwards: true,
+            speed: 5000.0,
+        });
+        skater.velocity = Vec3::X * 5000.0;
+        for _ in 0..10 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        assert!(skater.grind.unwrap().speed <= p.max_max_speed + 1.0);
     }
 
     #[test]

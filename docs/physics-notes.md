@@ -247,6 +247,15 @@ on-ground update switches on.
   grind button is the viewer's guess (the game's call on the ground
   depends on an argument not yet traced).
 
+- **The main update** (0x8010B120) runs the speed limits (0x800F4834)
+  every frame before handing over to the state's update: ground (state
+  0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3
+  (0x80103418, wall riding perhaps) and rail (4, 0x80100A70). So the cap
+  at `Skater_Max_Max_Speed` holds in the air and on rails too, which is
+  what keeps chained grinds (each adding `Rail_Speed_Boost`) from
+  building speed without end. Then it tries a grind (0x801078A8, with 0:
+  only from the air). `Skater_default_head_height` isn't read by the
+  physics: the knee-height line is the only check ahead.
 - **Rails inside ledges.** Many rails run a few units below the top edge
   of the ledge or kerb they follow, so a skater leaving one starts just
   inside it, where the port's two-sided ray casts find the ledge's
