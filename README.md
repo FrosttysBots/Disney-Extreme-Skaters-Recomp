@@ -287,7 +287,7 @@ cargo test --release -p ngc_collision -- --ignored    # parse every real collisi
 The layout (in the module docs of `crates/ngc_collision`) matches the rest
 of Neversoft's THPS engine family: object records with bounding boxes,
 float vertices, a brightness byte per vertex, faces with 8- or 16-bit
-indices, and a BSP tree (kept as raw bytes for now). Each face has flags
+indices, and a BSP tree per object. Each face has flags
 and a terrain type (which picks sounds and particles). Objects share their
 checksums with the level's visible sectors; many are collision-only, such
 as invisible walls and trigger volumes. Rails aren't collision faces: in
@@ -298,8 +298,23 @@ into `0x00` in some count and offset fields (32 reads as 0, 288 as 256,
 1056 as 1024). This is the same bug behind the textures' "0 means 32". The
 parser rebuilds each object's true counts by picking the reading that keeps
 all offsets and totals consistent while assuming the fewest corrupted
-fields. On the US disc it repairs 88 counts across 271 files, and all
-457,940 faces load.
+fields. When more than one reading fits, the BSP trees decide, since they
+only read cleanly where the faces really end: that fixed Hamm, whose 544
+vertices were stored (with the header's total) as 512, which had shifted
+every face. On the US disc it repairs 90 counts across 271 files, and all
+458,036 faces load.
+
+**BSP trees.** Each object's tree splits space on x, y or z; a split's
+lower child comes right after it and its upper child after the lower's
+whole subtree, and each leaf lists the faces touching its box, as indices
+into one shared face list after all the nodes. The same `0x20` bug hits
+child offsets, leaf face counts and start indices, and the objects' root
+offsets, so the reader takes the tree's shape as the truth, checks the
+stored offsets against it, and solves the leaves' ranges together (a leaf
+of 32 faces otherwise reads as empty). It repairs 364 fields, reads all
+110,174 nodes, and `BspTree::faces_near` finds 99.94% of the faces a
+brute-force search finds near a point; the rest are listed by the game in
+a leaf whose box they don't touch.
 
 ## Model formats
 
@@ -425,8 +440,8 @@ from 1,079 files.
    animations, camera paths, and animated characters in the Map Viewer
    (done).
 2. **Level loading.** Rails, spawn points, objects, pedestrians and
-   animated vertex colors (done). Next: the collision BSP tree, then
-   moving pedestrians and vehicles along their paths.
+   animated vertex colors, the collision BSP trees (done). Next: moving
+   pedestrians and vehicles along their paths.
 3. **QB scripts.** Decompiling and data parsing (done). Next: an
    interpreter that runs the game's scripts.
 4. **Skater physics.** Match the original's constants and update loop,

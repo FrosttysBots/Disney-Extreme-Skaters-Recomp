@@ -17,16 +17,16 @@ pub fn info(path: &Path) -> Result<()> {
     let col = load(path)?;
     let skipped: usize = col.objects.iter().map(|o| o.skipped_faces).sum();
     println!(
-        "{} objects, {} vertices, {} faces, {} BSP bytes",
+        "{} objects, {} vertices, {} faces, {} BSP nodes",
         col.objects.len(),
         col.vertex_count(),
         col.face_count(),
-        col.bsp.len()
+        col.bsp_node_count()
     );
-    if col.repaired_fields > 0 || skipped > 0 {
+    if col.repaired_fields > 0 || col.repaired_bsp_fields > 0 || skipped > 0 {
         println!(
-            "{} corrupted counts repaired, {skipped} placeholder faces skipped",
-            col.repaired_fields
+            "{} corrupted counts and {} BSP fields repaired, {skipped} placeholder faces skipped",
+            col.repaired_fields, col.repaired_bsp_fields
         );
     }
 

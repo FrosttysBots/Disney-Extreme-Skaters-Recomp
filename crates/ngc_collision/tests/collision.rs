@@ -1,4 +1,4 @@
-use ngc_collision::{Collision, Error, face_flags};
+use ngc_collision::{BspNode, Collision, Error, face_flags};
 
 /// One object to build: vertices, faces as (flags, terrain, indices), and
 /// optional corrupted values to store in place of the real counts.
@@ -76,7 +76,9 @@ fn build(specs: &[Spec], stored_total_vertices: Option<u32>) -> Vec<u8> {
                 .unwrap_or(vertex_offset)
                 .to_be_bytes(),
         );
-        out.extend_from_slice(&[0; 12]);
+        // Each object's BSP tree is a single leaf.
+        out.extend_from_slice(&(i as u32 * 20).to_be_bytes());
+        out.extend_from_slice(&[0; 8]);
         vertex_offset += s.vertices.len() as u32;
         face_offset += s.faces.len() as u32 * if s.small { 8 } else { 12 };
     }
@@ -103,7 +105,22 @@ fn build(specs: &[Spec], stored_total_vertices: Option<u32>) -> Vec<u8> {
             }
         }
     }
-    out.extend_from_slice(&[0xAB; 16]); // stand-in BSP data
+    // BSP trees: one leaf per object listing all its faces.
+    out.extend_from_slice(&(specs.len() as u32 * 20).to_be_bytes());
+    let mut first = 0u32;
+    for s in specs {
+        out.extend_from_slice(&[0xFF, 0]);
+        out.extend_from_slice(&(s.faces.len() as u16).to_be_bytes());
+        out.extend_from_slice(&(-1.0f32).to_be_bytes());
+        out.extend_from_slice(&[0xFF; 8]);
+        out.extend_from_slice(&first.to_be_bytes());
+        first += s.faces.len() as u32;
+    }
+    for s in specs {
+        for f in 0..s.faces.len() as u16 {
+            out.extend_from_slice(&f.to_be_bytes());
+        }
+    }
     out
 }
 
@@ -146,7 +163,8 @@ fn parses_small_and_large_faces() {
     let second = &col.objects[1];
     assert_eq!(second.vertices[0], [0.0, 1.0, 2.0]);
     assert_eq!(second.faces[2].indices, [2, 3, 4]);
-    assert_eq!(col.bsp, [0xAB; 16]);
+    assert_eq!(second.bsp.nodes.len(), 1);
+    assert_eq!(second.bsp.faces, [0, 1, 2]);
 }
 
 #[test]
@@ -192,6 +210,8 @@ fn skips_placeholder_faces() {
     let col = Collision::parse(&build(&[spec], None)).unwrap();
     assert_eq!(col.objects[0].faces.len(), 2);
     assert_eq!(col.objects[0].skipped_faces, 1);
+    // The placeholder is dropped from the BSP tree too.
+    assert_eq!(col.objects[0].bsp.faces, [0, 1]);
 }
 
 #[test]
@@ -229,18 +249,93 @@ fn real_collision_files() {
     let mut files = Vec::new();
     collect(std::path::Path::new(&root), &mut files);
     assert!(!files.is_empty(), "no .col.ngc files under {root}");
-    let (mut repaired, mut skipped, mut faces) = (0, 0, 0);
+    let (mut repaired, mut skipped, mut faces, mut nodes, mut bsp_repaired) = (0, 0, 0, 0, 0);
+    let (mut in_no_leaf, mut listed, mut outside) = (0, 0, 0);
+    let (mut queried, mut missed) = (0, 0);
+    let mut unlisted_flags = std::collections::BTreeMap::new();
     for path in &files {
         let data = std::fs::read(path).unwrap();
         let col = Collision::parse(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         repaired += col.repaired_fields;
+        bsp_repaired += col.repaired_bsp_fields;
+        nodes += col.bsp_node_count();
+        for o in &col.objects {
+            let mut seen = vec![false; o.faces.len()];
+            o.bsp.faces_near([f32::MIN; 3], [f32::MAX; 3], |f| {
+                seen[usize::from(f)] = true;
+            });
+            for (f, _) in seen.iter().enumerate().filter(|(_, s)| !**s) {
+                *unlisted_flags.entry(o.faces[f].flags).or_insert(0usize) += 1;
+                in_no_leaf += 1;
+            }
+            // Box queries find what a brute-force search finds (apart
+            // from faces in no leaf), for boxes around a few vertices.
+            for v in o.vertices.iter().step_by(97) {
+                let (min, max) = (
+                    [0, 1, 2].map(|a| v[a] - 40.0),
+                    [0, 1, 2].map(|a| v[a] + 40.0),
+                );
+                let mut found = vec![false; o.faces.len()];
+                o.bsp.faces_near(min, max, |f| found[usize::from(f)] = true);
+                for (f, face) in o.faces.iter().enumerate() {
+                    let overlaps = (0..3).all(|a| {
+                        let cs = face.indices.map(|i| o.vertices[usize::from(i)][a]);
+                        cs.iter().copied().fold(f32::INFINITY, f32::min) <= max[a]
+                            && cs.iter().copied().fold(f32::NEG_INFINITY, f32::max) >= min[a]
+                    });
+                    if overlaps && seen[f] {
+                        queried += 1;
+                        missed += usize::from(!found[f]);
+                    }
+                }
+            }
+            // Every listed face touches the box of the leaf listing it.
+            let inf = f32::INFINITY;
+            let mut stack = vec![(0usize, [[-inf, inf]; 3])];
+            while let Some((i, b)) = stack.pop() {
+                match o.bsp.nodes[i] {
+                    BspNode::Split {
+                        axis,
+                        at,
+                        below,
+                        above,
+                    } => {
+                        let a = usize::from(axis);
+                        let (mut lo, mut hi) = (b, b);
+                        lo[a][1] = lo[a][1].min(at);
+                        hi[a][0] = hi[a][0].max(at);
+                        stack.push((below as usize, lo));
+                        stack.push((above as usize, hi));
+                    }
+                    BspNode::Leaf { first, count } => {
+                        for &f in &o.bsp.faces[first as usize..(first + count) as usize] {
+                            let face = &o.faces[usize::from(f)];
+                            let touches = (0..3).all(|a| {
+                                let cs = face.indices.map(|v| o.vertices[usize::from(v)][a]);
+                                let lo = cs.iter().copied().fold(inf, f32::min);
+                                let hi = cs.iter().copied().fold(-inf, f32::max);
+                                hi >= b[a][0] - 0.01 && lo <= b[a][1] + 0.01
+                            });
+                            listed += 1;
+                            outside += usize::from(!touches);
+                        }
+                    }
+                }
+            }
+        }
         skipped += col.objects.iter().map(|o| o.skipped_faces).sum::<usize>();
         faces += col.face_count();
     }
     println!(
-        "parsed {} files: {faces} faces, {repaired} repaired counts, {skipped} placeholder faces",
+        "parsed {} files: {faces} faces, {repaired} repaired counts, {skipped} placeholder faces, {nodes} BSP nodes ({bsp_repaired} fields repaired), {in_no_leaf} faces in no leaf",
         files.len()
     );
+    println!(
+        "{listed} (face, leaf) pairs, {outside} outside the leaf's box; flags of faces in no leaf: {unlisted_flags:x?}"
+    );
+    println!("box queries: {missed} of {queried} nearby faces missed");
+    assert!(outside * 1000 < listed);
+    assert!(missed * 1000 < queried.max(1));
 }
 
 fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

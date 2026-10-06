@@ -19,7 +19,7 @@
 //! intensities      u8 per vertex (baked brightness), padded to 4 bytes
 //! faces            small: u16 flags, u16 terrain, u8 ×3 indices, u8 pad
 //!                  large: u16 flags, u16 terrain, u16 ×3 indices, u16 pad
-//! BSP tree         for fast queries; not decoded yet
+//! BSP trees        one per object, for finding nearby faces (see [`bsp`])
 //! ```
 //!
 //! **Corrupted counts.** The tool that wrote these files replaced `0x20`
@@ -28,9 +28,15 @@
 //! face and BSP data are unaffected. The parser rebuilds the true counts by
 //! choosing, for each object, the reading that keeps every running offset
 //! and the header totals consistent while assuming the fewest corrupted
-//! fields.
+//! fields. When more than one reading fits, the BSP trees decide: they only
+//! read cleanly where the faces really end (Hamm's 544 vertices are stored
+//! as 512, and so is the header's total).
 
 use thiserror::Error;
+
+pub mod bsp;
+
+pub use bsp::{BspNode, BspTree};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -93,16 +99,17 @@ pub struct CollisionObject {
     /// Faces dropped because an index was out of range (some files pad
     /// with 0xFFFF placeholder faces).
     pub skipped_faces: usize,
-    pub bsp_offset: u32,
+    /// Finds the faces near a point or box (face numbers index `faces`).
+    pub bsp: BspTree,
 }
 
 #[derive(Debug, Clone)]
 pub struct Collision {
     pub objects: Vec<CollisionObject>,
-    /// Raw BSP tree bytes, which `CollisionObject::bsp_offset` points into.
-    pub bsp: Vec<u8>,
     /// How many count fields had to be repaired (see the module docs).
     pub repaired_fields: usize,
+    /// How many BSP fields had to be repaired (see [`bsp`]).
+    pub repaired_bsp_fields: usize,
 }
 
 struct RawObject {
@@ -154,29 +161,53 @@ impl Collision {
         }
 
         let totals = (be_u32(header, 8), be_u32(header, 12), be_u32(header, 16));
-        let (layouts, repaired_fields) = repair_counts(&raw, totals)?;
-
-        let total_vertices: u64 = layouts.iter().map(|l| l.vertex_count).sum();
-        let vertex_base = objects_end as u64;
-        let intensity_base = vertex_base + total_vertices * 12;
-        let face_base = (intensity_base + total_vertices).next_multiple_of(4);
-        let face_bytes: u64 = raw
-            .iter()
-            .zip(&layouts)
-            .map(|(o, l)| l.face_count * face_size(o.small_faces))
-            .sum();
-        let bsp_base = face_base + face_bytes;
-        if bsp_base > data.len() as u64 {
-            return Err(Error::Truncated(format!(
-                "vertices and faces need {bsp_base} bytes, file has {}",
-                data.len()
-            )));
-        }
+        // Where each part starts for a given layout.
+        let bases = |layouts: &[Layout]| {
+            let total_vertices: u64 = layouts.iter().map(|l| l.vertex_count).sum();
+            let vertex_base = objects_end as u64;
+            let intensity_base = vertex_base + total_vertices * 12;
+            let face_base = (intensity_base + total_vertices).next_multiple_of(4);
+            let face_bytes: u64 = raw
+                .iter()
+                .zip(layouts)
+                .map(|(o, l)| l.face_count * face_size(o.small_faces))
+                .sum();
+            (
+                vertex_base,
+                intensity_base,
+                face_base,
+                face_base + face_bytes,
+            )
+        };
+        let roots: Vec<u32> = raw.iter().map(|o| o.bsp_offset).collect();
+        // The first layout whose BSP trees read cleanly.
+        let mut trees = None;
+        let mut first_error = None;
+        let (layouts, repaired_fields) = repair_counts(&raw, totals, |layouts| {
+            let (_, _, _, bsp_base) = bases(layouts);
+            let Some(region) = data.get(bsp_base as usize..) else {
+                return false;
+            };
+            match bsp::read_trees(region, &roots) {
+                Ok(t) => {
+                    trees = Some(t);
+                    true
+                }
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                    false
+                }
+            }
+        })
+        .map_err(|e| first_error.take().unwrap_or(e))?;
+        let (mut trees, repaired_bsp_fields) = trees.expect("an accepted layout has trees");
+        let (vertex_base, intensity_base, face_base, _) = bases(&layouts);
 
         let objects = raw
             .iter()
             .zip(&layouts)
-            .map(|(o, l)| {
+            .zip(trees.iter_mut())
+            .map(|((o, l), tree)| {
                 let range = |start: u64, len: u64| &data[start as usize..(start + len) as usize];
                 let vertices = range(vertex_base + l.vertex_start * 12, l.vertex_count * 12)
                     .chunks_exact(12)
@@ -187,6 +218,8 @@ impl Collision {
                 let size = face_size(o.small_faces);
                 let mut faces = Vec::with_capacity(l.face_count as usize);
                 let mut skipped_faces = 0;
+                // Stored face number -> kept face number, for the BSP tree.
+                let mut kept = Vec::with_capacity(l.face_count as usize);
                 for f in
                     range(face_base + l.face_start, l.face_count * size).chunks_exact(size as usize)
                 {
@@ -197,8 +230,10 @@ impl Collision {
                     };
                     if indices.iter().any(|&i| u64::from(i) >= l.vertex_count) {
                         skipped_faces += 1;
+                        kept.push(None);
                         continue;
                     }
+                    kept.push(Some(faces.len() as u16));
                     faces.push(Face {
                         flags: be_u16(f, 0),
                         terrain: be_u16(f, 2),
@@ -206,6 +241,8 @@ impl Collision {
                     });
                 }
 
+                let mut bsp = std::mem::take(tree);
+                bsp.renumber(&kept);
                 CollisionObject {
                     checksum: o.checksum,
                     flags: o.flags,
@@ -214,16 +251,20 @@ impl Collision {
                     intensities,
                     faces,
                     skipped_faces,
-                    bsp_offset: o.bsp_offset,
+                    bsp,
                 }
             })
             .collect();
 
         Ok(Self {
             objects,
-            bsp: data[bsp_base as usize..].to_vec(),
             repaired_fields,
+            repaired_bsp_fields,
         })
+    }
+
+    pub fn bsp_node_count(&self) -> usize {
+        self.objects.iter().map(|o| o.bsp.nodes.len()).sum()
     }
 
     pub fn face_count(&self) -> usize {
@@ -280,15 +321,98 @@ fn readings(stored: u64, bytes: u32) -> Vec<(u64, u32)> {
         .collect()
 }
 
-/// Rebuilds each object's vertex and face counts (see the module docs).
-/// Returns the layouts and how many fields were repaired.
-fn repair_counts(raw: &[RawObject], totals: (u32, u32, u32)) -> Result<(Vec<Layout>, usize)> {
-    let (total_vertices, total_large, total_small) = totals;
-    let mut layouts = Vec::with_capacity(raw.len());
-    let (mut vertex_sum, mut face_sum) = (0u64, 0u64);
-    let mut repaired = 0;
+/// How many complete layouts [`repair_counts`] offers `accept` at most.
+const MAX_LAYOUTS: usize = 64;
 
-    for (i, object) in raw.iter().enumerate() {
+/// Rebuilds each object's vertex and face counts (see the module docs):
+/// tries layouts, fewest repairs first, until `accept` takes one. Returns it
+/// and how many fields were repaired.
+fn repair_counts(
+    raw: &[RawObject],
+    totals: (u32, u32, u32),
+    mut accept: impl FnMut(&[Layout]) -> bool,
+) -> Result<(Vec<Layout>, usize)> {
+    let candidates = |i: usize, vertex_sum: u64, face_sum: u64| {
+        object_candidates(raw, totals, i, vertex_sum, face_sum)
+    };
+    let mut layouts = Vec::with_capacity(raw.len());
+    let mut tried = 0;
+    // Depth-first over each object's readings; usually only one fits.
+    let mut stack: Vec<(Vec<(u64, u64)>, usize)> = Vec::new();
+    let first = candidates(0, 0, 0)?;
+    stack.push((first, 0));
+    loop {
+        let depth = stack.len() - 1;
+        let (options, next) = stack.last_mut().unwrap();
+        if *next >= options.len() {
+            stack.pop();
+            layouts.pop();
+            if stack.is_empty() {
+                return Err(Error::Inconsistent(
+                    "no reading of the counts gives readable BSP trees".into(),
+                ));
+            }
+            continue;
+        }
+        let (vertices, faces) = options[*next];
+        *next += 1;
+        layouts.truncate(depth);
+        let (vertex_start, face_start) = layouts.last().map_or((0, 0), |l: &Layout| {
+            (
+                l.vertex_start + l.vertex_count,
+                l.face_start + l.face_count * face_size(raw[depth - 1].small_faces),
+            )
+        });
+        layouts.push(Layout {
+            vertex_start,
+            vertex_count: vertices,
+            face_start,
+            face_count: faces,
+        });
+        if layouts.len() == raw.len() {
+            if accept(&layouts) {
+                let repaired = raw
+                    .iter()
+                    .zip(&layouts)
+                    .map(|(o, l)| {
+                        usize::from(l.vertex_count != u64::from(o.vertex_count))
+                            + usize::from(l.face_count != u64::from(o.face_count))
+                    })
+                    .sum();
+                return Ok((layouts, repaired));
+            }
+            tried += 1;
+            if tried >= MAX_LAYOUTS {
+                return Err(Error::Inconsistent(
+                    "no reading of the counts gives readable BSP trees".into(),
+                ));
+            }
+            continue;
+        }
+        let size = face_size(raw[depth].small_faces);
+        match candidates(
+            depth + 1,
+            vertex_start + vertices,
+            face_start + faces * size,
+        ) {
+            Ok(options) => stack.push((options, 0)),
+            Err(_) => continue,
+        }
+    }
+}
+
+/// The (vertex count, face count) readings of object `i` that fit, given
+/// where it starts, cheapest first.
+fn object_candidates(
+    raw: &[RawObject],
+    totals: (u32, u32, u32),
+    i: usize,
+    vertex_sum: u64,
+    face_sum: u64,
+) -> Result<Vec<(u64, u64)>> {
+    let (total_vertices, total_large, total_small) = totals;
+    {
+        let object = &raw[i];
         let inconsistent = |what: &str| {
             Error::Inconsistent(format!("object {i} ({:08x}): {what}", object.checksum))
         };
@@ -327,40 +451,34 @@ fn repair_counts(raw: &[RawObject], totals: (u32, u32, u32)) -> Result<(Vec<Layo
         };
 
         let size = face_size(object.small_faces);
-        let mut best: Option<(u32, u64, u64)> = None; // (cost, vertices, faces)
+        let mut found: Vec<(u32, u64, u64)> = Vec::new(); // (cost, vertices, faces)
         for (vertices, cost_v) in readings(object.vertex_count.into(), 2) {
             for (faces, cost_f) in readings(object.face_count.into(), 2) {
                 // An object has both vertices and faces, or neither.
                 if (vertices == 0) != (faces == 0) {
                     continue;
                 }
-                for &(next_v, next_f, cost_n) in &next {
-                    if vertex_sum + vertices == next_v && face_sum + faces * size == next_f {
-                        let candidate = (cost_v + cost_f + cost_n, vertices, faces);
-                        // Fewest corrupted fields, then the smallest counts.
-                        let key = |c: (u32, u64, u64)| (c.0, c.1 + c.2);
-                        if best.is_none_or(|b| key(candidate) < key(b)) {
-                            best = Some(candidate);
-                        }
-                    }
+                let cost = next
+                    .iter()
+                    .filter(|&&(next_v, next_f, _)| {
+                        vertex_sum + vertices == next_v && face_sum + faces * size == next_f
+                    })
+                    .map(|&(_, _, cost_n)| cost_v + cost_f + cost_n)
+                    .min();
+                if let Some(cost) = cost {
+                    found.push((cost, vertices, faces));
                 }
             }
         }
-        let (_, vertices, faces) =
-            best.ok_or_else(|| inconsistent("no reading of its counts fits the next offsets"))?;
-        repaired += usize::from(vertices != u64::from(object.vertex_count))
-            + usize::from(faces != u64::from(object.face_count));
-
-        layouts.push(Layout {
-            vertex_start: vertex_sum,
-            vertex_count: vertices,
-            face_start: face_sum,
-            face_count: faces,
-        });
-        vertex_sum += vertices;
-        face_sum += faces * size;
+        if found.is_empty() {
+            return Err(inconsistent(
+                "no reading of its counts fits the next offsets",
+            ));
+        }
+        // Fewest corrupted fields, then the smallest counts.
+        found.sort_by_key(|&(cost, v, f)| (cost, v + f));
+        Ok(found.into_iter().map(|(_, v, f)| (v, f)).collect())
     }
-    Ok((layouts, repaired))
 }
 
 fn be_u16(buf: &[u8], offset: usize) -> u16 {
