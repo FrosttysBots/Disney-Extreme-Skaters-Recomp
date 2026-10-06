@@ -4,6 +4,7 @@
 
 pub mod anims;
 pub mod balance;
+pub mod camera;
 pub mod constants;
 pub mod rails;
 pub mod score;
@@ -13,6 +14,7 @@ pub mod world;
 
 pub use anims::{Anim, Landing};
 pub use balance::{Balance, BalanceParams, Lean};
+pub use camera::ChaseCamera;
 pub use constants::{Physics, Stats};
 pub use rails::{RailHit, Rails, Segment};
 pub use score::{Combo, ComboTrick};

@@ -15,7 +15,7 @@ use desa_viewer::nodes::LevelNodes;
 use desa_viewer::source::GameData;
 use glam::Vec3;
 use qb::vm::Program;
-use skate::{Input, Physics, Rails, Segment, Skater, Stats, TrickBook, World};
+use skate::{ChaseCamera, Input, Physics, Rails, Segment, Skater, Stats, TrickBook, World};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -135,7 +135,7 @@ fn main() {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         (seed >> 8) as f32 / (1u32 << 24) as f32
     };
-    let (mut throughs, mut resets) = (0, 0);
+    let (mut throughs, mut resets, mut hidden) = (0, 0, 0);
     for run in 0..runs {
         let mut skater = Skater::new(start.position, facing.x.atan2(facing.z));
         skater.tricks = tricks.clone();
@@ -145,6 +145,7 @@ fn main() {
             .map(|s| (s.position, s.facing().x.atan2(s.facing().z)))
             .collect();
         let mut input = Input::default();
+        let mut chase = ChaseCamera::behind(&skater, &physics);
         let mut takeoff = start.position;
         let mut checked = false;
         for frame in 0..3600 {
@@ -162,6 +163,11 @@ fn main() {
             let before = skater.position;
             skater.update(input, &physics, &world, dt);
             let after = skater.position;
+            // The camera must always see the skater.
+            chase.update(&skater, &physics, &world, dt);
+            if world.ray(chase.target, chase.eye).is_some() {
+                hidden += 1;
+            }
             let trace = std::env::var("TRACE").ok().and_then(|t| {
                 let (r, f) = t.split_once(':')?;
                 Some((r.parse::<u32>().ok()?, f.parse::<u32>().ok()?))
@@ -223,5 +229,7 @@ fn main() {
             }
         }
     }
-    println!("{runs} runs of 60 s: {throughs} frames through ground, {resets} resets");
+    println!(
+        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames"
+    );
 }

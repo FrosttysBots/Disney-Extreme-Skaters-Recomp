@@ -566,7 +566,9 @@ special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
 manual right, left, grind for "Happy Trails") are on until it drains.
 The skater pushes by itself (the game's AutoKick option, on by default:
 untick it to push with W), turns, crouches, flies and lands with the
-game's own animation choices, and bails landing sideways at speed.
+game's own animation choices, and bails landing sideways at speed. The
+chase camera uses the game's camera settings, stays square to the ramp in
+vert air, and pulls in rather than ending up behind a wall.
 Lip tricks stall on the coping of quarter pipes with a rail along it:
 press E (with a direction for other lips) as you launch off the lip, then
 balance with A and D. Not yet: transfers, spine transfers, moving objects,

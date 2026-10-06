@@ -21,7 +21,8 @@ use clap::Parser;
 use glam::{Mat4, Quat, Vec3};
 use ngc_anim::CameraPath;
 use skate::{
-    Action as SkateAction, Input, Physics, Rails, Segment, Skater, Stats, TrickBook, World,
+    Action as SkateAction, ChaseCamera, Input, Physics, Rails, Segment, Skater, Stats, TrickBook,
+    World,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -474,7 +475,7 @@ struct App<'a> {
     /// Where the character stands.
     placement: Mat4,
     /// Skating: the skater, its constants and the chase camera's eye.
-    skating: Option<(Skater, Physics, Vec3)>,
+    skating: Option<(Skater, Physics, ChaseCamera)>,
     /// The animation the character's time belongs to.
     shown_animation: usize,
     last_frame: Instant,
@@ -708,7 +709,8 @@ impl<'a> App<'a> {
             })
             .collect();
         self.stop_camera_path();
-        self.skating = Some((skater, physics, self.camera.position));
+        let chase = ChaseCamera::behind(&skater, &physics);
+        self.skating = Some((skater, physics, chase));
         self.model.character.skating = true;
         self.model.character.playing = false;
         self.set_looking(false);
@@ -717,7 +719,7 @@ impl<'a> App<'a> {
     /// Moves the skater by the keys held, picks its animation and follows
     /// it with the camera.
     fn skate(&mut self, dt: f32) {
-        let (Some((skater, physics, eye)), Some(level), Some(character)) =
+        let (Some((skater, physics, chase)), Some(level), Some(character)) =
             (&mut self.skating, &self.level, &self.character)
         else {
             return;
@@ -829,13 +831,9 @@ impl<'a> App<'a> {
             };
         }
 
-        // Chase camera: the game's medium camera, in feet.
-        let forward = skater.forward();
-        let target = skater.position + Vec3::Y * physics.head_height * 0.6;
-        let wanted = skater.position - forward * physics.camera_behind * 12.0
-            + Vec3::Y * physics.camera_above * 12.0;
-        *eye = eye.lerp(wanted, 1.0 - (-dt * 6.0).exp());
-        self.camera = FlyCamera::looking_at(*eye, target);
+        // Chase camera, on the game's medium camera settings.
+        chase.update(skater, physics, world, dt);
+        self.camera = FlyCamera::looking_at(chase.eye, chase.target);
     }
 
     fn character_index(&self, id: &str) -> Option<usize> {
@@ -1595,6 +1593,12 @@ fn combo_text(skater: &Skater) -> Option<String> {
     Some(if last.bailed {
         format!("{}\nBail!", line(&last.combo))
     } else {
-        format!("{}\n+{}", line(&last.combo), last.total)
+        // `Land2`'s panel message for a sketchy landing.
+        let sketchy = if skater.landing.sketchy {
+            "  Sketchy"
+        } else {
+            ""
+        };
+        format!("{}\n+{}{sketchy}", line(&last.combo), last.total)
     })
 }

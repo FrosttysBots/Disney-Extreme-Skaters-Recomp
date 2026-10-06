@@ -182,6 +182,14 @@ pub struct Physics {
     pub camera_behind: f32,
     pub camera_above: f32,
     pub camera_fov: f32,
+    /// How fast it turns and follows, a frame: `slerp` (and in vert air
+    /// `vert_air_slerp`), `lerp_xz` and `lerp_y` (`vert_air_lerp_...`).
+    pub camera_slerp: f32,
+    pub camera_vert_air_slerp: f32,
+    pub camera_lerp_xz: f32,
+    pub camera_lerp_y: f32,
+    pub camera_vert_air_lerp_xz: f32,
+    pub camera_vert_air_lerp_y: f32,
 }
 
 impl Physics {
@@ -250,6 +258,12 @@ impl Physics {
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),
+            camera_slerp: camera_value("slerp", 0.04),
+            camera_vert_air_slerp: camera_value("vert_air_slerp", 0.04),
+            camera_lerp_xz: camera_value("lerp_xz", 0.25),
+            camera_lerp_y: camera_value("lerp_y", 0.75),
+            camera_vert_air_lerp_xz: camera_value("vert_air_lerp_xz", 1.0),
+            camera_vert_air_lerp_y: camera_value("vert_air_lerp_y", 1.0),
         }
     }
 }
