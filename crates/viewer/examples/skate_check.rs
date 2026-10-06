@@ -135,7 +135,7 @@ fn main() {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         (seed >> 8) as f32 / (1u32 << 24) as f32
     };
-    let (mut throughs, mut resets, mut hidden) = (0, 0, 0);
+    let (mut throughs, mut resets, mut hidden, mut stuck) = (0, 0, 0, 0);
     for run in 0..runs {
         let mut skater = Skater::new(start.position, facing.x.atan2(facing.z));
         skater.tricks = tricks.clone();
@@ -146,6 +146,8 @@ fn main() {
             .collect();
         let mut input = Input::default();
         let mut chase = ChaseCamera::behind(&skater, &physics);
+        // Where it was five seconds ago, to catch it stuck.
+        let mut history = std::collections::VecDeque::new();
         let mut takeoff = start.position;
         let mut checked = false;
         for frame in 0..3600 {
@@ -164,6 +166,24 @@ fn main() {
             let before = skater.position;
             skater.update(input, &physics, &world, dt);
             let after = skater.position;
+            // Stuck: on the ground, out of a manual, and hardly travelled in
+            // 5 s (the path, not just how far it ended up: circles move).
+            history.push_back(before.distance(after));
+            if history.len() > 300 {
+                history.pop_front();
+                let travelled: f32 = history.iter().sum();
+                if skater.on_ground && travelled < 60.0 && !skater.manual {
+                    stuck += 1;
+                    if stuck <= 12 {
+                        println!(
+                            "run {run} frame {frame}: stuck at {after:.0} ({:?}, speed {:.0})",
+                            skater.action,
+                            skater.speed()
+                        );
+                    }
+                    history.clear();
+                }
+            }
             // The camera must always see the skater.
             chase.update(&skater, &physics, &world, dt);
             if world.ray(chase.target, chase.eye).is_some() {
@@ -236,6 +256,6 @@ fn main() {
         }
     }
     println!(
-        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames"
+        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames, stuck {stuck} times"
     );
 }

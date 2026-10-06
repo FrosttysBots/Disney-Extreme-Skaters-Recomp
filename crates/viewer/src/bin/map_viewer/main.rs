@@ -606,6 +606,17 @@ impl<'a> App<'a> {
                 }
                 self.model.current = Some(index);
                 self.model.stats = Some(stats);
+                // A new level: stop skating the old one, and whether this
+                // one can be skated.
+                if self.skating.take().is_some() {
+                    self.model.character.skating = false;
+                    self.model.character.playing = true;
+                    self.model.character.balance = None;
+                    self.model.character.combo = None;
+                }
+                let shop = info.id.eq_ignore_ascii_case("SkateShop");
+                self.model.character.can_skate =
+                    self.character.is_some() && !shop && level.world.is_some();
                 self.model.has_collision = level.renderer.has_collision();
                 if !self.model.has_collision {
                     self.model.collision = CollisionView::Hidden;
@@ -917,6 +928,14 @@ impl<'a> App<'a> {
 
     /// Shows character `index` (in the panel's list), or none.
     fn load_character(&mut self, index: Option<usize>) {
+        // A different character: stop skating the old one (its tricks and
+        // stats belong to it).
+        if self.skating.take().is_some() {
+            self.model.character.skating = false;
+            self.model.character.playing = true;
+            self.model.character.balance = None;
+            self.model.character.combo = None;
+        }
         self.character = None;
         self.skating = None;
         self.model.character.skating = false;
@@ -940,6 +959,14 @@ impl<'a> App<'a> {
             .with_context(|| format!("could not load {}", info.title));
         match loaded {
             Ok(character) => {
+                // Not in the Skate Shop: it's the game's menu room (loaded
+                // with `InitSkaterHeaps`), open at the sides, not a level.
+                let shop = self
+                    .model
+                    .current
+                    .and_then(|i| self.model.levels.get(i))
+                    .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"));
+                let skateable = !shop && self.level.as_ref().is_some_and(|l| l.world.is_some());
                 let model = &mut self.model.character;
                 model.animations = character
                     .animations
@@ -954,7 +981,7 @@ impl<'a> App<'a> {
                 model.time = 0.0;
                 model.current = Some(index);
                 model.can_blink = character.blink.is_some();
-                model.can_skate = self.level.as_ref().is_some_and(|l| l.world.is_some());
+                model.can_skate = skateable;
                 // The spawn marker would stand right through the character.
                 if self.character.is_none() {
                     self.model.show_spawns = false;
