@@ -554,8 +554,10 @@ of 425 a second, covers about 1,000 units in three seconds, ollies 57
 units high and grinds the Hub's long rails.
 
 [docs/physics-notes.md](docs/physics-notes.md) maps every function read,
-with addresses. Not yet: transfers, lips, spins and special tricks, and
-the game's own scoring (combos score points times tricks for now)
+with addresses. Combos score as the game does: repeats degrade (100% down
+to 50%), 180s multiply (x1.5 up to x5), and the total is the points times
+the number of tricks. Not yet: transfers, lips, special tricks and the
+special meter
 and bails, moving objects, and a frame-by-frame check against Dolphin.
 Turning rates are read as radians a second and the camera distances as
 feet, both guesses for now.

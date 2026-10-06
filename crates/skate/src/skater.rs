@@ -45,6 +45,7 @@ use glam::{Mat4, Quat, Vec3};
 use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
 use crate::rails::RailHit;
+use crate::score::Combo;
 use crate::tricks::{Button, Dir, Kind, TrickBook};
 use crate::world::{Hit, World};
 
@@ -113,8 +114,8 @@ pub enum Phase {
 /// A finished combo: its tricks and what it scored (nothing if it ended in
 /// a bail).
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Combo {
-    pub tricks: Vec<(String, u32)>,
+pub struct Landed {
+    pub combo: Combo,
     pub total: u32,
     pub bailed: bool,
 }
@@ -200,8 +201,10 @@ pub struct Skater {
     /// The trick buttons pressed this step.
     pressed: (bool, bool),
     /// The combo so far, the last one finished, and the points banked.
-    pub combo_tricks: Vec<(String, u32)>,
-    pub last_combo: Option<Combo>,
+    pub combo_tricks: Combo,
+    pub last_combo: Option<Landed>,
+    /// Degrees turned in the air since leaving the ground or a rail.
+    air_spin: f32,
     pub score: u32,
     leftover: f32,
 }
@@ -235,8 +238,9 @@ impl Skater {
             tricks: TrickBook::default(),
             trick: None,
             pressed: (false, false),
-            combo_tricks: Vec::new(),
+            combo_tricks: Combo::default(),
             last_combo: None,
+            air_spin: 0.0,
             score: 0,
             leftover: 0.0,
         }
@@ -272,27 +276,29 @@ impl Skater {
         }
     }
 
-    /// A trick into the combo.
-    fn credit(&mut self, trick: Option<(String, u32)>) {
-        if let Some(trick) = trick {
-            self.combo_tricks.push(trick);
+    /// A trick into the combo; grinds and manuals block spins.
+    fn credit(&mut self, trick: Option<(String, u32)>, block_spin: bool) {
+        if let Some((name, score)) = trick {
+            self.combo_tricks.add(&name, score, block_spin);
+        }
+        if block_spin {
+            self.air_spin = 0.0;
         }
     }
 
-    /// The combo's over: banked if landed, lost in a bail. The total is
-    /// the tricks' points times how many there were (the classic rule;
-    /// the game's own scoring code isn't read yet).
+    /// The combo's over: banked if landed (the game's scoring, see
+    /// `score`), lost in a bail.
     fn end_combo(&mut self, landed: bool) {
         self.combo = false;
+        self.air_spin = 0.0;
         if self.combo_tricks.is_empty() {
             return;
         }
-        let tricks = std::mem::take(&mut self.combo_tricks);
-        let sum: u32 = tricks.iter().map(|(_, s)| s).sum();
-        let total = if landed { sum * tricks.len() as u32 } else { 0 };
+        let combo = std::mem::take(&mut self.combo_tricks);
+        let total = if landed { combo.total() } else { 0 };
         self.score += total;
-        self.last_combo = Some(Combo {
-            tricks,
+        self.last_combo = Some(Landed {
+            combo,
             total,
             bailed: !landed,
         });
@@ -329,7 +335,7 @@ impl Skater {
                 // `FlipTrick` names it after 15 frames.
                 if !playing.credited && playing.age >= 15.0 / 60.0 {
                     playing.credited = true;
-                    self.credit(Some((trick.name.clone(), trick.score)));
+                    self.credit(Some((trick.name.clone(), trick.score)), false);
                 }
                 playing.time >= length
             }
@@ -339,7 +345,7 @@ impl Skater {
                 // out; held to the end, it holds.
                 if !playing.credited && playing.time >= length * 0.5 {
                     playing.credited = true;
-                    self.credit(Some((trick.name.clone(), trick.score)));
+                    self.credit(Some((trick.name.clone(), trick.score)), false);
                 }
                 if playing.time >= length * 0.6 && !input.grab {
                     playing.phase = Phase::Out;
@@ -544,7 +550,7 @@ impl Skater {
         self.balance.start(&p.grind_balance, !self.combo);
         self.combo = true;
         self.trick = None;
-        self.credit(self.tricks.grind.clone());
+        self.credit(self.tricks.grind.clone(), true);
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,
@@ -722,7 +728,7 @@ impl Skater {
             self.manual = true;
             self.balance.start(&p.manual_balance, !self.combo);
             self.combo = true;
-            self.credit(self.tricks.manual.clone());
+            self.credit(self.tricks.manual.clone(), true);
             self.set_action(Action::Manual);
         }
         if self.manual {
@@ -964,8 +970,12 @@ impl Skater {
 
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
         self.air_tricks(input);
-        // Spinning at the air rotation stat (0x800EE4CC).
-        self.heading -= input.turn * p.air_rotation * STEP;
+        // Spinning at the air rotation stat (0x800EE4CC); the turn counts
+        // towards the latest trick's spin.
+        let turn = input.turn * p.air_rotation * STEP;
+        self.heading -= turn;
+        self.air_spin += turn.to_degrees();
+        self.combo_tricks.spin(self.air_spin);
         // As the game does (0x800FC7F8): gravity, divided by the hang-time
         // stat, and the exact step of a thrown body.
         let gravity = p.air_gravity / p.air_hang.max(0.01);
@@ -1043,7 +1053,7 @@ impl Skater {
                     self.manual = true;
                     self.balance.start(&p.manual_balance, !self.combo);
                     self.combo = true;
-                    self.credit(self.tricks.manual.clone());
+                    self.credit(self.tricks.manual.clone(), true);
                     self.set_action(Action::Manual);
                     return;
                 }

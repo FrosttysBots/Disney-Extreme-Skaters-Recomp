@@ -1533,22 +1533,27 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The combo on screen: the tricks so far with their running total, or the
-/// last combo's result for a few seconds after it ends.
+/// The combo on screen: the tricks so far with their points and
+/// multiplier, or the last combo's result for a few seconds after it ends.
 fn combo_text(skater: &Skater) -> Option<String> {
-    let line = |tricks: &[(String, u32)]| {
-        tricks
+    let line = |combo: &skate::Combo| {
+        combo
+            .tricks
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|t| match t.spins {
+                0 => t.name.clone(),
+                n => format!("{} {}", n * 180, t.name),
+            })
             .collect::<Vec<_>>()
             .join(" + ")
     };
-    if !skater.combo_tricks.is_empty() {
-        let sum: u32 = skater.combo_tricks.iter().map(|(_, s)| s).sum();
+    let combo = &skater.combo_tricks;
+    if !combo.is_empty() {
         return Some(format!(
-            "{}\n{sum} x {}",
-            line(&skater.combo_tricks),
-            skater.combo_tricks.len()
+            "{}\n{} x {}",
+            line(combo),
+            combo.points(),
+            combo.multiplier()
         ));
     }
     let last = skater.last_combo.as_ref()?;
@@ -1556,8 +1561,8 @@ fn combo_text(skater: &Skater) -> Option<String> {
         return None;
     }
     Some(if last.bailed {
-        format!("{}\nBail!", line(&last.tricks))
+        format!("{}\nBail!", line(&last.combo))
     } else {
-        format!("{}\n+{}", line(&last.tricks), last.total)
+        format!("{}\n+{}", line(&last.combo), last.total)
     })
 }

@@ -173,6 +173,32 @@ fn real_skater_on_the_hub() {
     assert_eq!(trickster.action, Action::Bail);
     assert_eq!(trickster.score, 500, "the bail scores nothing");
 
+    // A flip while spinning: the spin counts in 180s and multiplies it.
+    let mut spinner = Skater::new(start.position, facing.x.atan2(facing.z));
+    spinner.tricks = trickster.tricks.clone();
+    for _ in 0..90 {
+        spinner.update(push, &physics, &world, 1.0 / 60.0);
+    }
+    let spin_flip = Input {
+        flip: true,
+        brake: true,
+        turn: 1.0,
+        ..Input::default()
+    };
+    ollie_with(&mut spinner, spin_flip, true);
+    let landed = spinner.last_combo.clone().expect("a combo");
+    println!(
+        "spinning flip: {} x {} spins, total {}",
+        landed.combo.tricks[0].name, landed.combo.tricks[0].spins, landed.total
+    );
+    if !landed.bailed {
+        // Down-right is the "L" flip slot: Quickest Boots in the West,
+        // 250 points, x1.5 for one 180.
+        assert_eq!(landed.combo.tricks[0].name, "Quickest Boots in the West");
+        assert_eq!(landed.combo.tricks[0].spins, 1);
+        assert_eq!(landed.total, 375);
+    }
+
     // A manual: tap up, then down, and let it ride. Left alone it falls
     // off the meter within seconds; balanced, it lasts.
     let manual_frames = |skater: &mut Skater, careful: bool| {

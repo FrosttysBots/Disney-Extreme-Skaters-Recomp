@@ -318,8 +318,22 @@ on-ground update switches on.
   way in, names it halfway, comes out if the button is let go after 60%,
   and otherwise holds `idle` (tweaking) until it is, then plays `anim`
   backwards. Ported for the default controls, without spins, specials,
-  extras, tweak points or sounds. Scoring is the game's own code (not
-  read yet); combos score the sum times the count for now.
+  extras, tweak points or sounds.
+- **Scoring.** The scripts' `SetTrickName`, `SetTrickScore` and `Display`
+  are skater commands (the dispatcher around 0x80112C04): `Display` hands
+  the trick to the score object (0x800B05BC) with flags (`BlockSpin` 2,
+  `NoDegrade` 0x40...), and the spin so far (skater `+0x3544`, degrees)
+  to 0x800B0A00, which counts 180s as `(degrees + spin_count_slop) / 180`
+  (slop 60) on the latest trick, never down. Each trick records how many
+  times the same trick came before it in the combo. 0x800B124C totals
+  them: `score * degrade[repeats] * spin / 200`, with degrade 100, 90, 80,
+  70, 60, 50 (percent, 0x800B1658) and spin 2, 3, 4, 6, 8, 10 (halves,
+  0x800B1630); the spin factor is set by the combo's first trick or the
+  first after a `BlockSpin` one (grinds and manuals) and carries on to
+  the tricks after it. The multiplier (`+0x58`) goes up one per trick;
+  the combo scores the sum times it, and the same difference feeds the
+  special meter (`+0x64`, capped at 3000). Ported, without the special
+  meter, `NoDegrade`, and grind and manual points over time.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3
