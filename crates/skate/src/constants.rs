@@ -99,7 +99,12 @@ pub struct Physics {
     /// The hard limit on horizontal speed; between `max_speed` and this,
     /// `heavy_air_friction` drags the skater back.
     pub max_max_speed: f32,
+    /// Ollie speed after a full crouch, and after the shortest one; in
+    /// between it scales with the crouch time up to `max_tense_time`
+    /// seconds (main.dol 0x800F62C4).
     pub jump_speed: f32,
+    pub jump_speed_min: f32,
+    pub max_tense_time: f32,
     /// Gravity in the air, before dividing by `air_hang` (the game does
     /// that: `main.dol` at 0x800FC634).
     pub air_gravity: f32,
@@ -163,6 +168,8 @@ impl Physics {
             max_speed: scaled("Skater_Max_Speed_Stat", 800.0),
             max_max_speed: scaled("Skater_Max_Max_Speed_Stat", 1000.0),
             jump_speed: scaled("Physics_Jump_Speed_Stat", 425.0),
+            jump_speed_min: scaled("Physics_Jump_Speed_min_Stat", 350.0),
+            max_tense_time: plain("Skater_max_tense_time", 200.0) / 1000.0,
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
             ground_gravity: plain("Physics_Ground_Gravity", -1000.0),

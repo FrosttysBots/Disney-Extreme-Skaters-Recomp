@@ -9,7 +9,8 @@
 //! velocity kept along the board (it can roll backwards), the speed
 //! limits, steering (sharp while braking, building up when nearly
 //! stopped), air spins at the air rotation stat, and air gravity divided
-//! by the hang-time stat, and braking. Ground snapping, walls and the rest
+//! by the hang-time stat, braking, and the ollie's strength from how long
+//! the skater crouched. Ground snapping, walls and the rest
 //! of the air update are still this crate's own.
 //!
 //! - **On the ground** the skater follows the surface: each step it moves
@@ -74,6 +75,8 @@ pub struct Skater {
     crouched: bool,
     /// How long a turn has been held, in seconds.
     turn_time: f32,
+    /// How long the skater has been crouched (tensing for an ollie).
+    crouch_time: f32,
     leftover: f32,
 }
 
@@ -89,6 +92,7 @@ impl Skater {
             action_time: 0.0,
             crouched: false,
             turn_time: 0.0,
+            crouch_time: 0.0,
             leftover: 0.0,
         }
     }
@@ -131,6 +135,13 @@ impl Skater {
 
     fn step(&mut self, input: Input, p: &Physics, world: &World) {
         self.action_time += STEP;
+        self.crouch_time = if input.crouch {
+            self.crouch_time + STEP
+        } else if self.on_ground {
+            self.crouch_time
+        } else {
+            0.0
+        };
         self.turn_time = if input.turn == 0.0 {
             0.0
         } else {
@@ -217,7 +228,18 @@ impl Skater {
         // Jump when letting go of a crouch.
         if self.crouched && !input.crouch {
             self.crouched = false;
-            self.velocity = forward * speed + up * p.jump_speed;
+            // The ollie (0x800F62C4): stronger the longer the crouch, up
+            // to the max tense time; along the ground's normal when moving
+            // down, else straight up.
+            let tense = (self.crouch_time / p.max_tense_time).min(1.0);
+            let jump = p.jump_speed_min + (p.jump_speed - p.jump_speed_min) * tense;
+            let mut velocity = forward * speed;
+            if velocity.y < 0.0 {
+                velocity += up * jump;
+            } else {
+                velocity.y += jump;
+            }
+            self.velocity = velocity;
             self.on_ground = false;
             self.up = Vec3::Y;
             self.set_action(Action::Air);

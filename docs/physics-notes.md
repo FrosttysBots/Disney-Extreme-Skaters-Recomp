@@ -106,6 +106,18 @@ on-ground update switches on.
   `+0x804` is. It also leads to `Normal_Lerp_Speed` (tilting). The game also
   has a `moon_gravity` cheat (it multiplies air gravity).
 
+- **The ollie** (0x800F62C4, the scripts' `Jump` command): the jump speed
+  is `min + (max - min) * tense / skater_max_tense_time`, where `tense`
+  is the crouch time (skater `+0x3478`, capped at the max, 200 ms) and
+  min and max are `Physics_Jump_Speed_min_stat` and
+  `Physics_Jump_Speed_stat` (or the `Boneless` ones with a
+  `BonelessHeight` parameter, or the `air` ones for jumps in the air).
+  These are read by name, spelled `..._stat`, which is why searching for
+  the `..._Stat` checksums found nothing. On the ground, moving down, it's
+  added along the ground's normal; otherwise downward speed is dropped
+  and it's added straight up. Upside down (vert) there's more. Ported:
+  the ground ollie.
+
 ## Next
 
 Read the rest of the on-ground update and its helpers, then the air
