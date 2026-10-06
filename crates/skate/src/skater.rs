@@ -64,6 +64,8 @@ pub struct Input {
     /// The trick buttons: Square (flip tricks) and Circle (grabs).
     pub flip: bool,
     pub grab: bool,
+    /// Revert (R2 or L2): right after landing from vert air.
+    pub revert: bool,
 }
 
 /// What the skater is doing, for picking animations.
@@ -92,6 +94,11 @@ pub enum Action {
     Bail,
     /// Stalled on the coping of a quarter pipe.
     Lip,
+    /// Reverting: spun round on landing from vert (frontside or
+    /// backside).
+    Revert {
+        frontside: bool,
+    },
 }
 
 /// A lip trick being held: the trick, the ramp's way out, and how long.
@@ -129,6 +136,7 @@ enum Press {
     Dir(Dir),
     Flip,
     Grind,
+    Revert,
 }
 
 /// The special meter: full at 3000 (`0xBB8` in the score object), draining
@@ -185,6 +193,16 @@ const SPECIAL_MANUAL_TWEAK: u32 = 5;
 /// Points a frame on a lip (`LipMacro2`'s `TweakTrick 10`).
 const LIP_TWEAK: u32 = 10;
 
+/// Reverting: the button within 200 ms before landing (`{ Press, R2, 200 }`
+/// in `GROUNDTRICKS.q`), or within the 5 frames after (`Land2`'s
+/// `RevertTime = 5`); worth 100 (`Revert`'s `SetTrickScore 100`).
+const REVERT_BEFORE: f32 = 0.2;
+const REVERT_AFTER: f32 = 5.0 / 60.0;
+const REVERT_SCORE: u32 = 100;
+/// How long after a revert a manual still carries the combo on (about the
+/// revert animation).
+const REVERT_LINGER: f32 = 0.6;
+
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
 /// in the game's `manualtricks.q`).
 const MANUAL_WINDOW: f32 = 0.4;
@@ -233,6 +251,10 @@ pub struct Skater {
     ollied: bool,
     /// About to land (the `Airborne` script's legs stretch for it).
     landing_soon: bool,
+    /// After landing from vert: seconds left to revert before the combo
+    /// ends (or, after reverting, to go into a manual).
+    revert_window: f32,
+    reverted: bool,
     /// The animation showing, and seconds into it.
     pub anim: Anim,
     pub anim_time: f32,
@@ -266,8 +288,10 @@ pub struct Skater {
     /// The combo so far, the last one finished, and the points banked.
     pub combo_tricks: Combo,
     pub last_combo: Option<Landed>,
-    /// Degrees turned in the air since leaving the ground or a rail.
+    /// Degrees turned in the air since leaving the ground or a rail, and
+    /// the way of the last turn.
     air_spin: f32,
+    air_spin_sign: f32,
     /// The special meter (up to 3000) and whether it's full (specials
     /// allowed until it drains).
     pub special_meter: f32,
@@ -316,6 +340,8 @@ impl Skater {
             landing: Landing::default(),
             ollied: false,
             landing_soon: false,
+            revert_window: 0.0,
+            reverted: false,
             anim: Anim {
                 first: "StandIdle",
                 then: None,
@@ -338,6 +364,7 @@ impl Skater {
             combo_tricks: Combo::default(),
             last_combo: None,
             air_spin: 0.0,
+            air_spin_sign: 1.0,
             special_meter: 0.0,
             special: false,
             last_total: 0,
@@ -616,6 +643,7 @@ impl Skater {
             (input.turn > 0.0 && last.turn <= 0.0, Press::Dir(Dir::Right)),
             (input.flip && !last.flip, Press::Flip),
             (input.grind && !last.grind, Press::Grind),
+            (input.revert && !last.revert, Press::Revert),
         ];
         for (pressed, press) in edges {
             if pressed {
@@ -746,6 +774,8 @@ impl Skater {
     /// Into a manual (or from one manual to another): the meter starts
     /// anew for a new manual, carrying the combo's lean over.
     fn start_manual(&mut self, trick: Option<BalanceTrick>, new: bool, p: &Physics) {
+        self.revert_window = 0.0;
+        self.reverted = false;
         if new {
             self.manual = true;
             self.special_manual = false;
@@ -760,6 +790,35 @@ impl Skater {
         self.balance_trick = trick;
         self.balance_time = 0.0;
         self.set_action(Action::Manual);
+    }
+
+    /// Whether `press` came within the last `window` seconds (this step
+    /// with a window of 0).
+    fn pressed_within(&self, press: Press, window: f32) -> bool {
+        self.presses
+            .iter()
+            .any(|&(p, t)| p == press && self.clock - t <= window + 1e-4)
+    }
+
+    /// A revert (`Revert`): 100 points into the combo, spinning round to
+    /// face the way the skater's going (`FlipAfter`), frontside or
+    /// backside by the last spin's way.
+    fn revert(&mut self) {
+        // Then a manual can carry the combo on while the revert plays
+        // (`DoNextManualTrick FromAir`, `WaitAnimWhilstChecking AndManuals`),
+        // or it lands.
+        self.revert_window = REVERT_LINGER;
+        self.reverted = true;
+        self.combo = true;
+        let frontside = self.air_spin_sign >= 0.0;
+        let name = if frontside { "FS Revert" } else { "BS Revert" };
+        self.credit(Some((name.to_string(), REVERT_SCORE)), true);
+        self.heading += std::f32::consts::PI;
+        let flat = self.forward();
+        let up = self.up;
+        let forward = (flat - up * flat.dot(up)).normalize_or(flat);
+        self.velocity = forward * self.velocity.length();
+        self.set_action(Action::Revert { frontside });
     }
 
     /// The direction pressed last, if within `window` seconds.
@@ -1130,6 +1189,20 @@ impl Skater {
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // The revert window after a vert landing: the press reverts;
+        // running out (and no manual) ends the combo.
+        if self.revert_window > 0.0 {
+            if !self.reverted && self.pressed_within(Press::Revert, 0.0) {
+                self.revert_window = 0.0;
+                self.revert();
+            } else {
+                self.revert_window -= STEP;
+                if self.revert_window <= 0.0 && !self.manual {
+                    self.reverted = false;
+                    self.end_combo(true);
+                }
+            }
+        }
         // A manual: up then down (or down then up) within the window
         // (the game's `ManualTricks`), balanced with up and down
         // (`DoBalanceTrick ButtonA = Up ButtonB = Down`).
@@ -1421,7 +1494,9 @@ impl Skater {
         let action = if matches!(
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
-        ) {
+        ) || (matches!(self.action, Action::Revert { .. })
+            && self.action_time < 0.6)
+        {
             self.action
         } else if self.manual {
             Action::Manual
@@ -1484,6 +1559,10 @@ impl Skater {
         let turn = input.turn * p.air_rotation * STEP;
         self.heading -= turn;
         self.air_spin += turn.to_degrees();
+        if turn != 0.0 {
+            // Turning left (heading up) is frontside here.
+            self.air_spin_sign = -turn.signum();
+        }
         self.combo_tricks.spin(self.air_spin);
         // As the game does (0x800FC7F8): gravity, divided by the hang-time
         // stat, and the exact step of a thrown body.
@@ -1536,6 +1615,7 @@ impl Skater {
                     self.velocity = Vec3::ZERO;
                 }
                 self.on_ground = true;
+                let from_vert = self.vert.is_some();
                 self.vert = None;
                 self.lip_out = None;
                 self.crouched = input.crouch;
@@ -1581,7 +1661,18 @@ impl Skater {
                     self.start_manual(trick, true, p);
                     return;
                 }
-                self.end_combo(true);
+                // From vert, a revert keeps the combo going (`Land2` sets up
+                // `Reverts` for `RevertTime`): pressed just before landing,
+                // or waited for a few frames.
+                if from_vert {
+                    if self.pressed_within(Press::Revert, REVERT_BEFORE) {
+                        self.revert();
+                        return;
+                    }
+                    self.revert_window = REVERT_AFTER;
+                } else {
+                    self.end_combo(true);
+                }
                 self.set_action(Action::Landing);
                 return;
             }
@@ -1622,6 +1713,12 @@ impl Skater {
                     .total_cmp(&b.0.distance_squared(self.last_ground))
             })
             .unwrap_or((self.last_ground, self.heading));
+        self.place(position, heading, p, world);
+    }
+
+    /// Standing at rest on the ground at `position` (or under it), facing
+    /// `heading`, out of any trick and with the combo lost.
+    pub fn place(&mut self, position: Vec3, heading: f32, p: &Physics, world: &World) {
         let ground = world
             .ray(position + Vec3::Y * 100.0, position - Vec3::Y * 1000.0)
             .filter(|hit| !is_wall(hit, p));
@@ -1634,8 +1731,11 @@ impl Skater {
         self.manual = false;
         self.trick = None;
         self.end_combo(false);
+        self.revert_window = 0.0;
+        self.reverted = false;
         self.velocity = Vec3::ZERO;
         self.up = ground.map_or(Vec3::Y, |hit| hit.normal);
+        self.last_ground = self.position;
         self.on_ground = true;
         self.set_action(Action::Standing);
     }

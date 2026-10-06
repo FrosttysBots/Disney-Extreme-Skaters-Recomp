@@ -158,6 +158,7 @@ fn main() {
                     grind: random() < 0.4,
                     flip: random() < 0.15,
                     grab: random() < 0.15,
+                    revert: random() < 0.15,
                 };
             }
             let before = skater.position;

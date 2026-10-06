@@ -73,6 +73,8 @@ pub fn choose(skater: &Skater) -> Anim {
         }
         Action::Manual => Anim::into("ManualIn1", "ManualRange1"),
         Action::Lip => Anim::once("LipRange1"),
+        Action::Revert { frontside: true } => Anim::into("RevertFS", "StandIdle"),
+        Action::Revert { frontside: false } => Anim::into("RevertBS", "StandIdle"),
         // `Land2`.
         Action::Landing => {
             let l = skater.landing;

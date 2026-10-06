@@ -85,6 +85,40 @@ fn main() {
         let mut airborne = false;
         let mut landed_at = None;
         for _ in 0..300 {
+            // With REVERT set, revert pressed just before landing.
+            let reverting = std::env::var("REVERT").is_ok();
+            if reverting && airborne {
+                // Pressed as it's about to land (within the game's 200 ms).
+                let press = skater.landing_soon();
+                skater.update(
+                    Input {
+                        revert: press,
+                        ..Input::default()
+                    },
+                    &physics,
+                    &world,
+                    1.0 / 60.0,
+                );
+                if skater.on_ground {
+                    let names: Vec<_> = skater
+                        .combo_tricks
+                        .tricks
+                        .iter()
+                        .map(|t| t.name.clone())
+                        .collect();
+                    for _ in 0..60 {
+                        skater.update(Input::default(), &physics, &world, 1.0 / 60.0);
+                    }
+                    println!(
+                        "  landed: {:?}, combo {names:?}, a second later banked {} ({:?})",
+                        skater.action,
+                        skater.score,
+                        skater.last_combo.as_ref().map(|c| c.total)
+                    );
+                    break;
+                }
+                continue;
+            }
             let input = if lips && !skater.on_ground {
                 Input {
                     grind: true,

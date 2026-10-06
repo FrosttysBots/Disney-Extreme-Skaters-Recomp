@@ -739,6 +739,7 @@ impl<'a> App<'a> {
             grind: held(KeyCode::KeyE),
             flip: held(KeyCode::KeyQ),
             grab: held(KeyCode::KeyF),
+            revert: held(KeyCode::KeyR),
         };
         skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
@@ -1188,10 +1189,24 @@ impl<'a> App<'a> {
             KeyCode::Tab if !repeat => {
                 let count = self.level.as_ref().map_or(0, |l| l.nodes.spawns.len());
                 if count > 0 {
-                    self.go_to_spawn(self.next_spawn % count);
+                    let index = self.next_spawn % count;
+                    self.go_to_spawn(index);
+                    // Skating: the skater goes there too.
+                    if let (Some((skater, physics, chase)), Some(level)) =
+                        (&mut self.skating, &self.level)
+                    {
+                        if let (Some(spawn), Some(world)) =
+                            (level.nodes.spawns.get(index), &level.world)
+                        {
+                            let facing = spawn.facing();
+                            skater.place(spawn.position, facing.x.atan2(facing.z), physics, world);
+                            *chase = ChaseCamera::behind(skater, physics);
+                        }
+                    }
                 }
             }
-            KeyCode::KeyR if !repeat => {
+            // R reverts while skating.
+            KeyCode::KeyR if !repeat && self.skating.is_none() => {
                 self.stop_camera_path();
                 if let Some(level) = &self.level {
                     self.camera = level.start;

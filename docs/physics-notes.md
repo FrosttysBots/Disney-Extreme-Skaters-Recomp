@@ -397,6 +397,13 @@ on-ground update switches on.
   up-down is `Manual1`. Each trick names its in and range animations
   (`InitAnim`, `anim` or `BalanceAnim`), played along the balance meter.
   Ported.
+- **Reverts.** Landing from vert, `Land2` sets the `Reverts` extra
+  tricks (`{ Press, R2, 200 }` and `L2`, slots `ExtraSlot1`/`2`, both
+  `Trick_Revert`) for `RevertTime = 5`. `Revert` scores 100 (`FS Revert`
+  or `BS Revert` by the flags or the last spin's way), flips the skater
+  round (`FlipAfter`), and lets a manual carry the combo on while its
+  animation plays. Ported: R within 200 ms before landing or 5 frames
+  after; the combo lands about 0.6 s later without a manual.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3
