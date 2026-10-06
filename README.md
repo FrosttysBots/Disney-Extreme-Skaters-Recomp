@@ -564,6 +564,9 @@ earn points every frame, and the total is the points times the number of
 tricks. The special meter fills with points; full, each character's
 special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
 manual right, left, grind for "Happy Trails") are on until it drains.
+The skater pushes by itself (the game's AutoKick option, on by default:
+untick it to push with W), turns, crouches, flies and lands with the
+game's own animation choices, and bails landing sideways at speed.
 Lip tricks stall on the coping of quarter pipes with a rail along it:
 press E (with a direction for other lips) as you launch off the lip, then
 balance with A and D. Not yet: transfers, spine transfers, moving objects,

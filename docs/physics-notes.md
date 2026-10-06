@@ -371,6 +371,23 @@ on-ground update switches on.
   without spine transfers (the unsafe side bails) and lip combos. On the
   Hub, every quarter pipe with a coping rail lips
   (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`).
+- **Animations and landing rules** (`TRICKS.q`). `OnGroundAI` plays
+  `StandTurnLeft`/`Right` then their `...Idle` loops while steering
+  (`CrouchTurn...` crouched), `CrouchIdle` crouched, and otherwise
+  `StandIdle`, with `PushCycle1`/`2` while pushing (`just_coasting`).
+  `GroundGone` plays `Stand2InAir`; `Airborne` holds `AirTurnLeft`/`Right`
+  while steering, loops `AirIdle`, and stretches the legs
+  (`StretchLegsInit`) with under 0.2 s of air left. `Land` bails a
+  landing faster than 500 that's 60 to 120 degrees off the way the skater
+  was going (`YawBail`), and pitch and roll bails; `Land2` plays
+  `LandBackward1`/`2` landing backwards (fakie), `LandSketchy` with a
+  "Sketchy" message 45 to 60 degrees off after 0.5 s in the air (0.75
+  crouched), `LandSmall` or `CrouchBumpDown` after under 0.2 s, and
+  `CrouchBumpDown` or `Land1`/`2` otherwise. Pushing needs the
+  controller's AutoKick option (`+0x3A38`, set by `AutoKickOn`): on, the
+  can-push test (0x800F43F0) passes under the kick speed with no button.
+  Ported: all of these (the skate crate's `anims` module picks them),
+  AutoKick on by default, and the yaw bail; not the pitch and roll bails.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

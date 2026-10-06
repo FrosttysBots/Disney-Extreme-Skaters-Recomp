@@ -42,6 +42,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use glam::{Mat4, Quat, Vec3};
 
+use crate::anims::{self, Anim, Landing};
 use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
 use crate::rails::RailHit;
@@ -218,6 +219,23 @@ pub struct Skater {
     pub spawns: Vec<(Vec3, f32)>,
     /// Print why the ground was lost, for debugging (off by default).
     pub trace: bool,
+    /// Pushing by itself while under the kick speed (the controller's
+    /// AutoKick option, on by default; the game's can-push test at
+    /// 0x800F43F0 reads it from `+0x3A38`). Off, it pushes while the up
+    /// button is held.
+    pub auto_kick: bool,
+    /// Pushing this step.
+    pub pushing: bool,
+    /// Seconds in the air so far, and how it came down last.
+    pub air_time: f32,
+    pub landing: Landing,
+    /// In the air after an ollie (rather than off an edge).
+    ollied: bool,
+    /// About to land (the `Airborne` script's legs stretch for it).
+    landing_soon: bool,
+    /// The animation showing, and seconds into it.
+    pub anim: Anim,
+    pub anim_time: f32,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -289,6 +307,18 @@ impl Skater {
             last_ground: position,
             spawns: Vec::new(),
             trace: false,
+            auto_kick: true,
+            pushing: false,
+            air_time: 0.0,
+            landing: Landing::default(),
+            ollied: false,
+            landing_soon: false,
+            anim: Anim {
+                first: "StandIdle",
+                then: None,
+                looping: true,
+            },
+            anim_time: 0.0,
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -458,6 +488,25 @@ impl Skater {
             }
         };
         self.trick = (!done).then_some(playing);
+    }
+
+    /// The steering held (-1 left to 1 right).
+    pub fn turn_input(&self) -> f32 {
+        self.last_input.turn
+    }
+
+    pub fn is_crouched(&self) -> bool {
+        self.last_input.crouch
+    }
+
+    /// In the air off an ollie.
+    pub fn ollied(&self) -> bool {
+        self.ollied
+    }
+
+    /// About to land.
+    pub fn landing_soon(&self) -> bool {
+        self.landing_soon
     }
 
     /// The balance meter from -1 to 1 while balancing a manual or a grind.
@@ -643,6 +692,13 @@ impl Skater {
             }
         }
         self.update_special();
+        let anim = anims::choose(self);
+        if anim == self.anim {
+            self.anim_time += STEP;
+        } else {
+            self.anim = anim;
+            self.anim_time = 0.0;
+        }
     }
 
     /// The special meter, after each step (the score object, with
@@ -798,6 +854,8 @@ impl Skater {
             offset: self.position.dot(lip.out),
         });
         self.lip_out = lip.trick.out.map(|anim| (anim, 0.0));
+        self.ollied = false;
+        self.air_time = 0.0;
         self.set_action(Action::Air);
     }
 
@@ -1106,7 +1164,15 @@ impl Skater {
         let gravity = Vec3::Y * p.ground_gravity;
         velocity += (gravity - up * gravity.dot(up)) * STEP;
 
-        if input.push {
+        // Pushing: by itself with AutoKick, or holding up; not while
+        // braking, balancing a manual or bailing.
+        let bailing = matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        );
+        let push = (input.push || self.auto_kick) && !input.brake && !self.manual && !bailing;
+        self.pushing = false;
+        if push {
             let (top, accel, friction) = if input.crouch {
                 (
                     p.max_crouched_kick_speed,
@@ -1125,6 +1191,7 @@ impl Skater {
             if velocity.length() <= top {
                 let direction = velocity.try_normalize().unwrap_or(forward);
                 velocity += direction * accel * STEP;
+                self.pushing = true;
             }
             velocity = drag(velocity, friction);
         }
@@ -1170,6 +1237,8 @@ impl Skater {
             }
             self.velocity = velocity;
             self.on_ground = false;
+            self.ollied = true;
+            self.air_time = 0.0;
             // Off the ground by a unit, as the game lands the skater a unit
             // above it: standing exactly on the surface, the first line of
             // the jump can catch the floor from below (rounding puts the
@@ -1271,6 +1340,8 @@ impl Skater {
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
+                self.ollied = false;
+                self.air_time = 0.0;
                 self.manual = false;
                 self.take_off_vert(p);
                 self.up = Vec3::Y;
@@ -1292,7 +1363,7 @@ impl Skater {
             && self.action_time < 0.5
         {
             self.action
-        } else if self.action == Action::Landing && self.action_time < 0.3 {
+        } else if self.action == Action::Landing && self.action_time < 0.5 {
             Action::Landing
         } else if input.crouch {
             Action::Crouching
@@ -1332,6 +1403,13 @@ impl Skater {
         if let Some((_, time)) = self.lip_out.as_mut() {
             *time += STEP;
         }
+        self.air_time += STEP;
+        // Landing within the next 0.2 seconds (`GetAirTimeLeft`)?
+        let fall = self.velocity.y.min(0.0) * 0.2 + 0.5 * p.air_gravity * 0.04;
+        self.landing_soon = self.velocity.y < 0.0
+            && world
+                .ray(self.position, self.position + Vec3::Y * fall)
+                .is_some();
         self.air_tricks(input);
         // Spinning at the air rotation stat (0x800EE4CC); the turn counts
         // towards the latest trick's spin.
@@ -1400,8 +1478,25 @@ impl Skater {
                     self.set_action(Action::BailGrind);
                     return;
                 }
+                // How it came down (`Land`, `Land2`): facing against the
+                // way it was going, how far off, and how long it flew.
+                let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
+                let cos = flat.normalize_or_zero().dot(self.forward());
+                let yaw = cos.abs().clamp(0.0, 1.0).acos().to_degrees();
+                let air_time = self.air_time;
+                self.landing = Landing {
+                    backwards: flat.length() > 10.0 && cos < 0.0,
+                    little_air: air_time < 0.2,
+                    sketchy: (45.0..60.0).contains(&yaw)
+                        && air_time > if input.crouch { 0.75 } else { 0.5 },
+                    short: air_time < 0.5,
+                };
+                self.air_time = 0.0;
+                // Landing sideways at speed: `YawBail` (faster than 500,
+                // 60 to 120 degrees off).
+                let yaw_bail = flat.length() > 500.0 && yaw >= 60.0;
                 // Landing mid-trick (`BailOn`): a bail.
-                if self.bail_on() {
+                if self.bail_on() || yaw_bail {
                     self.trick = None;
                     self.end_combo(false);
                     self.set_action(Action::Bail);

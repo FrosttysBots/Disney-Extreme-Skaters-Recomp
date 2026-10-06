@@ -2,6 +2,7 @@
 //! constants ([`constants`]), ray casts against a level's collision
 //! ([`world`]) and the skater that rolls over it ([`skater`]).
 
+pub mod anims;
 pub mod balance;
 pub mod constants;
 pub mod rails;
@@ -10,6 +11,7 @@ pub mod skater;
 pub mod tricks;
 pub mod world;
 
+pub use anims::{Anim, Landing};
 pub use balance::{Balance, BalanceParams, Lean};
 pub use constants::{Physics, Stats};
 pub use rails::{RailHit, Rails, Segment};

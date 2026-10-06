@@ -531,6 +531,7 @@ impl<'a> App<'a> {
                     score: 0,
                     combo: None,
                     special: (0.0, false),
+                    auto_kick: true,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -737,6 +738,7 @@ impl<'a> App<'a> {
             flip: held(KeyCode::KeyQ),
             grab: held(KeyCode::KeyF),
         };
+        skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
         self.placement = skater.placement();
         self.model.character.balance = skater.balance_meter();
@@ -744,39 +746,32 @@ impl<'a> App<'a> {
         self.model.character.special = (skater.special_meter / 3000.0, skater.special);
         self.model.character.combo = combo_text(skater);
 
-        // Animation: by what the skater is doing.
-        let (names, looping): (&[&str], bool) = match skater.action {
-            SkateAction::Standing | SkateAction::Rolling => (&["StandIdle"], true),
-            SkateAction::Pushing => (&["PushCycle1"], true),
-            SkateAction::Crouching => (&["CrouchIdle", "Crouch"], true),
-            SkateAction::Air => (&["Ollie", "AirIdle"], false),
-            SkateAction::Landing => (&["Land1", "LandSmall"], false),
-            SkateAction::FlailLeft => (&["FlailLeft"], false),
-            SkateAction::FlailRight => (&["FlailRight"], false),
-            SkateAction::Grinding => (&["GrindIn1", "GrindRange1"], false),
-            SkateAction::Manual if skater.special_manual => {
-                (&["SpecialManualIn", "SpecialManualRange"], false)
-            }
-            SkateAction::Manual => (&["ManualIn1", "ManualRange1"], false),
-            SkateAction::BailManual => (&["BailManual", "BailManualGetUp"], false),
-            SkateAction::BailGrind => (&["BailGrind", "BailGrindGetUp"], false),
-            SkateAction::Bail => (&["Bail1", "BailGetUp1"], false),
-            SkateAction::Lip => (&["LipRange1"], false),
-        };
-        let mut time = skater.action_time;
+        // Animation: the one the skater picked (the game's scripts' choice),
+        // its first part once and then the next looping, or looping, or held
+        // on its last frame.
+        let pick = skater.anim;
+        let mut time = skater.anim_time;
         let mut chosen = None;
-        for (i, name) in names.iter().enumerate() {
-            let Some(index) = character.animation(name) else {
-                continue;
-            };
-            let duration = character.animations[index].1.duration;
-            // One-off moves: the first plays, then the next one loops.
-            if !looping && i + 1 < names.len() && time > duration {
-                time -= duration;
-                continue;
+        let mut hold = false;
+        // A character without the first part (Buzz and Simba have no
+        // `Crouch`) goes straight to the next.
+        if let (None, Some(then)) = (
+            character.animation(pick.first),
+            pick.then.and_then(|then| character.animation(then)),
+        ) {
+            chosen = Some((then, character.animations[then].1.duration));
+        } else if let Some(first) = character.animation(pick.first) {
+            let duration = character.animations[first].1.duration;
+            match pick.then.and_then(|then| character.animation(then)) {
+                Some(then) if time > duration => {
+                    time -= duration;
+                    chosen = Some((then, character.animations[then].1.duration));
+                }
+                _ => {
+                    hold = !pick.looping;
+                    chosen = Some((first, duration));
+                }
             }
-            chosen = Some((index, duration));
-            break;
         }
         // A lip trick shows its own animations: in, held along the meter,
         // and out.
@@ -824,6 +819,9 @@ impl<'a> App<'a> {
             model.animation = index;
             self.shown_animation = index;
             model.duration = duration;
+            if hold {
+                time = time.min(duration * 0.999);
+            }
             model.time = if duration > 0.0 {
                 time.min(duration * 0.999) % duration
             } else {

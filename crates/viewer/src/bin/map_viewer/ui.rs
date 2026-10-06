@@ -50,6 +50,8 @@ pub struct CharacterModel {
     pub score: u32,
     /// The special meter (0 to 1) and whether it's full.
     pub special: (f32, bool),
+    /// The AutoKick option.
+    pub auto_kick: bool,
     pub combo: Option<String>,
 }
 
@@ -403,6 +405,9 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             actions.push(Action::ToggleSkate);
         }
     });
+    ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
+        "The game's controller option: the skater pushes by itself while under          its kick speed. Off, hold W to push.",
+    );
     if model.skating {
         return;
     }

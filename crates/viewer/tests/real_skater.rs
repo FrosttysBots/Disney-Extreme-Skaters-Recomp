@@ -185,19 +185,69 @@ fn real_skater_on_the_hub() {
         turn: 1.0,
         ..Input::default()
     };
-    ollie_with(&mut spinner, spin_flip, true);
+    // A clean 180: turn for long enough (about 0.43 s at the air rotation
+    // stat), then straighten out and land fakie. Held all the way round
+    // it would land sideways: the game's yaw bail.
+    let crouch = Input {
+        crouch: true,
+        ..Input::default()
+    };
+    for _ in 0..12 {
+        spinner.update(crouch, &physics, &world, 1.0 / 60.0);
+    }
+    spinner.update(Input::default(), &physics, &world, 1.0 / 60.0);
+    let spin_frames = (std::f32::consts::PI / physics.air_rotation * 60.0) as usize;
+    for frame in 0..240 {
+        let input = if frame < spin_frames {
+            spin_flip
+        } else {
+            Input::default()
+        };
+        spinner.update(input, &physics, &world, 1.0 / 60.0);
+        if frame > 2 && spinner.on_ground {
+            break;
+        }
+    }
     let landed = spinner.last_combo.clone().expect("a combo");
     println!(
-        "spinning flip: {} x {} spins, total {}",
-        landed.combo.tricks[0].name, landed.combo.tricks[0].spins, landed.total
+        "spinning flip: {} x {} spins, total {}, bailed {}, landed backwards {}",
+        landed.combo.tricks[0].name,
+        landed.combo.tricks[0].spins,
+        landed.total,
+        landed.bailed,
+        spinner.landing.backwards
     );
-    if !landed.bailed {
-        // Down-right is the "L" flip slot: Quickest Boots in the West,
-        // 250 points, x1.5 for one 180.
-        assert_eq!(landed.combo.tricks[0].name, "Quickest Boots in the West");
-        assert_eq!(landed.combo.tricks[0].spins, 1);
-        assert_eq!(landed.total, 375);
+    // Down-right is the "L" flip slot: Quickest Boots in the West, 250
+    // points, x1.5 for one 180.
+    assert!(!landed.bailed);
+    assert!(spinner.landing.backwards, "a 180 lands fakie");
+    assert_eq!(landed.combo.tricks[0].name, "Quickest Boots in the West");
+    assert_eq!(landed.combo.tricks[0].spins, 1);
+    assert_eq!(landed.total, 375);
+
+    // Spinning all the way down lands sideways: at speed, the yaw bail.
+    let mut sideways = Skater::new(start.position, facing.x.atan2(facing.z));
+    sideways.tricks = trickster.tricks.clone();
+    for _ in 0..90 {
+        sideways.update(crouch, &physics, &world, 1.0 / 60.0);
     }
+    sideways.update(Input::default(), &physics, &world, 1.0 / 60.0);
+    let spin = Input {
+        turn: 1.0,
+        ..Input::default()
+    };
+    for frame in 0..240 {
+        sideways.update(spin, &physics, &world, 1.0 / 60.0);
+        if frame > 2 && sideways.on_ground {
+            break;
+        }
+    }
+    println!(
+        "spun all the way: {:?}, speed {:.0}",
+        sideways.action,
+        sideways.speed()
+    );
+    assert_eq!(sideways.action, Action::Bail);
 
     // The special grab: down, right, then flip, with the special meter
     // full; without it, the same presses do an ordinary trick.
