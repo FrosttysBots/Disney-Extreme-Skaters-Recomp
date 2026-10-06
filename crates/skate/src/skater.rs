@@ -3,6 +3,9 @@
 //! This is a first version driven by the game's constants (see
 //! `constants`), not yet a frame-exact copy of the game's physics: that
 //! needs the update code in `main.dol` compared against the running game.
+//! What's been read from that code so far is in `docs/physics-notes.md`;
+//! pushing (along the current velocity, up to the kick speed) and air
+//! gravity (divided by the hang-time stat) already match it.
 //!
 //! - **On the ground** the skater follows the surface: each step it moves
 //!   along its heading, then looks for ground from `ground_snap_up` above
@@ -210,7 +213,8 @@ impl Skater {
 
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
         self.heading -= input.turn * p.air_rotation * STEP * 0.5;
-        self.velocity.y += p.air_gravity * STEP;
+        // As the game does: gravity divided by the hang-time stat.
+        self.velocity.y += p.air_gravity / p.air_hang.max(0.01) * STEP;
         let target = self.position + self.velocity * STEP;
         // Hit something on the way?
         let from = self.position + Vec3::Y * p.forward_collision_height;

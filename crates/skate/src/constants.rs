@@ -97,7 +97,12 @@ pub struct Physics {
     pub crouched_acceleration: f32,
     pub max_speed: f32,
     pub jump_speed: f32,
+    /// Gravity in the air, before dividing by `air_hang` (the game does
+    /// that: `main.dol` at 0x800FC634).
     pub air_gravity: f32,
+    /// The hang-time stat's divisor for air gravity (1.0 at every stat on
+    /// the US disc; vert air uses `Physics_Vert_hang_Stat`, 1.0-1.1).
+    pub air_hang: f32,
     pub ground_gravity: f32,
     pub brake_acceleration: f32,
     pub rolling_friction: f32,
@@ -143,6 +148,7 @@ impl Physics {
             max_speed: scaled("Skater_Max_Speed_Stat", 800.0),
             jump_speed: scaled("Physics_Jump_Speed_Stat", 425.0),
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
+            air_hang: scaled("Physics_Air_hang_Stat", 1.0),
             ground_gravity: plain("Physics_Ground_Gravity", -1000.0),
             brake_acceleration: plain("Physics_Brake_Acceleration", 900.0),
             rolling_friction: plain("Physics_Rolling_Friction", 0.00001),

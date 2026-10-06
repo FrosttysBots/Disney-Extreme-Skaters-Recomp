@@ -539,8 +539,13 @@ three seconds, and an ollie rises 63 units over 38 frames, as her jump
 speed and the gravity predict.
 
 It is not yet the game's own physics: that needs the update code in
-`main.dol` compared frame by frame against Dolphin. Turning rates are
-read as radians a second and the camera distances as feet, both guesses.
+`main.dol` compared frame by frame against Dolphin. That work has started:
+since the engine reads each constant by its name's checksum, those
+checksums lead straight to the physics code, and pushing and air gravity
+(divided by the hang-time stat) already match it.
+[docs/physics-notes.md](docs/physics-notes.md) maps what's been read so
+far. Turning rates are read as radians a second and the camera distances
+as feet, both guesses for now.
 
 ## Roadmap
 
