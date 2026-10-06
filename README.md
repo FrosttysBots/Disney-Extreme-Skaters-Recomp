@@ -59,7 +59,12 @@ around takes over from wherever it is.
 panel included, without opening a window. Add
 `--character jessie --animation Ollie --time 0.4` to show a character
 there, with the camera looking at them, or `--camera-path Cam_Plane
---time 8` to view from a camera path.
+--time 8` to view from a camera path. For screenshots to share, `--clean`
+leaves out the panel and markers, `--size 1920x1080` sets the size,
+`--spawn N` picks the spawn point, `--orbit`, `--distance` and
+`--camera-height` place the camera around the character, and `--lift`
+raises them into the air (jump height comes from the game's physics, not
+the animations). The pictures in `docs/screenshots` were made that way.
 
 ## Crates
 

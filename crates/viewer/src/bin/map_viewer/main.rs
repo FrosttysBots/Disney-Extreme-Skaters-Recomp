@@ -69,6 +69,52 @@ struct Args {
     /// camera path)
     #[arg(long, requires = "screenshot", default_value_t = 0.0)]
     time: f32,
+    /// For --screenshot: leave out the panel, rails and spawn markers
+    #[arg(long, requires = "screenshot")]
+    clean: bool,
+    /// For --screenshot: image size as WIDTHxHEIGHT
+    #[arg(long, requires = "screenshot", default_value = "1400x850", value_parser = parse_size)]
+    size: (u32, u32),
+    /// For --screenshot: the spawn point (by number in the panel's list,
+    /// from 0) the character stands on, instead of the level's start
+    #[arg(long, requires = "screenshot")]
+    spawn: Option<usize>,
+    /// For --screenshot: camera angle around the character in degrees
+    /// (0 = in front, 90 = their left side)
+    #[arg(
+        long,
+        requires = "screenshot",
+        default_value_t = 0.0,
+        allow_negative_numbers = true
+    )]
+    orbit: f32,
+    /// For --screenshot: camera distance from the character
+    #[arg(long, requires = "screenshot", default_value_t = 170.0)]
+    distance: f32,
+    /// For --screenshot: raise the character this far off the ground, as if
+    /// in the air (animations leave jump height to the game's physics)
+    #[arg(long, requires = "screenshot", default_value_t = 0.0)]
+    lift: f32,
+    /// For --screenshot: camera height above the character's feet
+    #[arg(
+        long,
+        requires = "screenshot",
+        default_value_t = 75.0,
+        allow_negative_numbers = true
+    )]
+    camera_height: f32,
+}
+
+fn parse_size(text: &str) -> Result<(u32, u32), String> {
+    let (w, h) = text
+        .split_once(['x', 'X'])
+        .ok_or("expected WIDTHxHEIGHT, e.g. 1920x1080")?;
+    let parse = |v: &str| v.trim().parse::<u32>().map_err(|e| e.to_string());
+    let (w, h) = (parse(w)?, parse(h)?);
+    if !(16..=8192).contains(&w) || !(16..=8192).contains(&h) {
+        return Err("width and height must be 16 to 8192".into());
+    }
+    Ok((w, h))
 }
 
 fn main() -> Result<()> {
@@ -244,10 +290,18 @@ fn path_camera(path: &CameraPath, seconds: f32) -> ScriptedCamera {
 
 /// A camera in front of a character placed by `placement`, looking at it.
 fn camera_facing(placement: Mat4) -> FlyCamera {
+    camera_around(placement, 0.0, 170.0, 75.0)
+}
+
+/// A camera `distance` from a character, `orbit` degrees around them from
+/// the front (toward their left), `height` above their feet, looking at
+/// their middle.
+fn camera_around(placement: Mat4, orbit: f32, distance: f32, height: f32) -> FlyCamera {
     let position = placement.transform_point3(Vec3::ZERO);
     let forward = placement.transform_vector3(Vec3::Z).normalize_or(Vec3::Z);
+    let direction = Quat::from_rotation_y(orbit.to_radians()) * forward;
     FlyCamera::looking_at(
-        position + forward * 170.0 + Vec3::Y * 75.0,
+        position + direction * distance + Vec3::Y * height,
         position + Vec3::Y * 45.0,
     )
 }
@@ -983,9 +1037,11 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (mut loaded, stats) = load_level(&mut data, &levels[index], &device, &queue, format)?;
     // A spawn marker would stand right where the character does.
-    loaded
-        .renderer
-        .set_markers(&loaded.nodes.geometry(true, args.character.is_none()));
+    loaded.renderer.set_markers(
+        &loaded
+            .nodes
+            .geometry(!args.clean, !args.clean && args.character.is_none()),
+    );
 
     let mut settings = Settings::default();
     let mut app = App::new(&mut settings);
@@ -1017,15 +1073,21 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         app.shown_animation = app.model.character.animation;
         app.model.character.time = args.time;
         loaded.renderer.set_character(Some(&character.mesh));
-        app.placement = loaded.home;
-        camera = camera_facing(loaded.home);
+        app.placement = match args.spawn {
+            Some(i) => placement_at(loaded.nodes.spawns.get(i).with_context(|| {
+                format!("the level has {} spawn points", loaded.nodes.spawns.len())
+            })?),
+            None => loaded.home,
+        };
+        app.placement = Mat4::from_translation(Vec3::Y * args.lift) * app.placement;
+        camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
         app.level = Some(loaded);
         // The blink clock follows --time too, so blinks can be captured.
         app.animate(0.0, args.time);
         loaded = app.level.take().unwrap();
     }
 
-    let (width, height) = (1400, 850);
+    let (width, height) = args.size;
     let egui_ctx = egui::Context::default();
     let mut egui_renderer =
         egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
@@ -1039,11 +1101,16 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     // The first pass lays things out; the second draws them settled. Keep
     // the first pass's texture uploads: they include the font atlas, which
     // every egui shape is drawn with.
+    let clean = args.clean;
     let first = egui_ctx.run(input(), |ctx| {
-        ui::draw(ctx, &mut app.model);
+        if !clean {
+            ui::draw(ctx, &mut app.model);
+        }
     });
     let mut output = egui_ctx.run(input(), |ctx| {
-        ui::draw(ctx, &mut app.model);
+        if !clean {
+            ui::draw(ctx, &mut app.model);
+        }
     });
     let mut textures = first.textures_delta;
     textures.append(output.textures_delta);
