@@ -33,6 +33,38 @@ fn real_skater_on_the_hub() {
         );
     }
     println!("grind {:?}, manual {:?}", book.grind, book.manual);
+    // Every character's trick table loads: air tricks, five grinds and
+    // manuals, lips, and specials.
+    for id in [
+        "buzz", "woody", "jessie", "zurg", "tarzan", "tantor", "jane", "terk", "simba", "timon",
+        "rafiki", "nala", "kid",
+    ] {
+        let stats = Stats::of(&program, id);
+        let book = skate::TrickBook::new(&program, id, &stats);
+        let grinds: std::collections::BTreeSet<_> =
+            book.grinds.iter().map(|(_, t)| t.name.clone()).collect();
+        let manuals: std::collections::BTreeSet<_> =
+            book.manuals.iter().map(|(_, t)| t.name.clone()).collect();
+        println!(
+            "{id}: {} tricks, {} grinds, {} manuals, {} lips, specials {:?} / {:?} / {:?}",
+            book.tricks.len(),
+            grinds.len(),
+            manuals.len(),
+            book.lips.len(),
+            book.special_air
+                .map(|(_, _, i)| book.tricks[i].name.clone()),
+            book.special_manual.as_ref().map(|(_, _, (n, _))| n.clone()),
+            book.special_lip.as_ref().map(|(_, _, l)| l.name.clone()),
+        );
+        assert!(book.tricks.len() >= 5, "{id}");
+        assert_eq!(grinds.len(), 5, "{id}");
+        assert_eq!(manuals.len(), 5, "{id}");
+        assert!(!book.lips.is_empty(), "{id}");
+        assert!(
+            book.special_air.is_some() && book.special_manual.is_some(),
+            "{id}"
+        );
+    }
     let flip_down = book
         .air_trick(skate::Button::Flip, Some(skate::Dir::Down))
         .unwrap();
