@@ -21,8 +21,8 @@ to that engine family too.
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals and balance, on any level |
-| Tricks | Air flips and grabs, grinds and manuals from each character's trick table, with combos and bails |
+| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals, lips and balance, on any level |
+| Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
 | Gameplay, menus, audio | Not started yet |
 
 Every format is checked against every file on the US disc (`GEXE52`):
@@ -105,7 +105,9 @@ front of them, and **Blink** makes them blink every few seconds (see
 [Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
 frames.
 
-**Skate** puts the character on the level: W pushes, S brakes, A/D steer,
+**Skate** puts the character on the level (an alpha: see
+[docs/alpha-testing.md](docs/alpha-testing.md) for how to test it and the
+full controls): W pushes, S brakes, A/D steer,
 holding Space crouches and letting go ollies, E grinds (ollie at a rail and
 press E: like the game, grinds start in the air, within half a second of the
 press),
@@ -598,9 +600,14 @@ feet, both guesses for now.
    skater.
 4. **Skater physics.** The game's constants, and its update code from
    `main.dol` for the ground, walls, air, landing, grinding, vert air,
-   manuals and balance (done; wall rides are unused in this game). Next: a
-   frame-by-frame check against Dolphin, then lips and transfers.
-5. **Gameplay.** Tricks, scoring, goals, game modes, UI and audio.
+   manuals, lips and balance (done; wall rides are unused in this game).
+   Next: a frame-by-frame check against Dolphin, and transfers.
+5. **Tricks and scoring.** Each character's air tricks, grinds, manuals,
+   lips and specials from the trick tables, reverts, the game's combo
+   scoring and special meter, its animation choices, a chase camera and
+   gamepad controls: skating is at an alpha (done; see
+   [docs/alpha-testing.md](docs/alpha-testing.md)).
+6. **Gameplay.** Goals, game modes, the front end, UI and audio.
 
 ## Reverse-engineering setup
 
