@@ -1,10 +1,66 @@
-# extreme-skate-rs
+# Disney's Extreme Skate Adventure, in Rust
 
-A Rust reimplementation of *Disney's Extreme Skate Adventure* (Toys for Bob, 2003),
-built by studying the GameCube release. It runs on Neversoft's THPS4-era engine.
+![Twelve characters mid-trick across the game's levels, rendered by the Map Viewer](docs/screenshots/collage.png)
 
-This repository contains **only original code**. To play or develop, you
-supply your own disc image; game assets are never committed (see `.gitignore`).
+A from-scratch Rust reimplementation of *Disney's Extreme Skate Adventure*
+(Toys for Bob, 2003), built by studying the GameCube release. The game runs
+on Neversoft's THPS4-era engine, so most of what's worked out here applies
+to that engine family too.
+
+> **No game data is included.** You need your own copy of the game; the
+> tools read it from your disc image, and `.gitignore` keeps extracted files
+> out of the repository. This project isn't affiliated with or endorsed by
+> Disney, Toys for Bob, Neversoft or Activision.
+
+## What works so far
+
+| Area | Status |
+|---|---|
+| Disc images and `.prg` archives | Read straight from the ISO, no unpacking needed |
+| Textures, models, skinned characters, levels | Decoded and drawn with their real blend modes |
+| Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
+| Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
+| Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed |
+| Physics, gameplay, menus, audio | Not started yet |
+
+Every format is checked against every file on the US disc (`GEXE52`):
+69 archives (5,616 files), 3,364 textures and 48 loading screens, 408
+models, characters and levels, 271 collision files (458,036 faces, 110,174
+BSP nodes), 347 scripts, 53 skeletons, 2,197 animations and 292 camera
+paths all load. The original export tool corrupted many count and offset
+fields (it turned `0x20` bytes into `0x00`); the parsers repair them, and
+each section below says how.
+
+## Quick start
+
+1. Install [Rust](https://rustup.rs) (1.85 or newer).
+2. Build the Map Viewer:
+   ```
+   cargo build --release -p desa_viewer
+   ```
+3. Run `target/release/desa-map-viewer`, then pick your disc image with
+   **Open disc image...** (or put the `.iso` next to the program). It must
+   be a plain `.iso` / `.gcm`; convert `.rvz` and other formats in Dolphin
+   first (right-click the game, **Convert File...**, **Format: ISO**).
+
+Developed on Windows; other platforms should work (it uses wgpu and winit)
+but haven't been tried.
+
+## Contents
+
+- [Map Viewer](#map-viewer): fly around the levels with characters,
+  pedestrians and camera paths
+- [Crates](#crates) and [command-line tools](#usage)
+- Formats: [levels](#level-viewer), [objects and pedestrians](#objects-and-pedestrians),
+  [scripts](#scripts-qb), [collision](#collision-format),
+  [models](#model-formats), [skeletons and animations](#skeletons-and-animations),
+  [textures](#texture-formats)
+- [Roadmap](#roadmap) and [reverse-engineering setup](#reverse-engineering-setup)
+
+| | |
+|---|---|
+| ![Jessie in a handstand manual on the Hub pier](docs/screenshots/jessie_handstand.png) | ![Buzz in an air grab over Zurg's Home](docs/screenshots/buzz_grab.png) |
+| ![Timon riding Pumbaa through the canyon](docs/screenshots/timon_grab.png) | ![Tarzan grinding by the treehouse waterfall](docs/screenshots/tarzan_grind.png) |
 
 ## Map Viewer
 
@@ -83,9 +139,9 @@ camera directly. The pictures in `docs/screenshots` were made that way.
 | `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
 | `ngc_model` | Parses `.mdl.ngc` models, `.skin.ngc` skinned characters and `.scn.ngc` level scenes: materials, vertex arrays, bone weights, triangle strips |
 | `ngc_anim` | Parses `.ske` skeletons and `.ska.ngc` animations, samples them and poses skinned characters |
-| `ngc_collision` | Parses `.col.ngc` collision meshes, repairing the counts the original tool corrupted |
+| `ngc_collision` | Parses `.col.ngc` collision meshes and their BSP trees, repairing the fields the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
-| `desa_viewer` | Level and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
+| `desa_viewer` | Level, object and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
 ## Usage
