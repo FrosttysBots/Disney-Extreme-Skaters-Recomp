@@ -7,7 +7,8 @@
 //! `cargo run --release -p desa_viewer --example skate_check [game data] [level] [runs]`
 //!
 //! `MISSES=1` lists the rail approaches that didn't grind; `TRACE=run:frame`
-//! prints 25 frames of a random run from there.
+//! prints 25 frames of a random run from there (and why the ground was
+//! lost); `PROBE=x,y,z` lists the faces around a spot.
 use std::path::Path;
 
 use desa_viewer::nodes::LevelNodes;
@@ -45,6 +46,32 @@ fn main() {
     );
     let world = World::new(collision).with_rails(rails.clone());
     let dt = 1.0 / 60.0;
+
+    // PROBE=x,y,z: every face on the vertical line through a spot, and
+    // what's around it at knee height.
+    if let Ok(probe) = std::env::var("PROBE") {
+        let v: Vec<f32> = probe.split(',').map(|x| x.parse().unwrap()).collect();
+        let at = Vec3::new(v[0], v[1], v[2]);
+        let to = at - Vec3::Y * 60.0;
+        let mut from = at + Vec3::Y * 30.0;
+        while let Some(hit) = world.ray(from, to) {
+            println!(
+                "down: {:.2} normal {:.2} flags {:#x}",
+                hit.point, hit.normal, hit.flags
+            );
+            from = hit.point - Vec3::Y * 0.01;
+        }
+        for (dx, dz) in [(15.0, 0.0), (-15.0, 0.0), (0.0, 15.0), (0.0, -15.0)] {
+            let knee = at + Vec3::Y * 8.1;
+            if let Some(hit) = world.ray(knee, knee + Vec3::new(dx, 0.0, dz)) {
+                println!(
+                    "side {dx} {dz}: {:.2} normal {:.2} flags {:#x}",
+                    hit.point, hit.normal, hit.flags
+                );
+            }
+        }
+        return;
+    }
 
     // Rail approaches.
     let (mut tried, mut grinded) = (0, 0);
@@ -139,6 +166,7 @@ fn main() {
                 let (r, f) = t.split_once(':')?;
                 Some((r.parse::<u32>().ok()?, f.parse::<u32>().ok()?))
             });
+            skater.trace = trace.is_some_and(|(r, f)| r == run && (f..f + 25).contains(&frame));
             if trace.is_some_and(|(r, f)| r == run && (f..f + 25).contains(&frame)) {
                 println!(
                     "{frame}: {:?} ground {} grind {:?} v {:.0} at {after:.1} (input push {} crouch {} grind {})",

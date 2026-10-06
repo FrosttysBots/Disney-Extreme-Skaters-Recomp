@@ -216,6 +216,8 @@ pub struct Skater {
     last_ground: Vec3,
     /// The level's spawn points (position and heading), for that.
     pub spawns: Vec<(Vec3, f32)>,
+    /// Print why the ground was lost, for debugging (off by default).
+    pub trace: bool,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -286,6 +288,7 @@ impl Skater {
             since_rail: f32::MAX,
             last_ground: position,
             spawns: Vec::new(),
+            trace: false,
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -1219,10 +1222,27 @@ impl Skater {
         // `ground_snap_up` above the new spot.
         let from = target + up * p.ground_snap_up;
         let to = target - up * 200.0;
+        // A wall above the new spot (an overhang the skater has ducked
+        // under) is looked past for the ground beneath it.
         let ground = world
-            .ray(from, to)
+            .ray_past(from, to, |hit| {
+                !is_wall(hit, p) || up.dot(hit.point - target) <= 0.0
+            })
             .filter(|hit| !is_wall(hit, p))
-            .filter(|hit| sticks(hit, self.position, target, forward, up, p));
+            .filter(|hit| sticks(hit, self.position, target, forward, up, p))
+            // This crate's safeguard: a wall bounce can leave the new spot
+            // just inside a block whose top the tilted line misses (it
+            // goes in through the side); ground straight above the feet,
+            // within the snap distances, holds the skater.
+            .or_else(|| {
+                world
+                    .ray_past(
+                        target + Vec3::Y * p.ground_snap_up,
+                        target - Vec3::Y * p.ground_snap_down,
+                        |hit| !is_wall(hit, p),
+                    )
+                    .filter(|hit| hit.point.y >= target.y)
+            });
         match ground {
             Some(hit) => {
                 self.position = hit.point;
@@ -1232,6 +1252,20 @@ impl Skater {
                 self.velocity = forward * speed;
             }
             None => {
+                if self.trace {
+                    let first = world.ray(from, to);
+                    let past = world.ray_past(from, to, |hit| {
+                        !is_wall(hit, p) || up.dot(hit.point - target) <= 0.0
+                    });
+                    eprintln!(
+                        "ground gone: from {:?} at {:?} to {target:?}, up {up:?}; first {:?}; past walls {:?}; stick {:?}",
+                        self.position,
+                        from,
+                        first.map(|h| (h.point, h.normal, is_wall(&h, p))),
+                        past.map(|h| (h.point, h.normal, is_wall(&h, p))),
+                        past.map(|h| sticks(&h, self.position, target, forward, up, p)),
+                    );
+                }
                 // The ground is gone: off an edge, or over the lip of a
                 // kicker (the game's `GroundGone`).
                 self.position = target;

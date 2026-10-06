@@ -47,6 +47,21 @@ impl World {
         self
     }
 
+    /// The first face between `from` and `to` that `keep` accepts, looking
+    /// past (up to a few) faces it doesn't.
+    pub fn ray_past(&self, from: Vec3, to: Vec3, keep: impl Fn(&Hit) -> bool) -> Option<Hit> {
+        let direction = (to - from).normalize_or_zero();
+        let mut start = from;
+        for _ in 0..8 {
+            let hit = self.ray(start, to)?;
+            if keep(&hit) {
+                return Some(hit);
+            }
+            start = hit.point + direction * 0.01;
+        }
+        None
+    }
+
     /// The first solid face between `from` and `to`. Faces flagged
     /// non-collidable (triggers, decals) are passed through.
     pub fn ray(&self, from: Vec3, to: Vec3) -> Option<Hit> {
