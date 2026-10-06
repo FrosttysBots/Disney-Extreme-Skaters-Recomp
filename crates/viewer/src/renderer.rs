@@ -1,8 +1,9 @@
 //! Draws a level, its sky and a character with wgpu.
 //!
 //! Order: sky (no depth test, camera-centered), then opaque materials, then
-//! transparent materials by draw order, then the character (posed on the
-//! CPU; see `character`), which also gets simple directional lighting. Every material draws all of its
+//! transparent materials by draw order, then any extra layers (objects,
+//! pedestrians), then the character (posed on the CPU; see `character`).
+//! Characters and lit layers get simple directional lighting. Every material draws all of its
 //! passes, each with the engine's blend mode for that pass. Depth uses
 //! reversed Z with an infinite far plane, which keeps precision across
 //! levels that span more than 100,000 units.
@@ -184,6 +185,8 @@ pub struct Renderer {
     sky: Option<GpuLevel>,
     /// Its vertex buffer is rewritten every frame with the posed vertices.
     character: Option<GpuLevel>,
+    /// Extra meshes drawn with the level, and whether each is shown.
+    layers: Vec<(GpuLevel, bool)>,
     pass_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     collision: Option<(wgpu::Buffer, u32)>,
@@ -283,6 +286,7 @@ impl Renderer {
             world,
             sky,
             character: None,
+            layers: Vec::new(),
             pass_layout,
             sampler,
             collision,
@@ -319,6 +323,51 @@ impl Renderer {
                 true,
             )
         });
+    }
+
+    /// Adds a mesh drawn with the level (`lit`: lighting by normal, as for
+    /// characters) and returns its id, or `None` if it's empty. Layers can
+    /// be hidden and have their vertices replaced, like the character's.
+    pub fn add_layer(&mut self, mesh: &Level, lit: bool) -> Option<usize> {
+        if mesh.indices.is_empty() {
+            return None;
+        }
+        let gpu = upload_level(
+            &self.device,
+            &self.queue,
+            &self.pass_layout,
+            &self.sampler,
+            mesh,
+            lit,
+        );
+        self.layers.push((gpu, true));
+        Some(self.layers.len() - 1)
+    }
+
+    pub fn show_layer(&mut self, id: Option<usize>, shown: bool) {
+        if let Some(layer) = id.and_then(|id| self.layers.get_mut(id)) {
+            layer.1 = shown;
+        }
+    }
+
+    /// Replaces a layer's vertices from `first` on (same order as its mesh).
+    pub fn update_layer(&self, id: Option<usize>, first: usize, vertices: &[Vertex]) {
+        if let Some((layer, _)) = id.and_then(|id| self.layers.get(id)) {
+            write_vertices(&self.queue, layer, first, vertices);
+        }
+    }
+
+    /// Replaces the level's vertices (or the sky's) from `first` on, for
+    /// animated vertex colors.
+    pub fn update_world(&self, sky: bool, first: usize, vertices: &[Vertex]) {
+        let target = if sky {
+            self.sky.as_ref()
+        } else {
+            Some(&self.world)
+        };
+        if let Some(level) = target {
+            write_vertices(&self.queue, level, first, vertices);
+        }
     }
 
     /// Replaces the character's vertices, which must match the mesh given
@@ -469,6 +518,9 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
                 draw(&mut pass, &self.world, &self.world_pipelines);
+                for (layer, _) in self.layers.iter().filter(|l| l.1) {
+                    draw(&mut pass, layer, &self.world_pipelines);
+                }
             }
             if let Some(character) = &self.character {
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
@@ -490,6 +542,13 @@ impl Renderer {
                 pass.draw(0..*count, 0..1);
             }
         }
+    }
+}
+
+fn write_vertices(queue: &wgpu::Queue, level: &GpuLevel, first: usize, vertices: &[Vertex]) {
+    if !vertices.is_empty() {
+        let offset = (first * std::mem::size_of::<Vertex>()) as u64;
+        queue.write_buffer(&level.vertices, offset, bytemuck::cast_slice(vertices));
     }
 }
 
@@ -681,16 +740,13 @@ fn upload_level(
     pass_layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     level: &Level,
-    character: bool,
+    lit: bool,
 ) -> GpuLevel {
     let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vertices"),
         contents: bytemuck::cast_slice(&level.vertices),
-        usage: if character {
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
-        } else {
-            wgpu::BufferUsages::VERTEX
-        },
+        // Characters and layers have their vertices replaced as they move.
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     });
     let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("indices"),
@@ -708,7 +764,7 @@ fn upload_level(
     for batch in &level.batches {
         for (i, pass) in batch.passes.iter().enumerate() {
             let mut slot = [0u8; PARAMS_STRIDE as usize];
-            let data = PassParams::new(pass, Kind::of(pass.blend_mode, i == 0), character);
+            let data = PassParams::new(pass, Kind::of(pass.blend_mode, i == 0), lit);
             slot[..std::mem::size_of::<PassParams>()].copy_from_slice(bytemuck::bytes_of(&data));
             params.extend_from_slice(&slot);
         }

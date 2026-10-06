@@ -1,4 +1,5 @@
-//! Rails and spawn points from a level's `NodeArray` (in `<level>.qb`).
+//! Rails, spawn points and objects from a level's `NodeArray` (in
+//! `<level>.qb`).
 //!
 //! **Coordinates.** Node positions use the opposite Z direction from the
 //! level meshes: mirroring Z puts 96% of the hub's rail nodes within 60
@@ -9,7 +10,15 @@
 //! `Links` (indices into the array); each link is one straight rail
 //! segment. Spawn points are `Class = Restart` nodes with a position, a
 //! heading (`Angles` y, in radians) and usually a `RestartName`.
+//!
+//! `GameObject`, `Vehicle` and `Pedestrian` nodes place a `Model` (and
+//! pedestrians a `SkeletonName`). `LevelGeometry` and `LevelObject` nodes
+//! name sectors of the level scene. Nodes without the `CreatedAtStart` flag
+//! aren't there when the level starts: goal pickups, warp portals that
+//! open later, invisible trigger boxes and most pedestrians, which goals
+//! create.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -79,10 +88,69 @@ impl Spawn {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectKind {
+    GameObject,
+    Vehicle,
+    Pedestrian,
+}
+
+/// A node that places a model.
+#[derive(Clone, Debug)]
+pub struct ObjectNode {
+    pub label: String,
+    pub kind: ObjectKind,
+    /// In mesh space.
+    pub position: Vec3,
+    /// `Angles` y as stored (none of these nodes is tilted on the disc).
+    pub heading: f32,
+    /// Whether it's there when the level starts (see the module docs).
+    pub created_at_start: bool,
+    /// The model's path as in the node array, lowercase with `/`
+    /// (`gameobjects/milk/milk.mdl`).
+    pub model: String,
+    /// For pedestrians, the skeleton's name, lowercase.
+    pub skeleton: Option<String>,
+    /// For pedestrians, the script that loads their animations (`AnimName`).
+    pub animations: Option<u32>,
+    /// The node's name and its index in the node array (paths start here).
+    pub name: u32,
+    pub node: usize,
+    /// The script the object runs when it's created (`TriggerScript`).
+    pub script: Option<u32>,
+}
+
+/// Any node's place and links, for following paths (`Links` are indices
+/// into the node array).
+#[derive(Clone, Debug, Default)]
+pub struct PathNode {
+    pub name: u32,
+    /// In mesh space; `None` for nodes without a position.
+    pub position: Option<Vec3>,
+    pub links: Vec<usize>,
+}
+
+impl ObjectNode {
+    /// The model's orientation in mesh space: mirroring Z turns a turn of
+    /// `heading` about Y into one of `-heading`. This is the opposite way
+    /// round from [`Spawn::facing`], and neither has been checked against
+    /// the game: goal intro cameras don't settle it (the 40 that frame
+    /// their goal's pedestrian see it from the front 19 times this way and
+    /// 21 times the other way), and neither do walls in front of spawns.
+    pub fn rotation(&self) -> Quat {
+        Quat::from_rotation_y(-self.heading)
+    }
+}
+
 #[derive(Default)]
 pub struct LevelNodes {
     pub rails: Vec<RailSegment>,
     pub spawns: Vec<Spawn>,
+    pub objects: Vec<ObjectNode>,
+    /// Name checksums of scene sectors that aren't there at the start.
+    pub hidden_sectors: HashSet<u32>,
+    /// Every node in the array, in order.
+    pub nodes: Vec<PathNode>,
 }
 
 impl LevelNodes {
@@ -119,8 +187,26 @@ impl LevelNodes {
                 .map(|n| symbols.name(n))
         };
 
-        let mut out = LevelNodes::default();
-        for node in nodes {
+        let mut out = LevelNodes {
+            nodes: nodes
+                .iter()
+                .map(|node| PathNode {
+                    name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                    position: position(node).map(Vec3::from),
+                    links: node
+                        .get(key("Links"))
+                        .and_then(Value::as_array)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|l| l.as_int())
+                        .filter_map(|l| usize::try_from(l).ok())
+                        .filter(|&l| l < nodes.len())
+                        .collect(),
+                })
+                .collect(),
+            ..LevelNodes::default()
+        };
+        for (index, node) in nodes.iter().enumerate() {
             let Some(pos) = position(node).map(Vec3::from) else {
                 continue;
             };
@@ -146,6 +232,41 @@ impl LevelNodes {
                             });
                         }
                     }
+                }
+                Some(c) if c == key("LevelGeometry") || c == key("LevelObject") => {
+                    if !node.has_flag(key("CreatedAtStart")) {
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.hidden_sectors.insert(name);
+                        }
+                    }
+                }
+                Some(c) if [key("GameObject"), key("Vehicle"), key("Pedestrian")].contains(&c) => {
+                    let Some(Value::String(model)) = node.get(key("Model")) else {
+                        continue;
+                    };
+                    let kind = if c == key("GameObject") {
+                        ObjectKind::GameObject
+                    } else if c == key("Vehicle") {
+                        ObjectKind::Vehicle
+                    } else {
+                        ObjectKind::Pedestrian
+                    };
+                    out.objects.push(ObjectNode {
+                        label: name_of(node, "Name").unwrap_or_default(),
+                        kind,
+                        position: pos,
+                        heading: node
+                            .get(key("Angles"))
+                            .and_then(Value::as_vector)
+                            .map_or(0.0, |a| a[1]),
+                        created_at_start: node.has_flag(key("CreatedAtStart")),
+                        model: model.replace('\\', "/").to_ascii_lowercase(),
+                        skeleton: name_of(node, "SkeletonName").map(|s| s.to_ascii_lowercase()),
+                        animations: node.get(key("AnimName")).and_then(Value::as_name),
+                        name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                        node: index,
+                        script: node.get(key("TriggerScript")).and_then(Value::as_name),
+                    });
                 }
                 Some(c) if c == key("Restart") => {
                     let heading = node

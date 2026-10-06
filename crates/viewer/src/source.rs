@@ -5,10 +5,19 @@
 //! its sky and their textures), `Xcol.prg` (collision) and `X.prg` (among
 //! other things, the level script with the node array).
 //!
+//! Models placed by the node array (`Model = "gameobjects\\milk\\milk.mdl"`)
+//! are `Models/<that path>.ngc` in `X.prg`, or in `XPed.prg` for
+//! pedestrians. A pedestrian's `AnimName` names a script in
+//! `scripts/allanims.qb` (in `qb.prg`) that loads its animations, each
+//! with a role such as `Ped_Guide_Idle1`; most are `anims/Ped_<name>/` in
+//! `X.prg`, but some borrow another's (birds use Zazu's) or a playable
+//! character's (`anims/Buzz/` in `anims_buzz.prg`).
+//!
 //! Each playable character `X` has `anims_X.prg`: its model, board and
 //! animations. Skeletons and the animation key tables are shared, in
 //! `skeletons.prg`.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -44,6 +53,19 @@ pub struct LevelFiles {
     /// Camera paths (cutscenes, goal intros, fly-throughs) by name, from
     /// the level's own archive.
     pub cameras: Vec<(String, Vec<u8>)>,
+    /// Object and pedestrian models and their textures, by their path in
+    /// the node array: lowercase, with `/`, without `.ngc`
+    /// (`gameobjects/milk/milk.mdl`, `gameobjects/milk/milk.tex`).
+    pub models: HashMap<String, Vec<u8>>,
+    /// Bone animations by path: lowercase, with `/`, without `.ngc`
+    /// (`anims/ped_zazu/idle.ska`). See [`GameData::add_animations`].
+    pub animations: HashMap<String, Vec<u8>>,
+    /// Every skeleton by lowercase name, and the animation key tables
+    /// (`standardkeyq.bin`, `standardkeyt.bin`), from `skeletons.prg`.
+    pub skeletons: HashMap<String, Vec<u8>>,
+    pub key_tables: Option<(Vec<u8>, Vec<u8>)>,
+    /// The level's own scripts (every `.qb` in `X.prg`).
+    pub scripts: Vec<Vec<u8>>,
 }
 
 /// The raw files for one playable character.
@@ -57,6 +79,71 @@ pub struct CharacterFiles {
     pub key_tables: (Vec<u8>, Vec<u8>),
     /// Animation names (file names without `.ska.ngc`) and contents.
     pub animations: Vec<(String, Vec<u8>)>,
+}
+
+/// Adds an archive's models and textures (under `Models/`) to `models`.
+fn collect_models(archive: &Archive, models: &mut HashMap<String, Vec<u8>>) -> Result<()> {
+    for e in archive.entries() {
+        let path = e.path().replace('\\', "/").to_ascii_lowercase();
+        let path = path.trim_start_matches("./");
+        let Some(key) = path
+            .strip_prefix("models/")
+            .and_then(|p| p.strip_suffix(".ngc"))
+        else {
+            continue;
+        };
+        if [".mdl", ".skin", ".tex"].iter().any(|s| key.ends_with(s)) {
+            models.insert(key.to_string(), e.contents()?.into_owned());
+        }
+    }
+    Ok(())
+}
+
+/// An animation's path as [`LevelFiles::animations`] keys it: lowercase,
+/// with `/`, without a leading `./` or the `.ngc`.
+fn animation_key(path: &str) -> String {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    let path = path.trim_start_matches("./");
+    path.strip_suffix(".ngc").unwrap_or(path).to_string()
+}
+
+/// Reads `LoadAnim Name = "..." descChecksum = role` lines from each script.
+fn animation_sets(script: &[u8]) -> Result<HashMap<u32, Vec<(String, String)>>> {
+    use qb::{Definition, Symbols, Token, checksum, parse_definitions, tokenize};
+    let tokens = tokenize(script).context("could not read allanims.qb")?;
+    let mut symbols = Symbols::new();
+    symbols.add_tokens(&tokens);
+    let (name_key, role_key) = (checksum("Name"), checksum("descChecksum"));
+    let mut sets = HashMap::new();
+    for def in parse_definitions(&tokens).context("could not parse allanims.qb")? {
+        let Definition::Script {
+            name,
+            tokens: range,
+        } = def
+        else {
+            continue;
+        };
+        let body: Vec<&Token> = tokens[range].iter().map(|(_, t)| t).collect();
+        let mut loads = Vec::new();
+        let mut path = None;
+        for w in body.windows(3) {
+            match (w[0], w[1], w[2]) {
+                (Token::Name(k), Token::Equals, Token::String(p)) if *k == name_key => {
+                    path = Some(animation_key(p));
+                }
+                (Token::Name(k), Token::Equals, Token::Name(role)) if *k == role_key => {
+                    if let Some(p) = path.take() {
+                        loads.push((p, symbols.name(*role)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !loads.is_empty() {
+            sets.insert(name, loads);
+        }
+    }
+    Ok(sets)
 }
 
 /// Reads one file from an archive by a test on its lowercased path.
@@ -187,11 +274,20 @@ impl GameData {
             }
             None => None,
         };
+        let mut models = HashMap::new();
+        let mut animations: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut scripts = Vec::new();
         let (nodes, cameras) = match self.read_archive(&format!("{id}.prg"))? {
             Some(data) => {
                 let archive =
                     Archive::parse(&data).with_context(|| format!("could not read {id}.prg"))?;
                 let nodes = entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?;
+                collect_models(&archive, &mut models)?;
+                for e in archive.entries() {
+                    if e.path().to_ascii_lowercase().ends_with(".qb") {
+                        scripts.push(e.contents()?.into_owned());
+                    }
+                }
                 let mut cameras = Vec::new();
                 for e in archive.entries() {
                     let path = e.path();
@@ -203,10 +299,12 @@ impl GameData {
                     else {
                         continue;
                     };
-                    let contents = e.contents()?;
+                    let contents = e.contents()?.into_owned();
                     if ngc_anim::is_camera_path(&contents) {
                         // Some names end in a space.
-                        cameras.push((file_name[..stem].trim().to_string(), contents.into_owned()));
+                        cameras.push((file_name[..stem].trim().to_string(), contents));
+                    } else {
+                        animations.insert(animation_key(&path), contents);
                     }
                 }
                 cameras.sort_by_key(|c| c.0.to_ascii_lowercase());
@@ -214,6 +312,12 @@ impl GameData {
             }
             None => (None, Vec::new()),
         };
+        if let Some(data) = self.read_archive(&format!("{id}Ped.prg"))? {
+            let archive =
+                Archive::parse(&data).with_context(|| format!("could not read {id}Ped.prg"))?;
+            collect_models(&archive, &mut models)?;
+        }
+        let (skeletons, key_tables) = self.skeletons()?;
 
         Ok(LevelFiles {
             scene,
@@ -222,7 +326,88 @@ impl GameData {
             collision,
             nodes,
             cameras,
+            models,
+            animations,
+            skeletons,
+            key_tables,
+            scripts,
         })
+    }
+
+    /// Every script in `qb.prg` (the game's shared scripts).
+    pub fn global_scripts(&mut self) -> Result<Vec<Vec<u8>>> {
+        let data = self.read_archive("qb.prg")?.context("qb.prg is missing")?;
+        let archive = Archive::parse(&data).context("could not read qb.prg")?;
+        archive
+            .entries()
+            .iter()
+            .filter(|e| e.path().to_ascii_lowercase().ends_with(".qb"))
+            .map(|e| Ok(e.contents()?.into_owned()))
+            .collect()
+    }
+
+    /// The pedestrian animation sets in `scripts/allanims.qb`: for each
+    /// `animload_...` script (by checksum), the animations it loads as
+    /// (path as in [`LevelFiles::animations`], role name).
+    pub fn animation_sets(&mut self) -> Result<HashMap<u32, Vec<(String, String)>>> {
+        let data = self.read_archive("qb.prg")?.context("qb.prg is missing")?;
+        let archive = Archive::parse(&data).context("could not read qb.prg")?;
+        let script = entry(&archive, &|p| p.ends_with("allanims.qb"))?
+            .context("qb.prg has no allanims.qb")?;
+        animation_sets(&script)
+    }
+
+    /// Adds animations that aren't in the level's archive, from the
+    /// playable characters' archives (`anims/buzz/...` is in
+    /// `anims_buzz.prg`). Paths that can't be found are left out.
+    pub fn add_animations(&mut self, files: &mut LevelFiles, paths: &[String]) -> Result<()> {
+        let mut wanted: Vec<&String> = paths
+            .iter()
+            .filter(|p| !files.animations.contains_key(*p))
+            .collect();
+        wanted.sort();
+        wanted.dedup();
+        let mut folders: Vec<&str> = wanted.iter().filter_map(|p| p.split('/').nth(1)).collect();
+        folders.dedup();
+        for folder in folders {
+            let Some(data) = self.read_archive(&format!("anims_{folder}.prg"))? else {
+                continue;
+            };
+            let archive = Archive::parse(&data)
+                .with_context(|| format!("could not read anims_{folder}.prg"))?;
+            for e in archive.entries() {
+                let key = animation_key(&e.path());
+                if wanted.contains(&&key) {
+                    files.animations.insert(key, e.contents()?.into_owned());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Every skeleton in `skeletons.prg` by lowercase name, and the key
+    /// tables. Empty if the archive is missing.
+    #[allow(clippy::type_complexity)]
+    fn skeletons(&mut self) -> Result<(HashMap<String, Vec<u8>>, Option<(Vec<u8>, Vec<u8>)>)> {
+        let Some(data) = self.read_archive("skeletons.prg")? else {
+            return Ok((HashMap::new(), None));
+        };
+        let archive = Archive::parse(&data).context("could not read skeletons.prg")?;
+        let mut skeletons = HashMap::new();
+        for e in archive.entries() {
+            let path = e.path().replace('\\', "/").to_ascii_lowercase();
+            if let Some(stem) = path.rsplit('/').next().and_then(|n| n.strip_suffix(".ske")) {
+                skeletons.insert(stem.to_string(), e.contents()?.into_owned());
+            }
+        }
+        let tables = match (
+            entry(&archive, &|p| p.ends_with("standardkeyq.bin"))?,
+            entry(&archive, &|p| p.ends_with("standardkeyt.bin"))?,
+        ) {
+            (Some(q), Some(t)) => Some((q, t)),
+            _ => None,
+        };
+        Ok((skeletons, tables))
     }
 
     /// Every playable character, sorted by title. The id is the archive

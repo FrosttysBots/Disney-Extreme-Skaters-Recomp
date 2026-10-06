@@ -1,0 +1,11 @@
+[package]
+name = "skate"
+description = "Skater physics for Disney's Extreme Skate Adventure, driven by the game's own constants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+glam = "0.34"
+ngc_collision.workspace = true
+qb.workspace = true

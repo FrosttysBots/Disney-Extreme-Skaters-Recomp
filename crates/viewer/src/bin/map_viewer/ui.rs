@@ -14,6 +14,7 @@ pub enum Action {
     /// Show a character (an index into `characters`), or none.
     LoadCharacter(Option<usize>),
     LookAtCharacter,
+    ToggleSkate,
     PlayCameraPath(usize),
     StopCameraPath,
 }
@@ -40,6 +41,14 @@ pub struct CharacterModel {
     /// Whether the character has blink frames, and whether to use them.
     pub can_blink: bool,
     pub blink: bool,
+    /// Whether the level has collision to skate on, and whether skating.
+    pub can_skate: bool,
+    pub skating: bool,
+    /// The balance meter (-1 to 1) while in a manual or a grind.
+    pub balance: Option<f32>,
+    /// Points banked, and the combo on screen.
+    pub score: u32,
+    pub combo: Option<String>,
 }
 
 /// Everything the panel shows or edits.
@@ -54,6 +63,10 @@ pub struct Model {
     pub show_sky: bool,
     pub show_rails: bool,
     pub show_spawns: bool,
+    /// Objects and pedestrians there at the start.
+    pub show_objects: bool,
+    /// Geometry, objects and pedestrians that goals create later.
+    pub show_goal_objects: bool,
     pub brighten: f32,
     pub collision: CollisionView,
     pub speed: f32,
@@ -84,7 +97,71 @@ Tab: next spawn point
 R: back to the start
 P: play or pause the character
 [ and ]: previous or next animation
-F1: hide or show this panel";
+F1: hide or show this panel
+Skating: W push, S brake, A/D steer,
+  Space crouch (let go: ollie),
+  hold E to grind, tap W then S to manual
+  (balance: W/S in a manual, A/D on a rail),
+  in the air Q flip, F grab (+ W/S/A/D),
+  Esc stop";
+
+/// The score (top right) and the combo (bottom centre, above the balance
+/// meter).
+fn trick_text(ctx: &egui::Context, score: u32, combo: Option<&str>) {
+    let shadowed = |ui: &mut egui::Ui, text: &str, size: f32| {
+        ui.label(
+            egui::RichText::new(text)
+                .size(size)
+                .strong()
+                .color(egui::Color32::WHITE)
+                .background_color(egui::Color32::from_black_alpha(140)),
+        );
+    };
+    egui::Area::new(egui::Id::new("score"))
+        .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
+        .interactable(false)
+        .show(ctx, |ui| shadowed(ui, &format!("{score}"), 22.0));
+    if let Some(combo) = combo {
+        egui::Area::new(egui::Id::new("combo"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -70.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    for line in combo.lines() {
+                        shadowed(ui, line, 18.0);
+                    }
+                })
+            });
+    }
+}
+
+/// The balance meter, bottom centre: a bar with a marker that slides to
+/// either end as the skater leans.
+fn balance_meter(ctx: &egui::Context, meter: f32) {
+    egui::Area::new(egui::Id::new("balance"))
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -40.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(260.0, 18.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(160));
+            let middle = rect.center();
+            painter.line_segment(
+                [middle - egui::vec2(0.0, 7.0), middle + egui::vec2(0.0, 7.0)],
+                egui::Stroke::new(1.0_f32, egui::Color32::GRAY),
+            );
+            // Green near the middle, red near the ends.
+            let danger = meter.abs();
+            let colour =
+                egui::Color32::from_rgb((255.0 * danger) as u8, (255.0 * (1.0 - danger)) as u8, 40);
+            let x = middle.x + meter * (rect.width() / 2.0 - 6.0);
+            painter.rect_filled(
+                egui::Rect::from_center_size(egui::pos2(x, middle.y), egui::vec2(8.0, 14.0)),
+                2.0,
+                colour,
+            );
+        });
+}
 
 pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -96,6 +173,12 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     ui.heading(format!("Loading {title}..."));
                 });
             });
+    }
+    if let Some(meter) = model.character.balance {
+        balance_meter(ctx, meter);
+    }
+    if model.character.skating {
+        trick_text(ctx, model.character.score, model.character.combo.as_deref());
     }
     if !model.panel_open {
         return actions;
@@ -144,6 +227,11 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 ui.checkbox(&mut model.show_sky, "Sky");
                 ui.checkbox(&mut model.show_rails, "Rails");
                 ui.checkbox(&mut model.show_spawns, "Spawn points");
+                ui.checkbox(&mut model.show_objects, "Objects and pedestrians");
+                ui.checkbox(&mut model.show_goal_objects, "Goal objects").on_hover_text(
+                    "Pickups, goal pedestrians, warp portals and other things that \
+                     goals and scripts add later. Not there when the level starts.",
+                );
                 ui.add(egui::Slider::new(&mut model.brighten, 0.0..=1.0).text("brighten dark areas"))
                     .on_hover_text("Raises the darkest lighting so you can see into shadows. 0 = as in the game.");
                 ui.add_enabled_ui(model.has_collision, |ui| {
@@ -262,6 +350,28 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
              timing here is our own.",
         );
     });
+    ui.add_enabled_ui(model.can_skate, |ui| {
+        let label = if model.skating {
+            "Stop skating"
+        } else {
+            "Skate"
+        };
+        if ui
+            .button(label)
+            .on_hover_text(
+                "Skate the character around the level: W push, S brake, A/D steer, \
+                 hold Space to crouch and let go to ollie, hold E to grind rails, \
+                 tap W then S to manual (balance with W/S, or A/D on a rail), \
+                 Q to flip and F to grab in the air (with W/S/A/D), Esc to stop. The game's own physics, as far as it's been read.",
+            )
+            .clicked()
+        {
+            actions.push(Action::ToggleSkate);
+        }
+    });
+    if model.skating {
+        return;
+    }
     if ui
         .button("Look at the character")
         .on_hover_text("The character stands on the last spawn point you went to (Tab).")

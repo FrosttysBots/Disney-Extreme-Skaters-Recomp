@@ -109,6 +109,15 @@ impl Definition {
     }
 }
 
+/// Parses one value starting at `*at` (skipping line breaks before it) and
+/// moves `*at` past it.
+pub(crate) fn parse_value(tokens: &[(usize, Token)], at: &mut usize) -> Result<Value> {
+    let mut parser = Parser { tokens, at: *at };
+    let value = parser.value();
+    *at = parser.at;
+    value
+}
+
 /// Splits a token list into its top-level definitions.
 pub fn parse_definitions(tokens: &[(usize, Token)]) -> Result<Vec<Definition>> {
     let mut defs = Vec::new();
