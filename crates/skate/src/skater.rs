@@ -26,7 +26,11 @@
 //!   exact step of a thrown body as in the game, and steering spins at
 //!   `air_rotation`; walls work as the game's (0x800F847C): the speed into
 //!   them is lost, a tenth of the rest pushes away, and the skater turns
-//!   along the wall and is put `min_distance_to_wall` out; landing on ground facing up enough (or on a ramp's
+//!   along the wall and is put `min_distance_to_wall` out. Landing is the
+//!   game's too: a line along the move; ground (by the face's flags and
+//!   slope, so vert ramps count) keeps the speed along it and the skater's
+//!   facing, walls slide it along them at full speed, and ledges it nearly
+//!   cleared pop it up onto them (`air_snap_up`); landing on ground facing up enough (or on a ramp's
 //!   vert face) puts it back on the ground, keeping the speed along the
 //!   surface. Anything else it would pass through stops it instead.
 //! - **Walls** on the ground are the game's (0x800F7D38): a line at knee
@@ -391,47 +395,78 @@ impl Skater {
             }
         }
 
-        let falling = self.velocity.y <= 0.0;
-        let start = if falling {
-            from + Vec3::Y * p.ground_snap_up
-        } else {
-            from
-        };
-        if let Some(hit) = world.ray(start, target) {
-            // Ground, or a ramp's vert face (landing back on a quarter pipe).
-            let vert = hit.flags & ngc_collision::face_flags::VERT != 0;
-            let landable = hit.normal.y > WALL_COSINE || (vert && hit.normal.y > 0.0);
-            if falling && landable {
-                // Land: keep the speed along the surface.
-                self.position = hit.point;
+        // Landing (0x800FC7F8): a line from where the skater was to where
+        // it's going.
+        if let Some(hit) = world.ray(from, target) {
+            // A ledge it nearly cleared: up onto it (0x800F81A8), unless
+            // it's falling onto a face it can land on anyway.
+            if self.velocity.y > 10.0 || hit.normal.y < 0.1 {
+                if let Some(ledge) = air_snap_up(from, target, p, world) {
+                    self.position = ledge;
+                    return;
+                }
+            }
+            if !is_wall(&hit, p) {
+                // Land, a unit off the ground, keeping the speed along it
+                // (none below 10) and the way the skater faces: the ground
+                // step then turns the speed along the board.
+                self.position = hit.point + hit.normal;
                 self.up = hit.normal;
-                let along = self.velocity - hit.normal * self.velocity.dot(hit.normal);
-                self.velocity = along;
-                if along.length() > 1.0 {
-                    let flat = Vec3::new(along.x, 0.0, along.z);
-                    if flat.length() > 1.0 {
-                        self.heading = flat.x.atan2(flat.z);
-                    }
+                self.velocity -= hit.normal * self.velocity.dot(hit.normal);
+                if self.velocity.length() < 10.0 {
+                    self.velocity = Vec3::ZERO;
                 }
                 self.on_ground = true;
                 self.crouched = input.crouch;
                 self.set_action(Action::Landing);
                 return;
             }
-            let into = self.velocity.dot(hit.normal);
-            if into < 0.0 {
-                // Too steep to land on, or hit from below: no going
-                // through it. Stop at it and lose the speed into it.
-                self.position = hit.point + hit.normal;
-                self.velocity -= hit.normal * into;
-                return;
+            // A wall: slide along it at the same speed, facing along it,
+            // `min_distance_to_wall` out.
+            self.velocity = along_keeping_length(self.velocity, hit.normal);
+            let facing = along_keeping_length(self.forward(), hit.normal);
+            if facing.x != 0.0 || facing.z != 0.0 {
+                self.heading = facing.x.atan2(facing.z);
             }
+            self.position = hit.point + hit.normal * (1.0 + p.min_distance_to_wall);
+            return;
         }
         self.position = target;
         // Fell out of the level.
         if self.position.y < -100_000.0 {
             self.velocity = Vec3::ZERO;
         }
+    }
+}
+
+/// Up onto a ledge (main.dol 0x800F81A8): straight down from
+/// `air_snap_up` above the higher of where the skater was and where it's
+/// going, to the lower; ground facing up there that the skater can reach
+/// (a clear line from `air_snap_up` above where it was) is where it goes,
+/// a unit off it and 0.1 higher.
+fn air_snap_up(from: Vec3, to: Vec3, p: &Physics, world: &World) -> Option<Vec3> {
+    let up = Vec3::Y * p.air_snap_up;
+    let top = Vec3::new(to.x, to.y.max(from.y) + p.air_snap_up, to.z);
+    let bottom = Vec3::new(to.x, to.y.min(from.y), to.z);
+    let ground = world.ray(top, bottom)?;
+    if ground.normal.y <= 0.5 {
+        return None;
+    }
+    let spot = ground.point + ground.normal;
+    if world.ray(from + up, spot + up).is_some() {
+        return None;
+    }
+    Some(spot + Vec3::Y * 0.1)
+}
+
+/// `v` along the plane with this normal, at the same length (main.dol
+/// 0x80009B3C); straight across the normal if it pointed along it.
+fn along_keeping_length(v: Vec3, normal: Vec3) -> Vec3 {
+    let length = v.length();
+    let along = v - normal * v.dot(normal);
+    match along.try_normalize() {
+        Some(direction) => direction * length,
+        None => Vec3::new(-normal.z, 0.0, normal.x).normalize_or_zero() * length,
     }
 }
 
@@ -528,6 +563,15 @@ mod tests {
         assert_eq!(v.y, -500.0);
         let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
+    }
+
+    #[test]
+    fn sliding_along_a_wall_keeps_the_speed() {
+        let v = along_keeping_length(Vec3::new(300.0, 0.0, -400.0), Vec3::Z);
+        assert!((v - Vec3::new(500.0, 0.0, 0.0)).length() < 1e-3);
+        // Straight into it: across it, still at full speed.
+        let v = along_keeping_length(Vec3::new(0.0, 0.0, -400.0), Vec3::Z);
+        assert!((v.length() - 400.0).abs() < 1e-3 && v.z == 0.0);
     }
 
     #[test]

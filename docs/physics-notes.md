@@ -177,6 +177,26 @@ on-ground update switches on.
     object's motion is added.
   Ported: the last case, without the event, sound or moving objects.
 
+- **Landing** (the end of 0x800FC7F8): a line from last frame's position
+  to this one's (plus a moving object's motion). If it hits and the
+  skater is rising faster than 10 or the face is nearly vertical (normal
+  Y under 0.1), it first tries 0x800F81A8, the ledge pop: a line straight
+  down from `Physics_Air_Snap_Up` (15) above the higher of the two
+  positions to the lower; ground facing up there (normal Y over 0.5),
+  reachable by a clear line from 15 above the old position, takes the
+  skater, at the hit plus the normal and 0.1 higher. Otherwise the
+  skater goes to the hit plus the normal, and:
+  - not a wall (by 0x800F66F0, so vert faces count): it lands. The
+    velocity loses its part along the normal (0x80009AC0) and stops
+    below 10; the ground normal (`+0x3A00`, `+0x3A10`, `+0x3A20`) and
+    the matrix's up become the face's normal and the matrix is
+    re-orthonormalized around it, keeping the facing. Then the `Landed`
+    event, sounds, the score (0x8011DE34) and a script event, type 3.
+  - a wall: the velocity and the facing are turned along it keeping
+    their length (0x80009B3C), and the skater moves out a further
+    `Skater_Min_Distance_To_Wall`.
+  Ported, without the events, sounds and moving objects.
+
 ## Next
 
 Read the rest of the on-ground update and its helpers, then the air
