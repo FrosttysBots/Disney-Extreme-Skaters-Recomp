@@ -46,6 +46,9 @@ pub struct CharacterModel {
     pub skating: bool,
     /// The balance meter (-1 to 1) while in a manual or a grind.
     pub balance: Option<f32>,
+    /// Points banked, and the combo on screen.
+    pub score: u32,
+    pub combo: Option<String>,
 }
 
 /// Everything the panel shows or edits.
@@ -99,7 +102,38 @@ Skating: W push, S brake, A/D steer,
   Space crouch (let go: ollie),
   hold E to grind, tap W then S to manual
   (balance: W/S in a manual, A/D on a rail),
+  in the air Q flip, F grab (+ W/S/A/D),
   Esc stop";
+
+/// The score (top right) and the combo (bottom centre, above the balance
+/// meter).
+fn trick_text(ctx: &egui::Context, score: u32, combo: Option<&str>) {
+    let shadowed = |ui: &mut egui::Ui, text: &str, size: f32| {
+        ui.label(
+            egui::RichText::new(text)
+                .size(size)
+                .strong()
+                .color(egui::Color32::WHITE)
+                .background_color(egui::Color32::from_black_alpha(140)),
+        );
+    };
+    egui::Area::new(egui::Id::new("score"))
+        .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
+        .interactable(false)
+        .show(ctx, |ui| shadowed(ui, &format!("{score}"), 22.0));
+    if let Some(combo) = combo {
+        egui::Area::new(egui::Id::new("combo"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -70.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    for line in combo.lines() {
+                        shadowed(ui, line, 18.0);
+                    }
+                })
+            });
+    }
+}
 
 /// The balance meter, bottom centre: a bar with a marker that slides to
 /// either end as the skater leans.
@@ -142,6 +176,9 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     }
     if let Some(meter) = model.character.balance {
         balance_meter(ctx, meter);
+    }
+    if model.character.skating {
+        trick_text(ctx, model.character.score, model.character.combo.as_deref());
     }
     if !model.panel_open {
         return actions;
@@ -325,7 +362,7 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                 "Skate the character around the level: W push, S brake, A/D steer, \
                  hold Space to crouch and let go to ollie, hold E to grind rails, \
                  tap W then S to manual (balance with W/S, or A/D on a rail), \
-                 Esc to stop. The game's own physics, as far as it's been read.",
+                 Q to flip and F to grab in the air (with W/S/A/D), Esc to stop. The game's own physics, as far as it's been read.",
             )
             .clicked()
         {

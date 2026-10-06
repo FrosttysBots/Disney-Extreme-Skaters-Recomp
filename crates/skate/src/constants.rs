@@ -45,15 +45,7 @@ impl Stats {
     /// The stats from the profile whose `Name` is `character` (such as
     /// `jessie`), searching every global value; the defaults if none.
     pub fn of(program: &Program, character: &str) -> Stats {
-        let name = checksum(character);
-        let mut found = None;
-        for (_, value) in program.values() {
-            find_profile(value, name, &mut found);
-            if found.is_some() {
-                break;
-            }
-        }
-        let Some(profile) = found else {
+        let Some(profile) = profile(program, character) else {
             return Stats::default();
         };
         let mut stats = Stats::default();
@@ -64,6 +56,20 @@ impl Stats {
         }
         stats
     }
+}
+
+/// The skater profile whose `Name` is `character` (in `disneytricks.q`):
+/// stats, trick mapping and more.
+pub(crate) fn profile<'a>(program: &'a Program, character: &str) -> Option<&'a Value> {
+    let name = checksum(character);
+    let mut found = None;
+    for (_, value) in program.values() {
+        find_profile(value, name, &mut found);
+        if found.is_some() {
+            break;
+        }
+    }
+    found
 }
 
 fn find_profile<'a>(value: &'a Value, name: u32, found: &mut Option<&'a Value>) {

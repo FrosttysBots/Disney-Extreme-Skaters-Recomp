@@ -24,6 +24,24 @@ fn real_skater_on_the_hub() {
     println!("{physics:?}");
     assert_eq!(physics.air_gravity, -1350.0);
 
+    // Jessie's tricks, from her trick table.
+    let book = skate::TrickBook::new(&program, "jessie", &Stats::of(&program, "jessie"));
+    for trick in &book.tricks {
+        println!(
+            "trick: {} ({:?}, {} points, speed {:.2})",
+            trick.name, trick.kind, trick.score, trick.speed
+        );
+    }
+    println!("grind {:?}, manual {:?}", book.grind, book.manual);
+    let flip_down = book
+        .air_trick(skate::Button::Flip, Some(skate::Dir::Down))
+        .unwrap();
+    assert_eq!(book.tricks[flip_down].name, "Roll'Em Roll'Em Roll'Em");
+    let grab_left = book
+        .air_trick(skate::Button::Grab, Some(skate::Dir::Left))
+        .unwrap();
+    assert_eq!(book.tricks[grab_left].name, "Well Howdy There");
+
     let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
     let nodes = LevelNodes::from_bytes(files.nodes.as_ref().unwrap()).unwrap();
     let rails = Rails::new(
@@ -92,6 +110,68 @@ fn real_skater_on_the_hub() {
         skater.action,
         Action::Landing | Action::Rolling | Action::Standing
     ));
+
+    // Tricks: an ollie with a quick flip lands clean and banks its points;
+    // holding a grab all the way down is a bail. (Animations aren't loaded
+    // here: each trick animation is taken as 0.4 seconds.)
+    let mut tricks = book.clone();
+    tricks.set_durations(|_| Some(0.4));
+    let ollie_with = |skater: &mut Skater, trick: Input, hold: bool| {
+        let crouch = Input {
+            crouch: true,
+            ..Input::default()
+        };
+        for _ in 0..12 {
+            skater.update(crouch, &physics, &world, 1.0 / 60.0);
+        }
+        skater.update(Input::default(), &physics, &world, 1.0 / 60.0);
+        skater.update(trick, &physics, &world, 1.0 / 60.0);
+        for _ in 0..240 {
+            let input = if hold { trick } else { Input::default() };
+            skater.update(input, &physics, &world, 1.0 / 60.0);
+            if skater.on_ground {
+                break;
+            }
+        }
+    };
+    let flip = Input {
+        flip: true,
+        brake: true,
+        ..Input::default()
+    };
+    let grab = Input {
+        grab: true,
+        ..Input::default()
+    };
+    let mut trickster = Skater::new(start.position, facing.x.atan2(facing.z));
+    trickster.tricks = tricks;
+    for _ in 0..90 {
+        trickster.update(push, &physics, &world, 1.0 / 60.0);
+    }
+    ollie_with(&mut trickster, flip, false);
+    println!(
+        "flip: {:?}, score {}",
+        trickster.last_combo, trickster.score
+    );
+    assert_eq!(trickster.score, 500, "Roll'Em Roll'Em Roll'Em, landed");
+    // Again from the start, holding a grab.
+    let mut trickster = {
+        let mut fresh = Skater::new(start.position, facing.x.atan2(facing.z));
+        fresh.tricks = trickster.tricks.clone();
+        fresh.score = trickster.score;
+        fresh
+    };
+    for _ in 0..90 {
+        trickster.update(push, &physics, &world, 1.0 / 60.0);
+    }
+    ollie_with(&mut trickster, grab, true);
+    println!(
+        "held grab: {:?}, {:?}",
+        trickster.last_combo, trickster.action
+    );
+    assert!(trickster.last_combo.as_ref().is_some_and(|c| c.bailed));
+    assert_eq!(trickster.action, Action::Bail);
+    assert_eq!(trickster.score, 500, "the bail scores nothing");
 
     // A manual: tap up, then down, and let it ride. Left alone it falls
     // off the meter within seconds; balanced, it lasts.

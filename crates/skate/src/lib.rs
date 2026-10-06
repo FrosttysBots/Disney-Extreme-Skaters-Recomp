@@ -6,10 +6,12 @@ pub mod balance;
 pub mod constants;
 pub mod rails;
 pub mod skater;
+pub mod tricks;
 pub mod world;
 
 pub use balance::{Balance, BalanceParams, Lean};
 pub use constants::{Physics, Stats};
 pub use rails::{RailHit, Rails, Segment};
-pub use skater::{Action, Grind, Input, Skater, VertAir};
+pub use skater::{Action, Combo, Grind, Input, Phase, Playing, Skater, VertAir};
+pub use tricks::{Button, Dir, Kind, Trick, TrickBook};
 pub use world::{Hit, World};

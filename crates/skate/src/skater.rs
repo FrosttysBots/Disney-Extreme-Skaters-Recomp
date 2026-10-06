@@ -45,6 +45,7 @@ use glam::{Mat4, Quat, Vec3};
 use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
 use crate::rails::RailHit;
+use crate::tricks::{Button, Dir, Kind, TrickBook};
 use crate::world::{Hit, World};
 
 /// The controls held this step.
@@ -58,6 +59,9 @@ pub struct Input {
     pub crouch: bool,
     /// Grind: get onto a rail within reach.
     pub grind: bool,
+    /// The trick buttons: Square (flip tricks) and Circle (grabs).
+    pub flip: bool,
+    pub grab: bool,
 }
 
 /// What the skater is doing, for picking animations.
@@ -82,6 +86,37 @@ pub enum Action {
     /// (`BailGrind`).
     BailManual,
     BailGrind,
+    /// Landed in the middle of a trick.
+    Bail,
+}
+
+/// A trick being played: which, how far into its animation, and where.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Playing {
+    pub trick: usize,
+    /// Seconds into the animation.
+    pub time: f32,
+    pub phase: Phase,
+    /// Real seconds since the trick began, and whether it has scored.
+    age: f32,
+    credited: bool,
+}
+
+/// A grab's way in, hold and way out (flips only go in).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    In,
+    Hold,
+    Out,
+}
+
+/// A finished combo: its tricks and what it scored (nothing if it ended in
+/// a bail).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Combo {
+    pub tricks: Vec<(String, u32)>,
+    pub total: u32,
+    pub bailed: bool,
 }
 
 /// Vert air: the ramp's normal, flattened (out of the ramp), and where
@@ -158,6 +193,16 @@ pub struct Skater {
     last_input: Input,
     /// Falling off a rail: bail on landing.
     bail_on_landing: bool,
+    /// The character's tricks (empty until given).
+    pub tricks: TrickBook,
+    /// The air trick being played.
+    pub trick: Option<Playing>,
+    /// The trick buttons pressed this step.
+    pressed: (bool, bool),
+    /// The combo so far, the last one finished, and the points banked.
+    pub combo_tricks: Vec<(String, u32)>,
+    pub last_combo: Option<Combo>,
+    pub score: u32,
     leftover: f32,
 }
 
@@ -187,8 +232,138 @@ impl Skater {
             since_down: f32::MAX,
             last_input: Input::default(),
             bail_on_landing: false,
+            tricks: TrickBook::default(),
+            trick: None,
+            pressed: (false, false),
+            combo_tricks: Vec::new(),
+            last_combo: None,
+            score: 0,
             leftover: 0.0,
         }
+    }
+
+    /// The trick animation to show: its name's checksum, the time into it,
+    /// and whether it loops (a grab's hold).
+    pub fn trick_pose(&self) -> Option<(u32, f32, bool)> {
+        let playing = self.trick?;
+        let trick = self.tricks.tricks.get(playing.trick)?;
+        Some(match playing.phase {
+            Phase::Hold => (trick.idle.unwrap_or(trick.anim), playing.time, true),
+            _ => (trick.anim, playing.time, false),
+        })
+    }
+
+    /// Whether landing now would be a bail: in a trick that isn't nearly
+    /// over (the scripts' `BailOn` until `trickslack` frames from the end).
+    pub fn bail_on(&self) -> bool {
+        let Some(playing) = self.trick else {
+            return false;
+        };
+        let Some(trick) = self.tricks.tricks.get(playing.trick) else {
+            return false;
+        };
+        let slack = trick.trickslack / 60.0;
+        match playing.phase {
+            Phase::In if trick.kind == Kind::Flip => {
+                playing.time < self.tricks.duration(trick.anim) - slack
+            }
+            Phase::In | Phase::Hold => true,
+            Phase::Out => playing.time > slack,
+        }
+    }
+
+    /// A trick into the combo.
+    fn credit(&mut self, trick: Option<(String, u32)>) {
+        if let Some(trick) = trick {
+            self.combo_tricks.push(trick);
+        }
+    }
+
+    /// The combo's over: banked if landed, lost in a bail. The total is
+    /// the tricks' points times how many there were (the classic rule;
+    /// the game's own scoring code isn't read yet).
+    fn end_combo(&mut self, landed: bool) {
+        self.combo = false;
+        if self.combo_tricks.is_empty() {
+            return;
+        }
+        let tricks = std::mem::take(&mut self.combo_tricks);
+        let sum: u32 = tricks.iter().map(|(_, s)| s).sum();
+        let total = if landed { sum * tricks.len() as u32 } else { 0 };
+        self.score += total;
+        self.last_combo = Some(Combo {
+            tricks,
+            total,
+            bailed: !landed,
+        });
+    }
+
+    /// Air tricks: start one on a button press (when none is playing, or
+    /// the last is past its bail), and play it on.
+    fn air_tricks(&mut self, input: Input) {
+        let (flip, grab) = self.pressed;
+        let free = self.trick.is_none() || !self.bail_on();
+        if (flip || grab) && free {
+            let button = if flip { Button::Flip } else { Button::Grab };
+            let dir = Dir::from_held(input.push, input.brake, input.turn < 0.0, input.turn > 0.0);
+            if let Some(index) = self.tricks.air_trick(button, dir) {
+                self.trick = Some(Playing {
+                    trick: index,
+                    time: 0.0,
+                    phase: Phase::In,
+                    age: 0.0,
+                    credited: false,
+                });
+            }
+        }
+        let Some(mut playing) = self.trick else {
+            return;
+        };
+        let trick = self.tricks.tricks[playing.trick].clone();
+        let length = self.tricks.duration(trick.anim);
+        let step = STEP * trick.speed;
+        playing.age += STEP;
+        let done = match (trick.kind, playing.phase) {
+            (Kind::Flip, _) => {
+                playing.time += step;
+                // `FlipTrick` names it after 15 frames.
+                if !playing.credited && playing.age >= 15.0 / 60.0 {
+                    playing.credited = true;
+                    self.credit(Some((trick.name.clone(), trick.score)));
+                }
+                playing.time >= length
+            }
+            (Kind::Grab, Phase::In) => {
+                playing.time += step;
+                // `GrabTrick`: named halfway in; let go after 60% to come
+                // out; held to the end, it holds.
+                if !playing.credited && playing.time >= length * 0.5 {
+                    playing.credited = true;
+                    self.credit(Some((trick.name.clone(), trick.score)));
+                }
+                if playing.time >= length * 0.6 && !input.grab {
+                    playing.phase = Phase::Out;
+                } else if playing.time >= length {
+                    playing.phase = Phase::Hold;
+                    playing.time = 0.0;
+                }
+                false
+            }
+            (Kind::Grab, Phase::Hold) => {
+                playing.time += step;
+                if !input.grab {
+                    playing.phase = Phase::Out;
+                    playing.time = length;
+                }
+                false
+            }
+            (Kind::Grab, Phase::Out) => {
+                // Back out: the way in, backwards.
+                playing.time -= step;
+                playing.time <= 0.0
+            }
+        };
+        self.trick = (!done).then_some(playing);
     }
 
     /// The balance meter from -1 to 1 while balancing a manual or a grind.
@@ -279,9 +454,16 @@ impl Skater {
         } else {
             self.since_down + STEP
         };
+        self.pressed = (
+            input.flip && !self.last_input.flip,
+            input.grab && !self.last_input.grab,
+        );
         self.last_input = input;
         // Bailing: no control until it's over.
-        let input = if matches!(self.action, Action::BailManual | Action::BailGrind) {
+        let input = if matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        ) {
             if self.action_time < BAIL_TIME {
                 Input {
                     brake: true,
@@ -361,6 +543,8 @@ impl Skater {
         self.manual = false;
         self.balance.start(&p.grind_balance, !self.combo);
         self.combo = true;
+        self.trick = None;
+        self.credit(self.tricks.grind.clone());
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,
@@ -426,7 +610,6 @@ impl Skater {
             } else {
                 (right, -30f32.to_radians())
             };
-            self.combo = false;
             // Ground just beside the rail (`SkateInAble`, approximated):
             // skate in onto it, turned 30 degrees that way, no bail.
             let beside = self.position + side * 20.0;
@@ -443,6 +626,7 @@ impl Skater {
                 self.heading += turn;
                 self.velocity = self.forward() * grind.speed;
                 self.on_ground = true;
+                self.end_combo(true);
                 self.set_action(Action::Landing);
                 return;
             }
@@ -538,6 +722,7 @@ impl Skater {
             self.manual = true;
             self.balance.start(&p.manual_balance, !self.combo);
             self.combo = true;
+            self.credit(self.tricks.manual.clone());
             self.set_action(Action::Manual);
         }
         if self.manual {
@@ -549,13 +734,13 @@ impl Skater {
                 // Off the top: the game's `BailManual`.
                 Lean::OffTop => {
                     self.manual = false;
-                    self.combo = false;
+                    self.end_combo(false);
                     self.set_action(Action::BailManual);
                 }
                 // Off the bottom: `ManualLand`, back on four wheels.
                 Lean::OffBottom => {
                     self.manual = false;
-                    self.combo = false;
+                    self.end_combo(true);
                     self.set_action(Action::Rolling);
                 }
             }
@@ -728,7 +913,10 @@ impl Skater {
             }
         }
 
-        let action = if matches!(self.action, Action::BailManual | Action::BailGrind) {
+        let action = if matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        ) {
             self.action
         } else if self.manual {
             Action::Manual
@@ -775,6 +963,7 @@ impl Skater {
     }
 
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
+        self.air_tricks(input);
         // Spinning at the air rotation stat (0x800EE4CC).
         self.heading -= input.turn * p.air_rotation * STEP;
         // As the game does (0x800FC7F8): gravity, divided by the hang-time
@@ -832,10 +1021,19 @@ impl Skater {
                 self.crouched = input.crouch;
                 if self.bail_on_landing {
                     self.bail_on_landing = false;
-                    self.combo = false;
+                    self.trick = None;
+                    self.end_combo(false);
                     self.set_action(Action::BailGrind);
                     return;
                 }
+                // Landing mid-trick (`BailOn`): a bail.
+                if self.bail_on() {
+                    self.trick = None;
+                    self.end_combo(false);
+                    self.set_action(Action::Bail);
+                    return;
+                }
+                self.trick = None;
                 // Landing in a manual (up-down pressed just before) keeps
                 // the combo going; otherwise it ends.
                 if self.since_up.min(self.since_down) <= MANUAL_WINDOW
@@ -845,10 +1043,11 @@ impl Skater {
                     self.manual = true;
                     self.balance.start(&p.manual_balance, !self.combo);
                     self.combo = true;
+                    self.credit(self.tricks.manual.clone());
                     self.set_action(Action::Manual);
                     return;
                 }
-                self.combo = false;
+                self.end_combo(true);
                 self.set_action(Action::Landing);
                 return;
             }

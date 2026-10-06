@@ -20,7 +20,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use glam::{Mat4, Quat, Vec3};
 use ngc_anim::CameraPath;
-use skate::{Action as SkateAction, Input, Physics, Rails, Segment, Skater, Stats, World};
+use skate::{
+    Action as SkateAction, Input, Physics, Rails, Segment, Skater, Stats, TrickBook, World,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -526,6 +528,8 @@ impl<'a> App<'a> {
                     can_skate: false,
                     skating: false,
                     balance: None,
+                    score: 0,
+                    combo: None,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -673,10 +677,23 @@ impl<'a> App<'a> {
         }
         let id = &self.model.character.characters[index].id;
         let program = level.behaviour.program();
-        let physics = Physics::new(program, &Stats::of(program, id));
+        let stats = Stats::of(program, id);
+        let physics = Physics::new(program, &stats);
         let position = self.placement.transform_point3(Vec3::ZERO);
         let forward = self.placement.transform_vector3(Vec3::Z);
-        let skater = Skater::new(position, forward.x.atan2(forward.z));
+        let mut skater = Skater::new(position, forward.x.atan2(forward.z));
+        // The character's tricks, timed by its animations.
+        let mut tricks = TrickBook::new(program, id, &stats);
+        if let Some(character) = &self.character {
+            tricks.set_durations(|anim| {
+                character
+                    .animations
+                    .iter()
+                    .find(|(name, _)| qb::checksum(name) == anim)
+                    .map(|(_, a)| a.duration)
+            });
+        }
+        skater.tricks = tricks;
         self.stop_camera_path();
         self.skating = Some((skater, physics, self.camera.position));
         self.model.character.skating = true;
@@ -705,10 +722,14 @@ impl<'a> App<'a> {
                 - f32::from(u8::from(held(KeyCode::KeyA) || held(KeyCode::ArrowLeft))),
             crouch: held(KeyCode::Space),
             grind: held(KeyCode::KeyE),
+            flip: held(KeyCode::KeyQ),
+            grab: held(KeyCode::KeyF),
         };
         skater.update(input, physics, world, dt);
         self.placement = skater.placement();
         self.model.character.balance = skater.balance_meter();
+        self.model.character.score = skater.score;
+        self.model.character.combo = combo_text(skater);
 
         // Animation: by what the skater is doing.
         let (names, looping): (&[&str], bool) = match skater.action {
@@ -723,6 +744,7 @@ impl<'a> App<'a> {
             SkateAction::Manual => (&["ManualIn1", "ManualRange1"], false),
             SkateAction::BailManual => (&["BailManual", "BailManualGetUp"], false),
             SkateAction::BailGrind => (&["BailGrind", "BailGrindGetUp"], false),
+            SkateAction::Bail => (&["Bail1", "BailGetUp1"], false),
         };
         let mut time = skater.action_time;
         let mut chosen = None;
@@ -738,6 +760,22 @@ impl<'a> App<'a> {
             }
             chosen = Some((index, duration));
             break;
+        }
+        // An air trick shows its own animation.
+        if let Some((anim, at, looping)) = skater.trick_pose() {
+            if let Some(index) = character
+                .animations
+                .iter()
+                .position(|(name, _)| qb::checksum(name) == anim)
+            {
+                let duration = character.animations[index].1.duration;
+                chosen = Some((index, duration));
+                time = if looping {
+                    at
+                } else {
+                    at.clamp(0.0, duration * 0.999)
+                };
+            }
         }
         if let Some((index, mut duration)) = chosen {
             // A balance pose (`ManualRange1`, `GrindRange1`) follows the
@@ -782,6 +820,7 @@ impl<'a> App<'a> {
         self.skating = None;
         self.model.character.skating = false;
         self.model.character.balance = None;
+        self.model.character.combo = None;
         self.model.character.current = None;
         self.model.character.animations.clear();
         if let Some(level) = &mut self.level {
@@ -1492,4 +1531,33 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     renderer::save_png(&device, &queue, &target, width, height, out)?;
     println!("Wrote {}", out.display());
     Ok(())
+}
+
+/// The combo on screen: the tricks so far with their running total, or the
+/// last combo's result for a few seconds after it ends.
+fn combo_text(skater: &Skater) -> Option<String> {
+    let line = |tricks: &[(String, u32)]| {
+        tricks
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(" + ")
+    };
+    if !skater.combo_tricks.is_empty() {
+        let sum: u32 = skater.combo_tricks.iter().map(|(_, s)| s).sum();
+        return Some(format!(
+            "{}\n{sum} x {}",
+            line(&skater.combo_tricks),
+            skater.combo_tricks.len()
+        ));
+    }
+    let last = skater.last_combo.as_ref()?;
+    if skater.action_time > 3.0 && !matches!(skater.action, SkateAction::Landing) {
+        return None;
+    }
+    Some(if last.bailed {
+        format!("{}\nBail!", line(&last.tricks))
+    } else {
+        format!("{}\n+{}", line(&last.tricks), last.total)
+    })
 }

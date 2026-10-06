@@ -307,6 +307,19 @@ on-ground update switches on.
   Ported: all of that, the combo carrying the lean over until a landing
   without a manual; `SkateInAble` approximated, and bails as a 1.5 s
   stop. Not ported: lips, the other control scheme, special manuals.
+- **Tricks** are scripts. `AirTricks` (`airtricks.q`) maps a button and a
+  direction (`AirTrickLogic`, within 400 ms) to a slot (`Air_SquareD`);
+  the profile's `default_trick_mapping` (`JessieTricks`) puts a trick in
+  each slot: `{ scr = FlipTrick params = { Name score anim speed
+  trickslack ... } }`. `FlipTrick` plays `anim` at `speed` times
+  `Skater_Flip_Speed_Stat` (1.0-1.3, at most 1.3), names it after 15
+  frames and turns `BailOn` until `trickslack` (10) frames from the end;
+  then the next trick can start (`DoNextTrick`). `GrabTrick` plays its
+  way in, names it halfway, comes out if the button is let go after 60%,
+  and otherwise holds `idle` (tweaking) until it is, then plays `anim`
+  backwards. Ported for the default controls, without spins, specials,
+  extras, tweak points or sounds. Scoring is the game's own code (not
+  read yet); combos score the sum times the count for now.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

@@ -22,7 +22,8 @@ to that engine family too.
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
 | Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals and balance, on any level |
-| Tricks, gameplay, menus, audio | Not started yet |
+| Tricks | Air flips and grabs, grinds and manuals from each character's trick table, with combos and bails |
+| Gameplay, menus, audio | Not started yet |
 
 Every format is checked against every file on the US disc (`GEXE52`):
 69 archives (5,616 files), 3,364 textures and 48 loading screens, 408
@@ -106,8 +107,10 @@ frames.
 
 **Skate** puts the character on the level: W pushes, S brakes, A/D steer,
 holding Space crouches and letting go ollies, holding E grinds rails,
-tapping W then S starts a manual, and Esc stops. Manuals balance with W and
-S, grinds with A and D, on a meter at the bottom of the screen. The physics is the game's own code as far as it's been read
+tapping W then S starts a manual, Q flips and F grabs in the air (with a
+direction: W, S, A, D), and Esc stops. Manuals balance with W and S, grinds
+with A and D, on a meter at the bottom of the screen; the combo and the
+score show above it and top right. The physics is the game's own code as far as it's been read
 (see [Skater physics](#skater-physics)), with its constants and the
 character's stats, and a chase camera set like the game's.
 
@@ -127,6 +130,7 @@ around takes over from wherever it is.
 | R | Back to the start |
 | W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind, stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
+| Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -542,12 +546,16 @@ kicker), bouncing off walls on the ground and in the air, the air step,
 landing (including popping onto ledges), grinding level rails (rail
 gravity, corners, jumping off), vert air off quarter pipes (coming back
 down onto the ramp), and the balance meter for manuals and grinds (with
-bails). On the Hub, Jessie reaches her kick speed
+bails). Air tricks come from the game's scripts: each character's trick
+table (Jessie's "Quickest Boots in the West", "Well Howdy There"...) and the
+button combinations, played as the scripts play them, with a bail for
+landing mid-trick. On the Hub, Jessie reaches her kick speed
 of 425 a second, covers about 1,000 units in three seconds, ollies 57
 units high and grinds the Hub's long rails.
 
 [docs/physics-notes.md](docs/physics-notes.md) maps every function read,
-with addresses. Not yet: transfers, lips, tricks, scoring
+with addresses. Not yet: transfers, lips, spins and special tricks, and
+the game's own scoring (combos score points times tricks for now)
 and bails, moving objects, and a frame-by-frame check against Dolphin.
 Turning rates are read as radians a second and the camera distances as
 feet, both guesses for now.
