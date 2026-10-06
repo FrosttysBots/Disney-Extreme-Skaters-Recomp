@@ -350,11 +350,23 @@ impl Renderer {
         }
     }
 
-    /// Replaces a layer's vertices (same count and order as its mesh).
-    pub fn update_layer(&self, id: Option<usize>, vertices: &[Vertex]) {
+    /// Replaces a layer's vertices from `first` on (same order as its mesh).
+    pub fn update_layer(&self, id: Option<usize>, first: usize, vertices: &[Vertex]) {
         if let Some((layer, _)) = id.and_then(|id| self.layers.get(id)) {
-            self.queue
-                .write_buffer(&layer.vertices, 0, bytemuck::cast_slice(vertices));
+            write_vertices(&self.queue, layer, first, vertices);
+        }
+    }
+
+    /// Replaces the level's vertices (or the sky's) from `first` on, for
+    /// animated vertex colors.
+    pub fn update_world(&self, sky: bool, first: usize, vertices: &[Vertex]) {
+        let target = if sky {
+            self.sky.as_ref()
+        } else {
+            Some(&self.world)
+        };
+        if let Some(level) = target {
+            write_vertices(&self.queue, level, first, vertices);
         }
     }
 
@@ -530,6 +542,13 @@ impl Renderer {
                 pass.draw(0..*count, 0..1);
             }
         }
+    }
+}
+
+fn write_vertices(queue: &wgpu::Queue, level: &GpuLevel, first: usize, vertices: &[Vertex]) {
+    if !vertices.is_empty() {
+        let offset = (first * std::mem::size_of::<Vertex>()) as u64;
+        queue.write_buffer(&level.vertices, offset, bytemuck::cast_slice(vertices));
     }
 }
 

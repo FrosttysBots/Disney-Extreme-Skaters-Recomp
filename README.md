@@ -71,7 +71,8 @@ leaves out the panel and markers, `--size 1920x1080` sets the size,
 `--spawn N` picks the spawn point, `--orbit`, `--distance` and
 `--camera-height` place the camera around the character, and `--lift`
 raises them into the air (jump height comes from the game's physics, not
-the animations). The pictures in `docs/screenshots` were made that way.
+the animations). `--camera x,y,z,yaw,pitch` and `--object NAME` place the
+camera directly. The pictures in `docs/screenshots` were made that way.
 
 ## Crates
 
@@ -197,9 +198,20 @@ checked against the running game.
 
 Every material pass is drawn with its blend mode (opaque, add, subtract,
 alpha blend, modulate, brighten, and their fixed-alpha variants), its own UV
-set, scrolling UVs and environment mapping. Not drawn yet: vertex-color
-animation and fog. This viewer draws every sector; the Map Viewer leaves
-out the ones that aren't there at the start and adds objects.
+set, scrolling UVs and environment mapping. This viewer draws every
+sector; the Map Viewer leaves out the ones that aren't there at the start,
+adds objects and animates vertex colors. Neither draws fog, which the
+GameCube executable seems to leave out too: its `SetFogColor` prints
+"STUBBED" in dozens of places.
+
+**Animated vertex colors.** A material pass can carry color sequences
+(times in milliseconds, looping at the last key, colors where 0x80 is full
+brightness), and a sector can give each vertex a sequence number: 0 for
+none, otherwise 1-based into the sequences of the material drawing it. The
+sequence's color replaces the baked one. Only three levels use it, for 803
+vertices: the arcade screens at the pizza level flicker on three times a
+second, and there are smaller effects on the hub (beside each warp portal)
+and the beach.
 `desa model materials <file>` lists a level's materials by area covered,
 which helps track down rendering problems.
 
@@ -412,8 +424,9 @@ from 1,079 files.
    skinned models, levels, collision, a level viewer, skeletons and
    animations, camera paths, and animated characters in the Map Viewer
    (done).
-2. **Level loading.** Rails, spawn points, objects and pedestrians (done).
-   Next: the collision BSP tree, fog and vertex-color animation.
+2. **Level loading.** Rails, spawn points, objects, pedestrians and
+   animated vertex colors (done). Next: the collision BSP tree, then
+   moving pedestrians and vehicles along their paths.
 3. **QB scripts.** Decompiling and data parsing (done). Next: an
    interpreter that runs the game's scripts.
 4. **Skater physics.** Match the original's constants and update loop,

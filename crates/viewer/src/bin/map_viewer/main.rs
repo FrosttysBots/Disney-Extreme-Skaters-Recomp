@@ -32,7 +32,7 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 use desa_viewer::camera::{FlyCamera, ScriptedCamera, vertical_fov};
 use desa_viewer::character::Character;
 use desa_viewer::collision::{self, CollisionView};
-use desa_viewer::level::Level;
+use desa_viewer::level::{ColorAnimation, Level};
 use desa_viewer::nodes::{LevelNodes, Spawn};
 use desa_viewer::objects::{self, LevelObjects};
 use desa_viewer::renderer::{self, Renderer, request_device};
@@ -92,6 +92,10 @@ struct Args {
     /// For --screenshot: camera distance from the character
     #[arg(long, requires = "screenshot", default_value_t = 170.0)]
     distance: f32,
+    /// For --screenshot: the camera as x,y,z,yaw,pitch (degrees; yaw 0
+    /// looks down -Z)
+    #[arg(long, requires = "screenshot", allow_hyphen_values = true, value_parser = FlyCamera::parse)]
+    camera: Option<FlyCamera>,
     /// For --screenshot: look at the object or pedestrian with this node
     /// name (e.g. TRG_Goal_Letter_S)
     #[arg(long, requires = "screenshot")]
@@ -193,6 +197,8 @@ struct LoadedLevel {
     camera_paths: Vec<(String, CameraPath)>,
     objects: LevelObjects,
     layers: ObjectLayers,
+    /// Animated vertex colors of the level, its sky and its goal geometry.
+    colors: [ColorAnimation; 3],
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -275,6 +281,13 @@ fn load_level(
         sky.as_ref(),
         collision.as_deref(),
     );
+    let colors = [
+        world.color_animation.clone(),
+        sky.as_ref()
+            .map(|s| s.color_animation.clone())
+            .unwrap_or_default(),
+        goal_geometry.color_animation.clone(),
+    ];
     let layers = ObjectLayers {
         goal_geometry: renderer.add_layer(&goal_geometry, false),
         props: renderer.add_layer(&objects.props, false),
@@ -292,6 +305,7 @@ fn load_level(
             camera_paths,
             objects,
             layers,
+            colors,
             markers: (false, false),
         },
         stats,
@@ -308,10 +322,21 @@ struct ObjectLayers {
 }
 
 impl LoadedLevel {
-    /// Shows or hides the object layers and poses the pedestrians shown.
+    /// Shows or hides the object layers, poses the pedestrians shown and
+    /// animates vertex colors.
     fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32) {
         let l = &self.layers;
         let r = &mut self.renderer;
+        let [world, sky, goal] = &self.colors;
+        if !world.is_empty() {
+            r.update_world(false, world.first_vertex, &world.at(seconds));
+        }
+        if !sky.is_empty() {
+            r.update_world(true, sky.first_vertex, &sky.at(seconds));
+        }
+        if goal_objects && !goal.is_empty() {
+            r.update_layer(l.goal_geometry, goal.first_vertex, &goal.at(seconds));
+        }
         for (id, shown) in [
             (l.props, objects),
             (l.crowd, objects),
@@ -322,10 +347,10 @@ impl LoadedLevel {
             r.show_layer(id, shown);
         }
         if objects && !self.objects.crowd.is_empty() {
-            r.update_layer(l.crowd, &self.objects.crowd.pose(seconds));
+            r.update_layer(l.crowd, 0, &self.objects.crowd.pose(seconds));
         }
         if goal_objects && !self.objects.goal_crowd.is_empty() {
-            r.update_layer(l.goal_crowd, &self.objects.goal_crowd.pose(seconds));
+            r.update_layer(l.goal_crowd, 0, &self.objects.goal_crowd.pose(seconds));
         }
     }
 }
@@ -1141,6 +1166,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             .with_context(|| format!("no object named {name}"))?;
         let (eye, target) = objects::view_of(node);
         camera = FlyCamera::looking_at(eye, target);
+    }
+    if let Some(c) = args.camera {
+        camera = c;
     }
 
     if let Some(id) = &args.character {

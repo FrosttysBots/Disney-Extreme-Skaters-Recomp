@@ -19,7 +19,7 @@ fn real_level_camera_paths() {
     assert_eq!(levels.len(), 11);
 
     let sets = data.animation_sets().unwrap();
-    let (mut total, mut placed, mut pedestrians) = (0, 0, 0);
+    let (mut total, mut placed, mut pedestrians, mut animated) = (0, 0, 0, 0);
     for level in &levels {
         let mut files = data.load_level(&level.id).unwrap();
         let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
@@ -39,6 +39,22 @@ fn real_level_camera_paths() {
             built.goal_crowd.pose(1.0).len(),
             built.goal_crowd.mesh.vertices.len()
         );
+        // Animated vertex colors, split between the start and goal layers.
+        let hidden = &nodes.hidden_sectors;
+        for goal in [false, true] {
+            let level = desa_viewer::level::Level::from_bytes_filtered(
+                &files.scene,
+                files.textures.as_deref(),
+                |s| hidden.contains(&s) == goal,
+            )
+            .unwrap();
+            let anim = &level.color_animation;
+            assert_eq!(
+                anim.first_vertex + anim.vertices.len(),
+                level.vertices.len()
+            );
+            animated += anim.vertices.len();
+        }
         placed += nodes.objects.len();
         pedestrians += crowd;
         for (name, bytes) in &files.cameras {
@@ -56,5 +72,6 @@ fn real_level_camera_paths() {
         total += files.cameras.len();
     }
     assert_eq!(total, 292);
-    println!("{placed} object nodes, {pedestrians} pedestrians");
+    println!("{placed} object nodes, {pedestrians} pedestrians, {animated} animated vertex colors");
+    assert_eq!(animated, 803);
 }
