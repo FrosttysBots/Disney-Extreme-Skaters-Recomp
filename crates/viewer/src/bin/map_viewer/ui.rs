@@ -108,6 +108,8 @@ Skating: W push, S brake, A/D steer,
   tap W then S to manual
   (balance: W/S in a manual, A/D on a rail),
   in the air Q flip, F grab (+ W/S/A/D),
+  R revert, Tab next spawn; or a gamepad
+  (stick, A ollie, X flip, B grab, Y grind),
   Esc stop";
 
 /// The score (top right) and the combo (bottom centre, above the balance

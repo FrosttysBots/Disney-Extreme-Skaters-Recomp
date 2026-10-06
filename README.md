@@ -139,6 +139,10 @@ around takes over from wherever it is.
 | E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
 | R as you land from vert | Revert (keeps the combo going into a manual) |
 | Tab | While skating: to the next spawn point |
+
+A gamepad works too while skating, laid out like the GameCube game: the
+left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
+X flips, B grabs, Y grinds, and the shoulder buttons revert.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |

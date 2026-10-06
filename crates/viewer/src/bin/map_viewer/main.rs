@@ -472,6 +472,8 @@ struct App<'a> {
     model: ui::Model,
     camera: FlyCamera,
     keys: HashSet<KeyCode>,
+    /// Gamepads, if the platform has them.
+    gamepads: Option<gilrs::Gilrs>,
     looking: bool,
     /// A level to load, and how many frames the "Loading" message has shown.
     pending: Option<(usize, u32)>,
@@ -542,6 +544,7 @@ impl<'a> App<'a> {
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
             keys: HashSet::new(),
+            gamepads: gilrs::Gilrs::new().ok(),
             looking: false,
             pending: None,
             next_spawn: 0,
@@ -723,7 +726,51 @@ impl<'a> App<'a> {
 
     /// Moves the skater by the keys held, picks its animation and follows
     /// it with the camera.
+    /// The skating controls on a gamepad, the game's way round: the stick
+    /// or D-pad steers (up pushes, down brakes), A crouches and ollies, X
+    /// (Square) flips, B (Circle) grabs, Y (Triangle) grinds, and the
+    /// shoulder buttons revert.
+    fn pad_input(&mut self) -> Input {
+        use gilrs::{Axis, Button};
+        let Some(gilrs) = self.gamepads.as_mut() else {
+            return Input::default();
+        };
+        while gilrs.next_event().is_some() {}
+        let mut input = Input::default();
+        for (_, pad) in gilrs.gamepads() {
+            let x = pad.value(Axis::LeftStickX);
+            let y = pad.value(Axis::LeftStickY);
+            let pressed = |b| pad.is_pressed(b);
+            input.push |= y > 0.5 || pressed(Button::DPadUp);
+            input.brake |= y < -0.5 || pressed(Button::DPadDown);
+            let mut turn = if x.abs() > 0.25 { x } else { 0.0 };
+            if pressed(Button::DPadLeft) {
+                turn = -1.0;
+            }
+            if pressed(Button::DPadRight) {
+                turn = 1.0;
+            }
+            if turn != 0.0 {
+                input.turn = turn.signum();
+            }
+            input.crouch |= pressed(Button::South);
+            input.flip |= pressed(Button::West);
+            input.grab |= pressed(Button::East);
+            input.grind |= pressed(Button::North);
+            input.revert |= [
+                Button::LeftTrigger,
+                Button::RightTrigger,
+                Button::LeftTrigger2,
+                Button::RightTrigger2,
+            ]
+            .into_iter()
+            .any(pressed);
+        }
+        input
+    }
+
     fn skate(&mut self, dt: f32) {
+        let pad = self.pad_input();
         let (Some((skater, physics, chase)), Some(level), Some(character)) =
             (&mut self.skating, &self.level, &self.character)
         else {
@@ -745,6 +792,21 @@ impl<'a> App<'a> {
             flip: held(KeyCode::KeyQ),
             grab: held(KeyCode::KeyF),
             revert: held(KeyCode::KeyR),
+        };
+        // A gamepad as well as the keys.
+        let input = Input {
+            push: input.push || pad.push,
+            brake: input.brake || pad.brake,
+            turn: if input.turn != 0.0 {
+                input.turn
+            } else {
+                pad.turn
+            },
+            crouch: input.crouch || pad.crouch,
+            grind: input.grind || pad.grind,
+            flip: input.flip || pad.flip,
+            grab: input.grab || pad.grab,
+            revert: input.revert || pad.revert,
         };
         skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
