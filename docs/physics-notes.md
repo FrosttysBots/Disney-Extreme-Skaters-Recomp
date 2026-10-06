@@ -267,6 +267,46 @@ on-ground update switches on.
   `Physics_Vert_hang_Stat`. On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).
+- **Wall rides** (state 2, 0x800FE664; started by 0x800FDB6C from the
+  air wall code) need the face flagged wall-ridable, the grind button
+  held or pressed within `Wall_Ride_Triangle_Window`, `Wall_Ride_Delay`
+  since the last, `Wall_Ride_Min_Speed` along the wall, a wall no more
+  overhanging than `Wall_Ride_Upside_Down_Angle`, a glancing hit (under
+  `Wall_Ride_Max_Incident_Angle`) and an upright skater
+  (`Wall_Ride_Max_Tilt`); the ride uses `Wall_Ride_Gravity` and jumps off
+  with `Wall_Ride_Jump_Out_Speed` and `Wall_Ride_Jump_Up_Speed`. But only
+  11 faces in the whole game are wall-ridable (all in the canyon:
+  `cargo run --release -p desa_viewer --example face_flags`), and no
+  character has the `WallRide*` animations the `WallRide` script plays:
+  it's left over from the engine. Not ported.
+- **Balance** (manuals, grinds, lips): 0x800CAA50 starts a balance trick,
+  0x800CAD30 updates it, called from the ground, rail and lip updates.
+  Each change is scaled by the frame's length in 60ths of a second
+  (0x800E8368). Per frame: the cheese drains by `Cheese / CheeseFrames`;
+  with `instability = Instable_Base + time * Instable_Rate`, the angle
+  grows by `angle * Lean_Gravity_Stat * instability` and moves by
+  `speed * instability`. Button A (up in a manual, right on a rail)
+  takes `Lean_Acc` off the speed, B adds it, once both have been let go
+  since the start; for `BalanceSafeButtonPeriod` (1 s) a button that
+  would push the lean further over does nothing. With neither held, a
+  speed under `Lean_Min_Speed` becomes a random amount up to
+  `Lean_Rnd_Speed` the same way, and otherwise gains up to 0.5 more.
+  Past `Lean_Bail_Angle` (4000, on a meter of 4096) it fires
+  `OffMeterTop` or `OffMeterBottom` and resets. Starting: a lean speed of
+  `Repeat_Min` either way at random, or the last trick's times
+  `Repeat_Multiplier` in a combo; the angle keeps
+  `Lean_Repeat_Multiplier` of the last plus the cheese left over, and the
+  cheese becomes `Cheese` (500 on rails, 0 in manuals). The scripts give
+  the buttons (`DoBalanceTrick ButtonA = Up ButtonB = Down` for manuals,
+  Right and Left for grinds and lips) and what falling off does: a
+  manual bails off the top (`BailManual`) and sets down off the bottom
+  (`ManualLand`); a grind falls to that side (`SkateInOrBail`), skating
+  in onto ground beside the rail if there is any (`SkateInAble`, turning
+  30 degrees) and bailing otherwise (`FiftyFiftyFall`). Manuals start
+  with up then down (or down then up) within 400 ms (`ManualTricks`).
+  Ported: all of that, the combo carrying the lean over until a landing
+  without a manual; `SkateInAble` approximated, and bails as a 1.5 s
+  stop. Not ported: lips, the other control scheme, special manuals.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

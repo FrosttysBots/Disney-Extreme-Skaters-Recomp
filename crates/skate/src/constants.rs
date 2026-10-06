@@ -13,6 +13,8 @@
 //! assumptions until checked against the running game.
 
 use qb::vm::Program;
+
+use crate::balance::BalanceParams;
 use qb::{Value, checksum};
 
 /// A character's stats, in the order of the `STATS_*` indices.
@@ -163,6 +165,10 @@ pub struct Physics {
     pub rail_corner_leave_angle: f32,
     pub rail_jump_angle: f32,
     pub regrind_time: f32,
+    /// Balancing manuals (`ManualParams`, by the manual stat) and grinds
+    /// (`GrindParams`, by the rail balance stat).
+    pub manual_balance: BalanceParams,
+    pub grind_balance: BalanceParams,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -230,6 +236,8 @@ impl Physics {
             rail_corner_leave_angle: plain("Rail_Corner_Leave_Angle", 50.0),
             rail_jump_angle: plain("Rail_Jump_Angle", 15.0),
             regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
+            manual_balance: BalanceParams::new(program, "ManualParams", stats),
+            grind_balance: BalanceParams::new(program, "GrindParams", stats),
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),
@@ -239,7 +247,12 @@ impl Physics {
 
 /// A `{ (min, max) [limit = n] STATS_X }` constant for these stats.
 fn stat_value(program: &Program, name: &str, stats: &Stats) -> Option<f32> {
-    let value = program.value(checksum(name))?;
+    scale(program, program.value(checksum(name))?, stats)
+}
+
+/// A `{ (min, max) [limit = n] STATS_X }` value (or a plain number) for
+/// these stats.
+pub(crate) fn scale(program: &Program, value: &Value, stats: &Stats) -> Option<f32> {
     let Value::Struct(items) = value else {
         return value.as_f32();
     };

@@ -44,6 +44,8 @@ pub struct CharacterModel {
     /// Whether the level has collision to skate on, and whether skating.
     pub can_skate: bool,
     pub skating: bool,
+    /// The balance meter (-1 to 1) while in a manual or a grind.
+    pub balance: Option<f32>,
 }
 
 /// Everything the panel shows or edits.
@@ -95,7 +97,37 @@ P: play or pause the character
 F1: hide or show this panel
 Skating: W push, S brake, A/D steer,
   Space crouch (let go: ollie),
-  hold E to grind, Esc stop";
+  hold E to grind, tap W then S to manual
+  (balance: W/S in a manual, A/D on a rail),
+  Esc stop";
+
+/// The balance meter, bottom centre: a bar with a marker that slides to
+/// either end as the skater leans.
+fn balance_meter(ctx: &egui::Context, meter: f32) {
+    egui::Area::new(egui::Id::new("balance"))
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -40.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(260.0, 18.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(160));
+            let middle = rect.center();
+            painter.line_segment(
+                [middle - egui::vec2(0.0, 7.0), middle + egui::vec2(0.0, 7.0)],
+                egui::Stroke::new(1.0_f32, egui::Color32::GRAY),
+            );
+            // Green near the middle, red near the ends.
+            let danger = meter.abs();
+            let colour =
+                egui::Color32::from_rgb((255.0 * danger) as u8, (255.0 * (1.0 - danger)) as u8, 40);
+            let x = middle.x + meter * (rect.width() / 2.0 - 6.0);
+            painter.rect_filled(
+                egui::Rect::from_center_size(egui::pos2(x, middle.y), egui::vec2(8.0, 14.0)),
+                2.0,
+                colour,
+            );
+        });
+}
 
 pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -107,6 +139,9 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     ui.heading(format!("Loading {title}..."));
                 });
             });
+    }
+    if let Some(meter) = model.character.balance {
+        balance_meter(ctx, meter);
     }
     if !model.panel_open {
         return actions;
@@ -289,6 +324,7 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .on_hover_text(
                 "Skate the character around the level: W push, S brake, A/D steer, \
                  hold Space to crouch and let go to ollie, hold E to grind rails, \
+                 tap W then S to manual (balance with W/S, or A/D on a rail), \
                  Esc to stop. The game's own physics, as far as it's been read.",
             )
             .clicked()

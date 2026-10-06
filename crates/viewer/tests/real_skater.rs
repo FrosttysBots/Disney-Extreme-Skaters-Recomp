@@ -93,6 +93,58 @@ fn real_skater_on_the_hub() {
         Action::Landing | Action::Rolling | Action::Standing
     ));
 
+    // A manual: tap up, then down, and let it ride. Left alone it falls
+    // off the meter within seconds; balanced, it lasts.
+    let manual_frames = |skater: &mut Skater, careful: bool| {
+        let tap = |push: bool, brake: bool| Input {
+            push,
+            brake,
+            ..Input::default()
+        };
+        let release = tap(false, false);
+        for input in [
+            release,
+            tap(true, false),
+            release,
+            tap(false, true),
+            release,
+        ] {
+            skater.update(input, &physics, &world, 1.0 / 60.0);
+        }
+        assert!(skater.manual, "up then down starts a manual");
+        let mut frames = 0;
+        while skater.manual && frames < 600 {
+            let ahead = skater.balance.angle + skater.balance.speed * 20.0;
+            let input = if careful {
+                tap(ahead > 100.0, ahead < -100.0)
+            } else {
+                Input::default()
+            };
+            skater.update(input, &physics, &world, 1.0 / 60.0);
+            frames += 1;
+        }
+        frames
+    };
+    let mut lazy = Skater::new(start.position, facing.x.atan2(facing.z));
+    let mut careful = Skater::new(start.position, facing.x.atan2(facing.z));
+    for _ in 0..90 {
+        lazy.update(push, &physics, &world, 1.0 / 60.0);
+        careful.update(push, &physics, &world, 1.0 / 60.0);
+    }
+    assert!(lazy.on_ground && careful.on_ground);
+    let lazy_frames = manual_frames(&mut lazy, false);
+    let careful_frames = manual_frames(&mut careful, true);
+    println!(
+        "manual: {lazy_frames} frames left alone (then {:?}), {careful_frames} balanced",
+        lazy.action
+    );
+    assert!(lazy_frames > 30 && lazy_frames < 600);
+    assert!(matches!(
+        lazy.action,
+        Action::BailManual | Action::Rolling | Action::Air | Action::Standing
+    ));
+    assert!(careful_frames > lazy_frames);
+
     // Keep pushing: sooner or later a wall turns her away.
     let mut flails = 0;
     let mut turned = 0.0f32;
@@ -155,6 +207,7 @@ fn real_skater_on_the_hub() {
     let mut tried = 0;
     let mut grinded = 0;
     let mut fell = Vec::new();
+    let mut fell_through = Vec::new();
     for (i, rail) in rails.segments.iter().enumerate() {
         for way in [1.0, -1.0] {
             let middle = rail.start.lerp(rail.end, 0.5);
@@ -163,15 +216,27 @@ fn real_skater_on_the_hub() {
             skater.velocity = rail.direction() * way * 300.0;
             let mut was_grinding = false;
             let mut lowest = f32::MAX;
+            let mut through_ground = false;
             for frame in 0..900 {
                 // Hold grind just long enough to get on.
                 let input = Input {
                     grind: frame < 30,
                     ..Input::default()
                 };
+                let before = skater.position;
                 skater.update(input, &physics, &world, 1.0 / 60.0);
                 was_grinding |= skater.grind.is_some();
                 lowest = lowest.min(skater.position.y);
+                // Falling through ground (crossing a face that faces up
+                // without landing on it) is a bug; through a real hole in
+                // the level, it isn't. Respawns (big jumps) aside.
+                let after = skater.position;
+                if !skater.on_ground && skater.grind.is_none() && before.distance(after) < 200.0 {
+                    let lift = glam::Vec3::Y * 2.0;
+                    through_ground |= world
+                        .ray(before + lift, after + lift)
+                        .is_some_and(|hit| hit.normal.y > 0.5 && after.y < hit.point.y - 5.0);
+                }
                 if was_grinding && skater.on_ground {
                     break;
                 }
@@ -180,6 +245,9 @@ fn real_skater_on_the_hub() {
             grinded += usize::from(was_grinding);
             if lowest < world.floor() - 400.0 {
                 fell.push((i, way));
+                if through_ground {
+                    fell_through.push((i, way));
+                }
             }
         }
     }
@@ -187,9 +255,13 @@ fn real_skater_on_the_hub() {
         "{grinded} of {tried} rail drops grinded, {} fell out of the level: {fell:?}",
         fell.len()
     );
-    // Rail 1567 hangs off a building at the edge of the Hub, over a quarter
-    // pipe with no floor in front of it: falling off it leaves the level
-    // (the game's out-of-bounds triggers aren't ported). Anything else
-    // falling out is a bug.
-    assert!(fell.iter().all(|&(i, _)| i == 1567), "{fell:?}");
+    // Falling off a rail into a real hole in the level (like the ring of
+    // rails round the open hole at 4326, 10168, or rail 1567 off the edge of
+    // a building) leaves the level, as the game's out-of-bounds triggers
+    // would catch; the skater's safety net puts it back. Falling out
+    // through ground is a bug.
+    assert!(
+        fell_through.is_empty(),
+        "through the ground: {fell_through:?}"
+    );
 }

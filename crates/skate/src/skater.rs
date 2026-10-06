@@ -5,10 +5,11 @@
 //! (see `constants`): pushing, drag, gravity along the ground, the velocity
 //! kept along the board (it can roll backwards), the speed limits,
 //! steering, braking, the ollie, following the ground, walls on the ground
-//! and in the air, the air step, landing and the ledge pop. Not yet
-//! checked frame by frame against the running game, and without grinds,
-//! manuals, vert air, wall rides, tricks, moving objects and the game's
-//! events.
+//! and in the air, the air step, landing and the ledge pop, grinding, vert
+//! air, and manuals and grinds balanced on the game's meter (see
+//! `balance`). Not yet checked frame by frame against the running game,
+//! and without lips, transfers, tricks, moving objects and the game's
+//! events (wall rides go unused in this game).
 //!
 //! - **On the ground** the skater follows the surface as the game does
 //!   (0x800F52AC): each step it moves along its heading, then looks down
@@ -41,6 +42,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use glam::{Mat4, Quat, Vec3};
 
+use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
 use crate::rails::RailHit;
 use crate::world::{Hit, World};
@@ -74,6 +76,12 @@ pub enum Action {
     FlailRight,
     /// On a rail.
     Grinding,
+    /// Balancing on two wheels.
+    Manual,
+    /// Fallen off a manual (the game's `BailManual`) or a rail
+    /// (`BailGrind`).
+    BailManual,
+    BailGrind,
 }
 
 /// Vert air: the ramp's normal, flattened (out of the ramp), and where
@@ -96,6 +104,14 @@ pub struct Grind {
 
 /// Fixed physics step.
 const STEP: f32 = 1.0 / 60.0;
+
+/// How long a bail lasts before the skater can go again (this crate's
+/// stand-in for the game's bail and get-up animations).
+const BAIL_TIME: f32 = 1.5;
+
+/// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
+/// in the game's `manualtricks.q`).
+const MANUAL_WINDOW: f32 = 0.4;
 
 pub struct Skater {
     pub position: Vec3,
@@ -128,6 +144,20 @@ pub struct Skater {
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
     /// plane so it comes back down onto it.
     pub vert: Option<VertAir>,
+    /// The balance meter, for manuals and grinds.
+    pub balance: Balance,
+    /// In a manual.
+    pub manual: bool,
+    /// In a combo: balance tricks carry their lean over (from one
+    /// balance trick until landing without one).
+    combo: bool,
+    /// Seconds since up and down were last pressed, for the manual's
+    /// up-down (or down-up) press.
+    since_up: f32,
+    since_down: f32,
+    last_input: Input,
+    /// Falling off a rail: bail on landing.
+    bail_on_landing: bool,
     leftover: f32,
 }
 
@@ -150,8 +180,20 @@ impl Skater {
             last_ground: position,
             ground_flags: 0,
             vert: None,
+            balance: Balance::default(),
+            manual: false,
+            combo: false,
+            since_up: f32::MAX,
+            since_down: f32::MAX,
+            last_input: Input::default(),
+            bail_on_landing: false,
             leftover: 0.0,
         }
+    }
+
+    /// The balance meter from -1 to 1 while balancing a manual or a grind.
+    pub fn balance_meter(&self) -> Option<f32> {
+        (self.manual || self.grind.is_some()).then(|| (self.balance.angle / METER).clamp(-1.0, 1.0))
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -227,6 +269,31 @@ impl Skater {
         } else {
             self.turn_time + STEP
         };
+        self.since_up = if input.push && !self.last_input.push {
+            0.0
+        } else {
+            self.since_up + STEP
+        };
+        self.since_down = if input.brake && !self.last_input.brake {
+            0.0
+        } else {
+            self.since_down + STEP
+        };
+        self.last_input = input;
+        // Bailing: no control until it's over.
+        let input = if matches!(self.action, Action::BailManual | Action::BailGrind) {
+            if self.action_time < BAIL_TIME {
+                Input {
+                    brake: true,
+                    ..Input::default()
+                }
+            } else {
+                self.set_action(Action::Standing);
+                input
+            }
+        } else {
+            input
+        };
         // The speed limits run every frame whatever the skater is doing
         // (main.dol 0x8010B120 calls 0x800F4834 before the ground, air
         // and rail updates), so chaining grinds and jumps can't build
@@ -291,6 +358,9 @@ impl Skater {
         let along = velocity.dot(direction);
         let forwards = along >= 0.0;
         self.vert = None;
+        self.manual = false;
+        self.balance.start(&p.grind_balance, !self.combo);
+        self.combo = true;
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,
@@ -342,6 +412,47 @@ impl Skater {
             return;
         }
         self.crouched = input.crouch;
+
+        // Balance (`DoBalanceTrick ButtonA = Right ButtonB = Left`): off
+        // the top of the meter it falls to the left, off the bottom to the
+        // right (the game's `SkateInOrBail`).
+        let lean = self
+            .balance
+            .update(input.turn > 0.0, input.turn < 0.0, &p.grind_balance, STEP);
+        if lean != Lean::Balanced {
+            let right = Vec3::new(-travel.z, 0.0, travel.x);
+            let (side, turn) = if lean == Lean::OffTop {
+                (-right, 30f32.to_radians())
+            } else {
+                (right, -30f32.to_radians())
+            };
+            self.combo = false;
+            // Ground just beside the rail (`SkateInAble`, approximated):
+            // skate in onto it, turned 30 degrees that way, no bail.
+            let beside = self.position + side * 20.0;
+            let lift = Vec3::Y * 10.0;
+            let ground = world
+                .ray(beside + lift, beside - Vec3::Y * 30.0)
+                .filter(|hit| !is_wall(hit, p))
+                .filter(|hit| world.ray(self.position + lift, hit.point + lift).is_none());
+            if let Some(hit) = ground {
+                self.grind = None;
+                self.since_rail = 0.0;
+                self.position = hit.point;
+                self.up = hit.normal;
+                self.heading += turn;
+                self.velocity = self.forward() * grind.speed;
+                self.on_ground = true;
+                self.set_action(Action::Landing);
+                return;
+            }
+            // Otherwise a nudge that way and down, and a bail on landing
+            // (`FiftyFiftyFall`).
+            self.position += side - Vec3::Y * 5.0;
+            self.bail_on_landing = true;
+            self.leave_rail(travel * grind.speed, p, world);
+            return;
+        }
 
         let mut position = self.position + travel * grind.speed * STEP;
         loop {
@@ -418,6 +529,47 @@ impl Skater {
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // A manual: up then down (or down then up) within the window
+        // (the game's `ManualTricks`), balanced with up and down
+        // (`DoBalanceTrick ButtonA = Up ButtonB = Down`).
+        let pressed_pair = (input.push && self.since_up == 0.0 && self.since_down <= MANUAL_WINDOW)
+            || (input.brake && self.since_down == 0.0 && self.since_up <= MANUAL_WINDOW);
+        if !self.manual && pressed_pair && !input.crouch && self.action != Action::BailManual {
+            self.manual = true;
+            self.balance.start(&p.manual_balance, !self.combo);
+            self.combo = true;
+            self.set_action(Action::Manual);
+        }
+        if self.manual {
+            match self
+                .balance
+                .update(input.push, input.brake, &p.manual_balance, STEP)
+            {
+                Lean::Balanced => {}
+                // Off the top: the game's `BailManual`.
+                Lean::OffTop => {
+                    self.manual = false;
+                    self.combo = false;
+                    self.set_action(Action::BailManual);
+                }
+                // Off the bottom: `ManualLand`, back on four wheels.
+                Lean::OffBottom => {
+                    self.manual = false;
+                    self.combo = false;
+                    self.set_action(Action::Rolling);
+                }
+            }
+        }
+        // Up and down balance a manual rather than push and brake.
+        let input = if self.manual {
+            Input {
+                push: false,
+                brake: false,
+                ..input
+            }
+        } else {
+            input
+        };
         // Steering (main.dol 0x800ED848): the sharp rate while braking,
         // and when nearly stopped it builds up over the first 600 ms held.
         let mut rate = if input.brake {
@@ -491,6 +643,7 @@ impl Skater {
         // Jump when letting go of a crouch.
         if self.crouched && !input.crouch {
             self.crouched = false;
+            self.manual = false;
             // The ollie (0x800F62C4): along the ground's normal when moving
             // down, else straight up.
             let jump = self.jump_speed(p);
@@ -567,6 +720,7 @@ impl Skater {
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
+                self.manual = false;
                 self.take_off_vert(p);
                 self.up = Vec3::Y;
                 self.set_action(Action::Air);
@@ -574,7 +728,11 @@ impl Skater {
             }
         }
 
-        let action = if let Some(flail) = flailed {
+        let action = if matches!(self.action, Action::BailManual | Action::BailGrind) {
+            self.action
+        } else if self.manual {
+            Action::Manual
+        } else if let Some(flail) = flailed {
             flail
         } else if matches!(self.action, Action::FlailLeft | Action::FlailRight)
             && self.action_time < 0.5
@@ -672,6 +830,25 @@ impl Skater {
                 self.on_ground = true;
                 self.vert = None;
                 self.crouched = input.crouch;
+                if self.bail_on_landing {
+                    self.bail_on_landing = false;
+                    self.combo = false;
+                    self.set_action(Action::BailGrind);
+                    return;
+                }
+                // Landing in a manual (up-down pressed just before) keeps
+                // the combo going; otherwise it ends.
+                if self.since_up.min(self.since_down) <= MANUAL_WINDOW
+                    && (self.since_up - self.since_down).abs() <= MANUAL_WINDOW
+                    && self.since_up.max(self.since_down) < 1.0
+                {
+                    self.manual = true;
+                    self.balance.start(&p.manual_balance, !self.combo);
+                    self.combo = true;
+                    self.set_action(Action::Manual);
+                    return;
+                }
+                self.combo = false;
                 self.set_action(Action::Landing);
                 return;
             }

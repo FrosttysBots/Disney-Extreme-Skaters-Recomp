@@ -525,6 +525,7 @@ impl<'a> App<'a> {
                     blink: true,
                     can_skate: false,
                     skating: false,
+                    balance: None,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -707,6 +708,7 @@ impl<'a> App<'a> {
         };
         skater.update(input, physics, world, dt);
         self.placement = skater.placement();
+        self.model.character.balance = skater.balance_meter();
 
         // Animation: by what the skater is doing.
         let (names, looping): (&[&str], bool) = match skater.action {
@@ -718,6 +720,9 @@ impl<'a> App<'a> {
             SkateAction::FlailLeft => (&["FlailLeft"], false),
             SkateAction::FlailRight => (&["FlailRight"], false),
             SkateAction::Grinding => (&["GrindIn1", "GrindRange1"], false),
+            SkateAction::Manual => (&["ManualIn1", "ManualRange1"], false),
+            SkateAction::BailManual => (&["BailManual", "BailManualGetUp"], false),
+            SkateAction::BailGrind => (&["BailGrind", "BailGrindGetUp"], false),
         };
         let mut time = skater.action_time;
         let mut chosen = None;
@@ -734,12 +739,24 @@ impl<'a> App<'a> {
             chosen = Some((index, duration));
             break;
         }
-        if let Some((index, duration)) = chosen {
+        if let Some((index, mut duration)) = chosen {
+            // A balance pose (`ManualRange1`, `GrindRange1`) follows the
+            // balance meter from one end of the animation to the other,
+            // as the game plays its range animations.
+            let range = character.animations[index].0.contains("Range");
+            if let Some(meter) = skater.balance_meter().filter(|_| range) {
+                time = (meter + 1.0) / 2.0 * duration;
+                duration = duration.max(f32::EPSILON);
+            }
             let model = &mut self.model.character;
             model.animation = index;
             self.shown_animation = index;
             model.duration = duration;
-            model.time = if duration > 0.0 { time % duration } else { 0.0 };
+            model.time = if duration > 0.0 {
+                time.min(duration * 0.999) % duration
+            } else {
+                0.0
+            };
         }
 
         // Chase camera: the game's medium camera, in feet.
@@ -764,6 +781,7 @@ impl<'a> App<'a> {
         self.character = None;
         self.skating = None;
         self.model.character.skating = false;
+        self.model.character.balance = None;
         self.model.character.current = None;
         self.model.character.animations.clear();
         if let Some(level) = &mut self.level {
