@@ -149,6 +149,34 @@ on-ground update switches on.
   `Skater_Min_Distance_To_Wall`), called from what looks like the air
   update, 0x800FC7F8.
 
+- **The air update** (0x800FC7F8, about 1,250 instructions, much of it
+  for vert air): gravity is a vector at skater `+0x5A8`, `(0, g, 0)` from
+  0x800FC634; spinning is 0x800EE4CC. The step is exact for a thrown
+  body: `position += v * dt + g * dt * dt / 2`, then `v += g * dt` (plus
+  `+0xC4`, which looks like the motion of whatever it took off from).
+  Ported.
+- **Walls in the air** (0x800F847C): the same knee-height line as on the
+  ground. A face that isn't a wall and is close to the last ground's
+  normal (dot at least 0.8) or faces up (Y at least 0.5) is left for
+  landing. A skatable face otherwise is tried as a ledge: up by
+  `Physics_Air_Snap_Up`, then back down 2 at a time (not ported). With
+  `+0x3638` set (vert air, perhaps) the skater is put
+  `Skater_Min_Distance_To_Wall` out from the wall and its velocity
+  flattened against it. Otherwise, after 0x800FDB6C (which may start a
+  wall ride) and the script event:
+  - a near-vertical wall (normal Y under 0.05) calls 0x8010E340 with the
+    speed, like the ground's bonk;
+  - unless the wall faces down (normal Y at most -0.1) the vertical
+    speed is set aside; the velocity is flattened against the wall, gets
+    a tenth of its length along the normal, and the vertical speed comes
+    back;
+  - the facing is flattened against the wall too, nudged 0.05 out and
+    the matrix rebuilt;
+  - the skater is put at the hit, back down to its feet, plus
+    `Skater_Min_Distance_To_Wall` (8) along the normal; a moving
+    object's motion is added.
+  Ported: the last case, without the event, sound or moving objects.
+
 ## Next
 
 Read the rest of the on-ground update and its helpers, then the air

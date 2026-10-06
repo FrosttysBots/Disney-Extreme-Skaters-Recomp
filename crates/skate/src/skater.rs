@@ -22,8 +22,11 @@
 //!   at `ground_rotation`. No ground means it rolled off an edge.
 //! - **Jumping**: crouch, then let go to ollie at `jump_speed` off the
 //!   ground's normal.
-//! - **In the air** gravity is `air_gravity` and steering spins at
-//!   `air_rotation`; landing on ground facing up enough (or on a ramp's
+//! - **In the air** gravity is `air_gravity` over the hang-time stat, the
+//!   exact step of a thrown body as in the game, and steering spins at
+//!   `air_rotation`; walls work as the game's (0x800F847C): the speed into
+//!   them is lost, a tenth of the rest pushes away, and the skater turns
+//!   along the wall and is put `min_distance_to_wall` out; landing on ground facing up enough (or on a ramp's
 //!   vert face) puts it back on the ground, keeping the speed along the
 //!   surface. Anything else it would pass through stops it instead.
 //! - **Walls** on the ground are the game's (0x800F7D38): a line at knee
@@ -132,6 +135,28 @@ impl Skater {
         while self.leftover >= STEP {
             self.leftover -= STEP;
             self.step(input, physics, world);
+        }
+    }
+
+    /// Off a wall in the air (0x800F847C): the speed into the wall is lost
+    /// (the vertical speed kept unless the wall faces down), a tenth of
+    /// the speed left pushes away from it, and the skater turns to face
+    /// along it, slightly away.
+    fn air_bounce(&mut self, normal: Vec3) {
+        let keep_rise = normal.y > -0.1;
+        let rise = self.velocity.y;
+        if keep_rise {
+            self.velocity.y = 0.0;
+        }
+        self.velocity -= normal * self.velocity.dot(normal);
+        self.velocity += normal * (self.velocity.length() / 10.0);
+        if keep_rise {
+            self.velocity.y = rise;
+        }
+        let flat = self.forward();
+        let facing = flat - normal * flat.dot(normal) + normal * 0.05;
+        if facing.x != 0.0 || facing.z != 0.0 {
+            self.heading = facing.x.atan2(facing.z);
         }
     }
 
@@ -344,26 +369,33 @@ impl Skater {
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
         // Spinning at the air rotation stat (0x800EE4CC).
         self.heading -= input.turn * p.air_rotation * STEP;
-        // As the game does: gravity divided by the hang-time stat.
-        self.velocity.y += p.air_gravity / p.air_hang.max(0.01) * STEP;
-        let target = self.position + self.velocity * STEP;
-        // Hit something on the way?
-        let from = self.position + Vec3::Y * p.forward_collision_height;
-        if let Some(hit) = world.ray(from, target + Vec3::Y * p.forward_collision_height) {
-            if hit.normal.y.abs() < WALL_COSINE {
-                // A wall: lose the speed into it.
-                let into = self.velocity.dot(hit.normal);
-                if into < 0.0 {
-                    self.velocity -= hit.normal * into;
+        // As the game does (0x800FC7F8): gravity, divided by the hang-time
+        // stat, and the exact step of a thrown body.
+        let gravity = p.air_gravity / p.air_hang.max(0.01);
+        let from = self.position;
+        let mut target = from + self.velocity * STEP + Vec3::Y * (0.5 * gravity * STEP * STEP);
+        self.velocity.y += gravity * STEP;
+
+        // Walls (0x800F847C): the ground check's line at knee height;
+        // what's ground-like is left for landing.
+        let lift = self.up * p.forward_collision_height;
+        if let Some(direction) = (target - from).try_normalize() {
+            let to = target + lift + direction * p.forward_collision_length;
+            if let Some(hit) = world.ray(from + lift, to) {
+                let ground =
+                    !is_wall(&hit, p) && (hit.normal.dot(self.up) >= 0.8 || hit.normal.y >= 0.5);
+                if !ground {
+                    self.air_bounce(hit.normal);
+                    target = hit.point - lift + hit.normal * p.min_distance_to_wall;
                 }
             }
         }
-        let target = self.position + self.velocity * STEP;
+
         let falling = self.velocity.y <= 0.0;
         let start = if falling {
-            self.position + Vec3::Y * p.ground_snap_up
+            from + Vec3::Y * p.ground_snap_up
         } else {
-            self.position
+            from
         };
         if let Some(hit) = world.ray(start, target) {
             // Ground, or a ramp's vert face (landing back on a quarter pipe).
@@ -496,6 +528,20 @@ mod tests {
         assert_eq!(v.y, -500.0);
         let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
+    }
+
+    #[test]
+    fn air_walls_keep_the_rise_and_push_away() {
+        // Flying up and into a wall facing +Z, at an angle, facing the way
+        // it flies.
+        let mut skater = Skater::new(Vec3::ZERO, 300f32.atan2(-400.0));
+        skater.on_ground = false;
+        skater.velocity = Vec3::new(300.0, 200.0, -400.0);
+        skater.air_bounce(Vec3::Z);
+        assert_eq!(skater.velocity, Vec3::new(300.0, 200.0, 30.0));
+        // Now facing along the wall, slightly out from it.
+        let forward = skater.forward();
+        assert!(forward.x > 0.99 && forward.z > 0.0, "{forward}");
     }
 
     #[test]
