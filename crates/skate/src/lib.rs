@@ -9,5 +9,5 @@ pub mod world;
 
 pub use constants::{Physics, Stats};
 pub use rails::{RailHit, Rails, Segment};
-pub use skater::{Action, Grind, Input, Skater};
+pub use skater::{Action, Grind, Input, Skater, VertAir};
 pub use world::{Hit, World};

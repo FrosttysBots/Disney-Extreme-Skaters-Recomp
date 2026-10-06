@@ -128,6 +128,8 @@ pub struct Physics {
     /// How far up a ledge the skater can be popped onto from the air
     /// (main.dol 0x800F81A8).
     pub air_snap_up: f32,
+    /// How far out from a vert ramp's lip vert air starts.
+    pub vert_push_out: f32,
     /// The skater only sticks to ground whose normal is within this many
     /// degrees of the one it stands on, when the ground falls away
     /// (main.dol 0x800F52AC); otherwise it leaves the ground.
@@ -211,6 +213,7 @@ impl Physics {
             air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
+            vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
             ground_stick_angle: plain("Ground_stick_angle", 30.0),
             ground_snap_down: plain("Physics_Ground_Snap_Down", 8.2),
             min_distance_to_wall: plain("Skater_Min_Distance_To_Wall", 8.0),

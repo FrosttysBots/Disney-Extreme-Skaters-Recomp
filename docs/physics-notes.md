@@ -247,6 +247,26 @@ on-ground update switches on.
   grind button is the viewer's guess (the game's call on the ground
   depends on an argument not yet traced).
 
+- **Vert air.** State 2 (0x800FE664) is wall riding (`Wall_Ride_*`),
+  not vert: vert air is the air state with a flag at `+0x36E8`. It's set
+  by 0x800F140C (about 1,800 instructions), called from the ground
+  following when the ground is gone off a vert face (`+0x3638`) and
+  from the air update. That function looks for where the skater will
+  come down (columns of lines, `SkaterAwardTransfer` when it's another
+  ramp: it then picks the horizontal speed that lands it there, if it's
+  no faster than it's going) and otherwise turns the velocity straight
+  up keeping its length (0x80009C70) when its direction and the ramp's
+  disagree, and sets the spin axis (`+0xD4`). The air update then keeps
+  the skater in line with the take-off (`+0x3420` to `+0x344C`), and
+  pushes it `Physics_Vert_Push_Out` (3) out of faces it meets.
+  Ported, simply: off a vert face going up, the speed away from the
+  ramp is turned up and along it keeping its length, the skater starts
+  3 out from the lip and stays in the ramp's vertical plane, and the
+  ramp is left to landing; it comes back down fakie, as without a spin.
+  Not ported: transfers, the spin axis, `skater_autoturn_vert_angle`,
+  `Physics_Vert_hang_Stat`. On the Hub's quarter pipes
+  (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
+  25 runs that leave the lip come back down onto the ramp (4 before).
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

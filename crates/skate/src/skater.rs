@@ -28,7 +28,8 @@
 //!   game's too: a line along the move; ground (by the face's flags and
 //!   slope, so vert ramps count) keeps the speed along it and the skater's
 //!   facing, walls slide it along them at full speed, and ledges it nearly
-//!   cleared pop it up onto them (`air_snap_up`); landing on ground facing up enough (or on a ramp's
+//!   cleared pop it up onto them (`air_snap_up`). Off the lip of a vert
+//!   ramp it flies in the ramp's plane and comes back down onto it; landing on ground facing up enough (or on a ramp's
 //!   vert face) puts it back on the ground, keeping the speed along the
 //!   surface. Anything else it would pass through stops it instead.
 //! - **Walls** on the ground are the game's (0x800F7D38): a line at knee
@@ -75,6 +76,14 @@ pub enum Action {
     Grinding,
 }
 
+/// Vert air: the ramp's normal, flattened (out of the ramp), and where
+/// along it the skater flies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VertAir {
+    pub out: Vec3,
+    pub offset: f32,
+}
+
 /// Which rail segment the skater is grinding, which way along it, and
 /// how fast.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -114,6 +123,11 @@ pub struct Skater {
     /// Where it last stood on the ground, to go back to if it falls out of
     /// the level.
     last_ground: Vec3,
+    /// The flags of the face it stands on.
+    ground_flags: u16,
+    /// In vert air: launched off a vert ramp, held in the ramp's vertical
+    /// plane so it comes back down onto it.
+    pub vert: Option<VertAir>,
     leftover: f32,
 }
 
@@ -134,6 +148,8 @@ impl Skater {
             grind: None,
             since_rail: f32::MAX,
             last_ground: position,
+            ground_flags: 0,
+            vert: None,
             leftover: 0.0,
         }
     }
@@ -274,6 +290,7 @@ impl Skater {
         }
         let along = velocity.dot(direction);
         let forwards = along >= 0.0;
+        self.vert = None;
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,
@@ -540,6 +557,7 @@ impl Skater {
             Some(hit) => {
                 self.position = hit.point;
                 self.last_ground = hit.point;
+                self.ground_flags = hit.flags;
                 self.up = hit.normal;
                 self.velocity = forward * speed;
             }
@@ -549,6 +567,7 @@ impl Skater {
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
+                self.take_off_vert(p);
                 self.up = Vec3::Y;
                 self.set_action(Action::Air);
                 return;
@@ -575,6 +594,28 @@ impl Skater {
         self.set_action(action);
     }
 
+    /// Off the lip of a vert ramp going up (the game's 0x800F140C, when
+    /// the ground it left was a vert face): the speed away from the ramp
+    /// is turned up or along it, keeping its length, and the skater is put
+    /// `vert_push_out` out from the lip, to come back down onto the ramp.
+    /// The game also aims transfers to other ramps here; not ported.
+    fn take_off_vert(&mut self, p: &Physics) {
+        use ngc_collision::face_flags::VERT;
+        let out = Vec3::new(self.up.x, 0.0, self.up.z);
+        if self.ground_flags & VERT == 0 || self.velocity.y <= 0.0 || out.length() < 0.5 {
+            return;
+        }
+        let out = out.normalize();
+        let speed = self.velocity.length();
+        let kept = self.velocity - out * self.velocity.dot(out);
+        self.velocity = kept.normalize_or(Vec3::Y) * speed;
+        self.position += out * p.vert_push_out;
+        self.vert = Some(VertAir {
+            out,
+            offset: self.position.dot(out),
+        });
+    }
+
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
         // Spinning at the air rotation stat (0x800EE4CC).
         self.heading -= input.turn * p.air_rotation * STEP;
@@ -584,6 +625,11 @@ impl Skater {
         let from = self.position;
         let mut target = from + self.velocity * STEP + Vec3::Y * (0.5 * gravity * STEP * STEP);
         self.velocity.y += gravity * STEP;
+        // Vert air stays in the ramp's plane.
+        if let Some(vert) = self.vert {
+            self.velocity -= vert.out * self.velocity.dot(vert.out);
+            target += vert.out * (vert.offset - target.dot(vert.out));
+        }
 
         // Walls (0x800F847C): the ground check's line at knee height;
         // what's ground-like is left for landing.
@@ -593,7 +639,9 @@ impl Skater {
             if let Some(hit) = world.ray(from + lift, to) {
                 let ground =
                     !is_wall(&hit, p) && (hit.normal.dot(self.up) >= 0.8 || hit.normal.y >= 0.5);
-                if !ground {
+                // In vert air the ramp is for landing on.
+                let ramp = self.vert.is_some() && hit.flags & ngc_collision::face_flags::VERT != 0;
+                if !ground && !ramp {
                     self.air_bounce(hit.normal);
                     target = hit.point - lift + hit.normal * p.min_distance_to_wall;
                 }
@@ -622,6 +670,7 @@ impl Skater {
                     self.velocity = Vec3::ZERO;
                 }
                 self.on_ground = true;
+                self.vert = None;
                 self.crouched = input.crouch;
                 self.set_action(Action::Landing);
                 return;
@@ -641,6 +690,7 @@ impl Skater {
         // where it last stood. (The game uses its own out-of-bounds
         // triggers, not ported; this is the crate's safety net.)
         if self.position.y < world.floor() - 500.0 {
+            self.vert = None;
             self.position = self.last_ground;
             self.velocity = Vec3::ZERO;
             self.up = Vec3::Y;
