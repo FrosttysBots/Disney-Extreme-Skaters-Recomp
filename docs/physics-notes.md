@@ -78,9 +78,32 @@ on-ground update switches on.
   clamped, above `Skater_Max_Speed_Stat` it gets quadratic drag with
   `Physics_Heavy_Air_Friction`. A timer at skater `+0x3594` (a speed
   boost) swaps in other limits while it runs. Ported, without the boost.
-- Other helpers by the constants they reach: steering is 0x800ED848
-  (`Physics_Ground_Rotation`, 801 instructions), tilting to the ground
-  0x800F52AC (`Normal_Lerp_Speed`), braking 0x800F418C. The game also
+- **Steering** (0x800ED848): left turns at `+Physics_Ground_Rotation`,
+  right at minus it (radians a second, times the frame time), or
+  `Physics_Ground_Sharp_Rotation` while the button that also stops pushes
+  (skater `+0x82C`, probably brake) is held. Below a speed of 10 the rate
+  is scaled by how long the turn has been held, up to 600 ms
+  (0x800EBFF0 gives a button's held time). The velocity turns with the
+  board. It also reads `cess_turn_min_speed` (cess slides). Ported.
+- **Air spins** (0x800EE4CC): left or right spins at
+  `Physics_Air_Rotation_stat`; in a tap-turn mode (skater `+0x3A40`) each
+  tap queues half a turn (pi, at `+0x3A48`) taken at
+  `Physics_air_tap_turn_speed_stat`. Ported: the held spin.
+- **Braking** (0x800F418C, `Physics_Brake_Acceleration` by name): unless
+  0x800F34D0 says it can't, the velocity is slowed by the brake rate times
+  the frame time along itself; below twice that, or if it would reverse,
+  it stops. Ported.
+- **Ground following** (0x800F52AC, 549 instructions): casts from
+  `Physics_Ground_Snap_Up` above (the `_SKITCHING` values while
+  skitching), compares the new ground normal with the current one, and
+  when moving onto ground that falls away by more than
+  `Ground_stick_angle` (30, in degrees; `Ground_stick_angle_forward`, 60,
+  while skater `+0x804` is set) it doesn't stick: the `GroundGone`
+  exception fires and the skater is in the air. Otherwise it allows a
+  snap down of `Physics_Ground_Snap_Down` plus the distance travelled
+  times the tangent of the angle between the normals. Ported: the stick
+  angle. Not yet: the extra snap distance, the forward angle, and what
+  `+0x804` is. It also leads to `Normal_Lerp_Speed` (tilting). The game also
   has a `moon_gravity` cheat (it multiplies air gravity).
 
 ## Next

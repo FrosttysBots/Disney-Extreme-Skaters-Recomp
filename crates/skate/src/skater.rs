@@ -7,8 +7,10 @@
 //! and matches it here: pushing along the current velocity up to the kick
 //! speed, drag while pushing, gravity along the whole ground plane, the
 //! velocity kept along the board (it can roll backwards), the speed
-//! limits, and air gravity divided by the hang-time stat. Steering,
-//! braking, ground snapping and the air update are still this crate's own.
+//! limits, steering (sharp while braking, building up when nearly
+//! stopped), air spins at the air rotation stat, and air gravity divided
+//! by the hang-time stat, and braking. Ground snapping, walls and the rest
+//! of the air update are still this crate's own.
 //!
 //! - **On the ground** the skater follows the surface: each step it moves
 //!   along its heading, then looks for ground from `ground_snap_up` above
@@ -70,6 +72,8 @@ pub struct Skater {
     /// Seconds in the current action.
     pub action_time: f32,
     crouched: bool,
+    /// How long a turn has been held, in seconds.
+    turn_time: f32,
     leftover: f32,
 }
 
@@ -84,6 +88,7 @@ impl Skater {
             action: Action::Standing,
             action_time: 0.0,
             crouched: false,
+            turn_time: 0.0,
             leftover: 0.0,
         }
     }
@@ -126,6 +131,11 @@ impl Skater {
 
     fn step(&mut self, input: Input, p: &Physics, world: &World) {
         self.action_time += STEP;
+        self.turn_time = if input.turn == 0.0 {
+            0.0
+        } else {
+            self.turn_time + STEP
+        };
         if self.on_ground {
             self.ground_step(input, p, world);
         } else {
@@ -134,7 +144,17 @@ impl Skater {
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
-        self.heading -= input.turn * p.ground_rotation * STEP;
+        // Steering (main.dol 0x800ED848): the sharp rate while braking,
+        // and when nearly stopped it builds up over the first 600 ms held.
+        let mut rate = if input.brake {
+            p.ground_sharp_rotation
+        } else {
+            p.ground_rotation
+        };
+        if self.velocity.length() < 10.0 && self.turn_time < 0.6 {
+            rate *= self.turn_time / 0.6;
+        }
+        self.heading -= input.turn * rate * STEP;
         let up = self.up;
         // Forward along the surface.
         let flat = self.forward();
@@ -168,9 +188,18 @@ impl Skater {
             velocity = drag(velocity, friction);
         }
         if input.brake {
+            // Braking (0x800F418C): slow along the velocity, stopping
+            // outright below two steps' worth or if it would reverse.
             let length = velocity.length();
-            if length > 0.0 {
-                velocity *= (length - p.brake_acceleration * STEP).max(0.0) / length;
+            let step = p.brake_acceleration * STEP;
+            if length < 2.0 * step {
+                velocity = Vec3::ZERO;
+            } else {
+                let before = velocity;
+                velocity -= velocity / length * step;
+                if velocity.dot(before) < 0.0 {
+                    velocity = Vec3::ZERO;
+                }
             }
         }
         // Along the board, keeping the sign: it can roll backwards
@@ -210,8 +239,16 @@ impl Skater {
         // Stand on whatever is under the new spot.
         let from = target + up * p.ground_snap_up;
         let to = target - up * p.ground_snap_down;
+        // Ground falling away more sharply than the stick angle isn't
+        // followed: the skater flies off, like off the top of a kicker
+        // (main.dol 0x800F52AC).
+        let sticks = |normal: Vec3| {
+            let turning_down =
+                normal.dot(forward * speed.signum()) > up.dot(forward * speed.signum());
+            !turning_down || normal.dot(up) >= p.ground_stick_angle.to_radians().cos()
+        };
         match world.ray(from, to) {
-            Some(hit) if hit.normal.y > WALL_COSINE => {
+            Some(hit) if hit.normal.y > WALL_COSINE && sticks(hit.normal) => {
                 self.position = hit.point;
                 self.up = self.up.lerp(hit.normal, 0.25).normalize_or(Vec3::Y);
                 self.velocity = forward * speed;
@@ -242,7 +279,8 @@ impl Skater {
     }
 
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
-        self.heading -= input.turn * p.air_rotation * STEP * 0.5;
+        // Spinning at the air rotation stat (0x800EE4CC).
+        self.heading -= input.turn * p.air_rotation * STEP;
         // As the game does: gravity divided by the hang-time stat.
         self.velocity.y += p.air_gravity / p.air_hang.max(0.01) * STEP;
         let target = self.position + self.velocity * STEP;

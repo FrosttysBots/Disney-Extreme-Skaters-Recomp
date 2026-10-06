@@ -114,9 +114,16 @@ pub struct Physics {
     pub standing_air_friction: f32,
     pub crouched_air_friction: f32,
     pub heavy_air_friction: f32,
+    /// Turning on the ground, in radians a second; the sharp rate while
+    /// braking (main.dol 0x800ED848).
     pub ground_rotation: f32,
+    pub ground_sharp_rotation: f32,
     pub air_rotation: f32,
     pub ground_snap_up: f32,
+    /// The skater only sticks to ground whose normal is within this many
+    /// degrees of the one it stands on, when the ground falls away
+    /// (main.dol 0x800F52AC); otherwise it leaves the ground.
+    pub ground_stick_angle: f32,
     pub ground_snap_down: f32,
     pub min_distance_to_wall: f32,
     pub forward_collision_height: f32,
@@ -165,8 +172,10 @@ impl Physics {
             crouched_air_friction: plain("Physics_Crouched_Air_Friction", 0.000002),
             heavy_air_friction: plain("Physics_Heavy_Air_Friction", 0.00001),
             ground_rotation: plain("Physics_Ground_Rotation", 1.8),
+            ground_sharp_rotation: plain("Physics_Ground_Sharp_Rotation", 3.6),
             air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
+            ground_stick_angle: plain("Ground_stick_angle", 30.0),
             ground_snap_down: plain("Physics_Ground_Snap_Down", 8.2),
             min_distance_to_wall: plain("Skater_Min_Distance_To_Wall", 8.0),
             forward_collision_height: plain("Skater_First_Forward_Collision_Height", 8.1),
