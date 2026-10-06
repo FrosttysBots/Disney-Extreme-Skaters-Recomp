@@ -109,6 +109,11 @@ struct Args {
     /// many seconds first, and look through the chase camera
     #[arg(long, requires = "character", default_value_t = 0.0)]
     skate: f32,
+    /// For --skate: keys pressed and let go at times, as "seconds:+Key" and
+    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R);
+    /// without it W is held throughout
+    #[arg(long, requires = "screenshot")]
+    skate_keys: Option<String>,
     /// For --screenshot: also show what goals add later (pickups, goal
     /// pedestrians, warp portals)
     #[arg(long, requires = "screenshot")]
@@ -1485,9 +1490,26 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         app.level = Some(loaded);
         if args.skate > 0.0 {
             app.toggle_skate();
-            app.keys.insert(KeyCode::KeyW);
+            let script = args
+                .skate_keys
+                .as_deref()
+                .map(parse_skate_keys)
+                .transpose()?;
+            if script.is_none() {
+                app.keys.insert(KeyCode::KeyW);
+            }
             let steps = (args.skate * 60.0).round() as usize;
-            for _ in 0..steps {
+            for step in 0..steps {
+                let now = step as f32 / 60.0;
+                for &(at, key, down) in script.iter().flatten() {
+                    if (at - now).abs() < 0.5 / 60.0 {
+                        if down {
+                            app.keys.insert(key);
+                        } else {
+                            app.keys.remove(&key);
+                        }
+                    }
+                }
                 app.skate(1.0 / 60.0);
             }
             camera = app.camera;
@@ -1619,4 +1641,37 @@ fn combo_text(skater: &Skater) -> Option<String> {
         };
         format!("{}\n+{}{sketchy}", line(&last.combo), last.total)
     })
+}
+
+/// `--skate-keys`: "0.5:+Space,0.7:-Space" as (seconds, key, pressed).
+fn parse_skate_keys(spec: &str) -> Result<Vec<(f32, KeyCode, bool)>> {
+    spec.split(',')
+        .map(|item| {
+            let (at, key) = item
+                .trim()
+                .split_once(':')
+                .with_context(|| format!("expected seconds:+Key in {item:?}"))?;
+            let at: f32 = at
+                .parse()
+                .with_context(|| format!("bad time in {item:?}"))?;
+            let (down, name) = match key.split_at(1) {
+                ("+", name) => (true, name),
+                ("-", name) => (false, name),
+                _ => anyhow::bail!("expected + or - before the key in {item:?}"),
+            };
+            let key = match name.to_ascii_uppercase().as_str() {
+                "W" => KeyCode::KeyW,
+                "A" => KeyCode::KeyA,
+                "S" => KeyCode::KeyS,
+                "D" => KeyCode::KeyD,
+                "E" => KeyCode::KeyE,
+                "Q" => KeyCode::KeyQ,
+                "F" => KeyCode::KeyF,
+                "R" => KeyCode::KeyR,
+                "SPACE" => KeyCode::Space,
+                other => anyhow::bail!("unknown key {other:?}"),
+            };
+            Ok((at, key, down))
+        })
+        .collect()
 }
