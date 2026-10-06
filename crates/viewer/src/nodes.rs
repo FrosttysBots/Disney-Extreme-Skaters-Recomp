@@ -113,6 +113,21 @@ pub struct ObjectNode {
     pub skeleton: Option<String>,
     /// For pedestrians, the script that loads their animations (`AnimName`).
     pub animations: Option<u32>,
+    /// The node's name and its index in the node array (paths start here).
+    pub name: u32,
+    pub node: usize,
+    /// The script the object runs when it's created (`TriggerScript`).
+    pub script: Option<u32>,
+}
+
+/// Any node's place and links, for following paths (`Links` are indices
+/// into the node array).
+#[derive(Clone, Debug, Default)]
+pub struct PathNode {
+    pub name: u32,
+    /// In mesh space; `None` for nodes without a position.
+    pub position: Option<Vec3>,
+    pub links: Vec<usize>,
 }
 
 impl ObjectNode {
@@ -134,6 +149,8 @@ pub struct LevelNodes {
     pub objects: Vec<ObjectNode>,
     /// Name checksums of scene sectors that aren't there at the start.
     pub hidden_sectors: HashSet<u32>,
+    /// Every node in the array, in order.
+    pub nodes: Vec<PathNode>,
 }
 
 impl LevelNodes {
@@ -170,8 +187,26 @@ impl LevelNodes {
                 .map(|n| symbols.name(n))
         };
 
-        let mut out = LevelNodes::default();
-        for node in nodes {
+        let mut out = LevelNodes {
+            nodes: nodes
+                .iter()
+                .map(|node| PathNode {
+                    name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                    position: position(node).map(Vec3::from),
+                    links: node
+                        .get(key("Links"))
+                        .and_then(Value::as_array)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|l| l.as_int())
+                        .filter_map(|l| usize::try_from(l).ok())
+                        .filter(|&l| l < nodes.len())
+                        .collect(),
+                })
+                .collect(),
+            ..LevelNodes::default()
+        };
+        for (index, node) in nodes.iter().enumerate() {
             let Some(pos) = position(node).map(Vec3::from) else {
                 continue;
             };
@@ -228,6 +263,9 @@ impl LevelNodes {
                         model: model.replace('\\', "/").to_ascii_lowercase(),
                         skeleton: name_of(node, "SkeletonName").map(|s| s.to_ascii_lowercase()),
                         animations: node.get(key("AnimName")).and_then(Value::as_name),
+                        name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                        node: index,
+                        script: node.get(key("TriggerScript")).and_then(Value::as_name),
                     });
                 }
                 Some(c) if c == key("Restart") => {

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use desa_viewer::behaviour::Behaviour;
 use desa_viewer::nodes::LevelNodes;
 use desa_viewer::objects::{self, LevelObjects};
 use desa_viewer::source::GameData;
@@ -20,6 +21,8 @@ fn real_level_camera_paths() {
 
     let sets = data.animation_sets().unwrap();
     let (mut total, mut placed, mut pedestrians, mut animated) = (0, 0, 0, 0);
+    let mut moved = 0;
+    let mut unknown = std::collections::HashMap::new();
     for level in &levels {
         let mut files = data.load_level(&level.id).unwrap();
         let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
@@ -55,6 +58,21 @@ fn real_level_camera_paths() {
             );
             animated += anim.vertices.len();
         }
+        // Run the objects' scripts for 20 seconds.
+        let mut scripts = data.global_scripts().unwrap();
+        scripts.extend(files.scripts.iter().cloned());
+        let mut behaviour = Behaviour::new(&nodes, &scripts);
+        let mut objects = built;
+        for step in 0..600 {
+            behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0);
+        }
+        let movers = (0..nodes.objects.len())
+            .filter(|&i| behaviour.position(i).distance(nodes.objects[i].position) > 10.0)
+            .count();
+        moved += movers;
+        for (name, count) in behaviour.unknown {
+            *unknown.entry(name).or_insert(0usize) += count;
+        }
         placed += nodes.objects.len();
         pedestrians += crowd;
         for (name, bytes) in &files.cameras {
@@ -74,4 +92,20 @@ fn real_level_camera_paths() {
     assert_eq!(total, 292);
     println!("{placed} object nodes, {pedestrians} pedestrians, {animated} animated vertex colors");
     assert_eq!(animated, 803);
+    let mut unknown: Vec<_> = unknown.into_iter().collect();
+    unknown.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    let mut symbols = qb::Symbols::new();
+    for file in data.global_scripts().unwrap() {
+        if let Ok(tokens) = qb::tokenize(&file) {
+            symbols.add_tokens(&tokens);
+        }
+    }
+    println!(
+        "{moved} objects moved in 20 seconds; commands not understood: {:?}",
+        unknown
+            .iter()
+            .take(15)
+            .map(|(n, c)| (symbols.name(*n), *c))
+            .collect::<Vec<_>>()
+    );
 }

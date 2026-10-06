@@ -64,6 +64,8 @@ pub struct LevelFiles {
     /// (`standardkeyq.bin`, `standardkeyt.bin`), from `skeletons.prg`.
     pub skeletons: HashMap<String, Vec<u8>>,
     pub key_tables: Option<(Vec<u8>, Vec<u8>)>,
+    /// The level's own scripts (every `.qb` in `X.prg`).
+    pub scripts: Vec<Vec<u8>>,
 }
 
 /// The raw files for one playable character.
@@ -274,12 +276,18 @@ impl GameData {
         };
         let mut models = HashMap::new();
         let mut animations: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut scripts = Vec::new();
         let (nodes, cameras) = match self.read_archive(&format!("{id}.prg"))? {
             Some(data) => {
                 let archive =
                     Archive::parse(&data).with_context(|| format!("could not read {id}.prg"))?;
                 let nodes = entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?;
                 collect_models(&archive, &mut models)?;
+                for e in archive.entries() {
+                    if e.path().to_ascii_lowercase().ends_with(".qb") {
+                        scripts.push(e.contents()?.into_owned());
+                    }
+                }
                 let mut cameras = Vec::new();
                 for e in archive.entries() {
                     let path = e.path();
@@ -322,7 +330,20 @@ impl GameData {
             animations,
             skeletons,
             key_tables,
+            scripts,
         })
+    }
+
+    /// Every script in `qb.prg` (the game's shared scripts).
+    pub fn global_scripts(&mut self) -> Result<Vec<Vec<u8>>> {
+        let data = self.read_archive("qb.prg")?.context("qb.prg is missing")?;
+        let archive = Archive::parse(&data).context("could not read qb.prg")?;
+        archive
+            .entries()
+            .iter()
+            .filter(|e| e.path().to_ascii_lowercase().ends_with(".qb"))
+            .map(|e| Ok(e.contents()?.into_owned()))
+            .collect()
     }
 
     /// The pedestrian animation sets in `scripts/allanims.qb`: for each

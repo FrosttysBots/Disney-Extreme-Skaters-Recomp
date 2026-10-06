@@ -1,10 +1,12 @@
 //! The models and pedestrians a level's node array places.
 //!
-//! Model objects (goal pickups, letters, vehicles) are copied into one
-//! static mesh. Pedestrians are skinned characters, each playing the idle
-//! from its animation set (see `source`); they're posed on the CPU every
-//! frame like the player's character. Both are split by whether the object
-//! is there when the level starts (see `nodes`).
+//! Model objects (goal pickups, letters, vehicles) are copied into one mesh
+//! per layer; a copy that moves is re-placed by rewriting its vertices.
+//! Pedestrians are skinned characters with every animation from their set
+//! (see `source`), posed on the CPU every frame like the player's
+//! character. Both are split by whether the object is there when the level
+//! starts (see `nodes`). Objects' scripts move them and pick their
+//! animations (see `behaviour`).
 
 use std::collections::HashMap;
 
@@ -15,8 +17,8 @@ use crate::level::{Level, Vertex};
 use crate::nodes::{LevelNodes, ObjectKind, ObjectNode};
 use crate::source::{CharacterFiles, LevelFiles};
 
-/// The roles a pedestrian plays, in order of preference. Every set on the
-/// disc has one of these two.
+/// The roles a pedestrian plays until its script says otherwise, in order
+/// of preference. Every set on the disc has one of these two.
 const IDLE_ROLES: [&str; 2] = ["Ped_Guide_Idle1", "Ped_M_Idle1"];
 
 /// Animation sets by script checksum: (path, role) for each animation.
@@ -27,18 +29,25 @@ type Load = (String, String);
 
 /// Pedestrians: one posable character per model, and where each stands.
 pub struct Crowd {
-    kinds: Vec<Character>,
+    kinds: Vec<Kind>,
     members: Vec<Member>,
     /// Every member's mesh, in member order, in the rest pose.
     pub mesh: Level,
+}
+
+struct Kind {
+    character: Character,
+    /// Animation index by role checksum.
+    roles: HashMap<u32, usize>,
 }
 
 struct Member {
     kind: usize,
     placement: Mat4,
     animation: usize,
-    /// Spreads members out in time so the same kind doesn't move in step.
-    offset: f32,
+    /// When the animation started, and whether it loops.
+    started: f32,
+    cycle: bool,
 }
 
 impl Crowd {
@@ -58,88 +67,158 @@ impl Crowd {
         self.members.is_empty()
     }
 
-    /// Every member's vertices at `seconds`, in the order of `mesh`.
-    pub fn pose(&self, seconds: f32) -> Vec<Vertex> {
+    pub fn set_placement(&mut self, member: usize, placement: Mat4) {
+        if let Some(m) = self.members.get_mut(member) {
+            m.placement = placement;
+        }
+    }
+
+    /// Plays the animation with role `role` (a checksum) from `now`;
+    /// returns its length, or `None` if the member hasn't got it.
+    pub fn play(&mut self, member: usize, role: u32, cycle: bool, now: f32) -> Option<f32> {
+        let m = self.members.get_mut(member)?;
+        let kind = &self.kinds[m.kind];
+        let animation = *kind.roles.get(&role)?;
+        m.animation = animation;
+        m.started = now;
+        m.cycle = cycle;
+        Some(kind.character.animations[animation].1.duration)
+    }
+
+    /// Seconds left in a member's current animation (0 if it loops).
+    pub fn remaining(&self, member: usize, now: f32) -> f32 {
+        let Some(m) = self.members.get(member) else {
+            return 0.0;
+        };
+        if m.cycle {
+            return 0.0;
+        }
+        let duration = self.kinds[m.kind].character.animations[m.animation]
+            .1
+            .duration;
+        (duration - (now - m.started)).max(0.0)
+    }
+
+    /// Every member's vertices at `now`, in the order of `mesh`.
+    pub fn pose(&self, now: f32) -> Vec<Vertex> {
         let mut out = Vec::with_capacity(self.mesh.vertices.len());
         for m in &self.members {
-            let character = &self.kinds[m.kind];
+            let character = &self.kinds[m.kind].character;
             let duration = character.animations[m.animation].1.duration.max(1e-3);
-            let t = (seconds + m.offset) % duration;
+            let t = (now - m.started).max(0.0);
+            let t = if m.cycle {
+                t % duration
+            } else {
+                t.min(duration)
+            };
             out.extend(character.pose(m.animation, t, m.placement));
         }
         out
     }
 }
 
+/// Model objects in one mesh, each copy movable.
+pub struct Props {
+    pub mesh: Level,
+    models: Vec<Level>,
+    /// Each copy: its model, and where its vertices start in `mesh`.
+    copies: Vec<(usize, usize)>,
+}
+
+impl Props {
+    fn new() -> Self {
+        Props {
+            mesh: Level::empty(),
+            models: Vec::new(),
+            copies: Vec::new(),
+        }
+    }
+
+    /// Moves copy `copy` to `placement`; returns the vertices to write and
+    /// where they start.
+    pub fn place(&self, copy: usize, placement: Mat4) -> (usize, Vec<Vertex>) {
+        let Some(&(model, first)) = self.copies.get(copy) else {
+            return (0, Vec::new());
+        };
+        let vertices = self.models[model]
+            .vertices
+            .iter()
+            .map(|v| Vertex {
+                position: placement.transform_point3(v.position.into()).into(),
+                normal: placement
+                    .transform_vector3(v.normal.into())
+                    .normalize_or_zero()
+                    .into(),
+                ..*v
+            })
+            .collect();
+        (first, vertices)
+    }
+}
+
+/// Where an object node's model ended up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placed {
+    Prop { goal: bool, copy: usize },
+    Pedestrian { goal: bool, member: usize },
+}
+
 pub struct LevelObjects {
     /// Model objects there at the start, and the ones goals create.
-    pub props: Level,
-    pub goal_props: Level,
+    pub props: Props,
+    pub goal_props: Props,
     /// Pedestrians, split the same way.
     pub crowd: Crowd,
     pub goal_crowd: Crowd,
+    /// For each of `LevelNodes::objects`, where its model is (if loaded).
+    pub placed: Vec<Option<Placed>>,
     /// Models the node array names that couldn't be loaded, with why.
     pub missing: Vec<String>,
 }
 
-/// The animations the level's pedestrians need (their rest pose and idle),
-/// to fetch any that aren't in the level's archive.
+/// The animations the level's pedestrians need, to fetch any that aren't
+/// in the level's archive.
 pub fn needed_animations(nodes: &LevelNodes, sets: &AnimationSets) -> Vec<String> {
     nodes
         .objects
         .iter()
         .filter_map(|n| sets.get(&n.animations?))
-        .flat_map(|set| {
-            let (rest, idle) = pick(set);
-            [rest, idle]
-                .into_iter()
-                .flatten()
-                .map(|(path, _)| path.clone())
-        })
+        .flatten()
+        .map(|(path, _)| path.clone())
         .collect()
-}
-
-/// A set's rest pose (`default`) and the idle to play, as (path, role).
-fn pick(set: &[(String, String)]) -> (Option<&Load>, Option<&Load>) {
-    let role = |name: &str| set.iter().find(|(_, r)| r.eq_ignore_ascii_case(name));
-    let idle = IDLE_ROLES
-        .iter()
-        .find_map(|r| role(r))
-        .or_else(|| set.iter().find(|(_, r)| !r.eq_ignore_ascii_case("default")));
-    (role("default"), idle)
 }
 
 impl LevelObjects {
     pub fn build(nodes: &LevelNodes, files: &LevelFiles, sets: &AnimationSets) -> Self {
         let mut out = LevelObjects {
-            props: Level::empty(),
-            goal_props: Level::empty(),
+            props: Props::new(),
+            goal_props: Props::new(),
             crowd: Crowd::new(),
             goal_crowd: Crowd::new(),
+            placed: vec![None; nodes.objects.len()],
             missing: Vec::new(),
         };
-        // Loaded models, and each one's texture slots in each target.
-        let mut models: HashMap<&str, Option<Level>> = HashMap::new();
-        let mut slots: HashMap<(&str, bool), usize> = HashMap::new();
-        let mut kinds: HashMap<&str, Option<usize>> = HashMap::new();
-        let mut goal_kinds: HashMap<&str, Option<usize>> = HashMap::new();
+        // Loaded models and pedestrian kinds, per layer.
+        let mut models: HashMap<(&str, bool), Option<(usize, usize)>> = HashMap::new();
+        let mut kinds: HashMap<(&str, bool), Option<usize>> = HashMap::new();
 
         for (i, node) in nodes.objects.iter().enumerate() {
             // Some nodes say "none" or name a model without a path.
             if !node.model.contains('/') {
                 continue;
             }
+            let goal = !node.created_at_start;
             let placement = Mat4::from_rotation_translation(node.rotation(), node.position);
             if node.kind == ObjectKind::Pedestrian {
-                let (crowd, kinds) = if node.created_at_start {
-                    (&mut out.crowd, &mut kinds)
+                let crowd = if goal {
+                    &mut out.goal_crowd
                 } else {
-                    (&mut out.goal_crowd, &mut goal_kinds)
+                    &mut out.crowd
                 };
-                let kind = *kinds.entry(&node.model).or_insert_with(|| {
+                let kind = *kinds.entry((&node.model, goal)).or_insert_with(|| {
                     match pedestrian(node, files, sets) {
-                        Ok(character) => {
-                            crowd.kinds.push(character);
+                        Ok(kind) => {
+                            crowd.kinds.push(kind);
                             Some(crowd.kinds.len() - 1)
                         }
                         Err(why) => {
@@ -149,12 +228,16 @@ impl LevelObjects {
                     }
                 });
                 let Some(kind) = kind else { continue };
-                let character = &crowd.kinds[kind];
-                // The idle if it loaded, else the rest pose.
-                let animation = character
-                    .animations
+                let character = &crowd.kinds[kind].character;
+                let animation = IDLE_ROLES
                     .iter()
-                    .position(|(n, _)| !n.eq_ignore_ascii_case("default"))
+                    .find_map(|r| character.animation(r))
+                    .or_else(|| {
+                        character
+                            .animations
+                            .iter()
+                            .position(|(n, _)| !n.eq_ignore_ascii_case("default"))
+                    })
                     .unwrap_or(0);
                 crowd
                     .mesh
@@ -163,30 +246,48 @@ impl LevelObjects {
                     kind,
                     placement,
                     animation,
-                    offset: i as f32 * 0.37,
+                    // Spread members out so a kind doesn't move in step.
+                    started: -(i as f32 * 0.37),
+                    cycle: true,
+                });
+                out.placed[i] = Some(Placed::Pedestrian {
+                    goal,
+                    member: crowd.members.len() - 1,
                 });
                 continue;
             }
 
-            let model =
-                models
-                    .entry(&node.model)
-                    .or_insert_with(|| match model(&node.model, files) {
-                        Ok(level) => Some(level),
-                        Err(why) => {
-                            out.missing.push(format!("{} ({why})", node.model));
-                            None
-                        }
-                    });
-            let Some(model) = model else { continue };
-            let target = if node.created_at_start {
-                &mut out.props
-            } else {
+            let props = if goal {
                 &mut out.goal_props
+            } else {
+                &mut out.props
             };
-            let key = (node.model.as_str(), node.created_at_start);
-            let base = target.add_instance(model, placement, slots.get(&key).copied());
-            slots.insert(key, base);
+            let loaded = *models.entry((&node.model, goal)).or_insert_with(|| {
+                match model(&node.model, files) {
+                    Ok(level) => {
+                        props.models.push(level);
+                        Some((props.models.len() - 1, usize::MAX))
+                    }
+                    Err(why) => {
+                        out.missing.push(format!("{} ({why})", node.model));
+                        None
+                    }
+                }
+            });
+            let Some((index, slots)) = loaded else {
+                continue;
+            };
+            let first = props.mesh.vertices.len();
+            let textures = (slots != usize::MAX).then_some(slots);
+            let base = props
+                .mesh
+                .add_instance(&props.models[index], placement, textures);
+            models.insert((&node.model, goal), Some((index, base)));
+            props.copies.push((index, first));
+            out.placed[i] = Some(Placed::Prop {
+                goal,
+                copy: props.copies.len() - 1,
+            });
         }
         out.missing.sort();
         out.missing.dedup();
@@ -211,12 +312,9 @@ fn texture_path(model: &str) -> Option<String> {
     Some(format!("{stem}.tex"))
 }
 
-/// A pedestrian's skinned model, skeleton, rest pose and idle.
-fn pedestrian(
-    node: &ObjectNode,
-    files: &LevelFiles,
-    sets: &AnimationSets,
-) -> Result<Character, String> {
+/// A pedestrian's skinned model, skeleton and every animation in its set,
+/// named by role.
+fn pedestrian(node: &ObjectNode, files: &LevelFiles, sets: &AnimationSets) -> Result<Kind, String> {
     let skin = files
         .models
         .get(&node.model)
@@ -231,14 +329,20 @@ fn pedestrian(
         .animations
         .and_then(|a| sets.get(&a))
         .ok_or("no animation set")?;
-    let (rest, idle) = pick(set);
-    let mut animations = Vec::new();
-    for (path, role) in [rest, idle].into_iter().flatten() {
-        let data = files
-            .animations
-            .get(path)
-            .ok_or_else(|| format!("no animation {path}"))?;
-        animations.push((role.clone(), data.clone()));
+    let mut animations: Vec<(String, Vec<u8>)> = Vec::new();
+    for (path, role) in set {
+        if animations.iter().any(|(r, _)| r.eq_ignore_ascii_case(role)) {
+            continue;
+        }
+        if let Some(data) = files.animations.get(path) {
+            animations.push((role.clone(), data.clone()));
+        }
+    }
+    if !animations
+        .iter()
+        .any(|(r, _)| r.eq_ignore_ascii_case("default"))
+    {
+        return Err("no default animation".into());
     }
     let files = CharacterFiles {
         skin: skin.clone(),
@@ -248,7 +352,14 @@ fn pedestrian(
         key_tables,
         animations,
     };
-    Character::from_files(&files).map_err(|e| format!("{e:#}"))
+    let character = Character::from_files(&files).map_err(|e| format!("{e:#}"))?;
+    let roles = character
+        .animations
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (qb::checksum(name), i))
+        .collect();
+    Ok(Kind { character, roles })
 }
 
 /// Where to look at an object from: in front of it and a little above.

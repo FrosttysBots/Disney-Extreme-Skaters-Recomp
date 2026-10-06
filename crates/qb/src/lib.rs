@@ -14,6 +14,7 @@
 pub mod decompile;
 pub mod token;
 pub mod value;
+pub mod vm;
 
 use std::collections::HashMap;
 

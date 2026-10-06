@@ -20,7 +20,7 @@ to that engine family too.
 | Textures, models, skinned characters, levels | Decoded and drawn with their real blend modes |
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
-| Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed |
+| Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
 | Physics, gameplay, menus, audio | Not started yet |
 
 Every format is checked against every file on the US disc (`GEXE52`):
@@ -87,7 +87,8 @@ spawn point by name to jump to.
 Levels are shown as they start, with every object and pedestrian the node
 array places there: goal pickups, vehicles and about 300 pedestrians, from
 Scar and Kerchak to hyena tourists and birds, each playing its idle
-animation. **Goal objects** adds what goals and scripts create later
+animation. Objects run their own scripts, so vehicles like the Hub's
+airplane follow their paths (see [Scripts](#scripts-qb)). **Goal objects** adds what goals and scripts create later
 (the S-K-A-T-E letters, goal pedestrians, warp portals, pickups); see
 [Objects and pedestrians](#objects-and-pedestrians).
 
@@ -332,6 +333,23 @@ level's nodes by class and its linked rail nodes.
 On the US disc all 347 scripts tokenize to their last byte and parse:
 7,046 scripts and 25,503 level nodes.
 
+**Running scripts.** `qb::vm` is the start of an interpreter: a `Program`
+holds every script and global value, and a `Thread` runs one script for
+one object a few statements at a time, stopping when it waits, so many
+objects run side by side. It handles calls with parameters (`<name>`,
+`<...>`), assignments, `if`/`elseif`/`else` with `NOT`, `begin ... repeat
+n`, `break`, `return`, `wait n [seconds]`, `object:command` and simple
+arithmetic; anything that isn't a script goes to the game as a command.
+The Map Viewer runs every starting object's `TriggerScript` this way and
+implements path following (`Obj_FollowPathLinked`, path velocity,
+acceleration, random forks), `Obj_PlayAnim`, `Obj_MoveToNode`, waiting for
+animations and moves, `create`/`kill`/`Die` and `IsAlive`, which sets 29
+objects moving across the levels (the Hub's airplane and crane among
+them). The rest (event handlers, trigger radii, sounds, flags) does
+nothing yet: most of it reacts to the skater. Speeds take a unit as an
+inch (1 mph = 17.6 units a second), which hasn't been checked against the
+game.
+
 ## Collision format
 
 ```
@@ -496,10 +514,11 @@ from 1,079 files.
    animations, camera paths, and animated characters in the Map Viewer
    (done).
 2. **Level loading.** Rails, spawn points, objects, pedestrians and
-   animated vertex colors, the collision BSP trees (done). Next: moving
-   pedestrians and vehicles along their paths.
-3. **QB scripts.** Decompiling and data parsing (done). Next: an
-   interpreter that runs the game's scripts.
+   animated vertex colors, the collision BSP trees (done).
+3. **QB scripts.** Decompiling, data parsing, and an interpreter that
+   runs objects' scripts, with path following and animations (done).
+   Next: more commands, events (exceptions) and goals, which need a
+   skater.
 4. **Skater physics.** Match the original's constants and update loop,
    verified against Dolphin frame by frame.
 5. **Gameplay.** Tricks, scoring, goals, game modes, UI and audio.

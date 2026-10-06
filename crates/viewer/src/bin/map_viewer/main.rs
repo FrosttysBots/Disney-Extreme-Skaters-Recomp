@@ -29,6 +29,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use desa_viewer::behaviour::Behaviour;
 use desa_viewer::camera::{FlyCamera, ScriptedCamera, vertical_fov};
 use desa_viewer::character::Character;
 use desa_viewer::collision::{self, CollisionView};
@@ -197,6 +198,7 @@ struct LoadedLevel {
     camera_paths: Vec<(String, CameraPath)>,
     objects: LevelObjects,
     layers: ObjectLayers,
+    behaviour: Behaviour,
     /// Animated vertex colors of the level, its sky and its goal geometry.
     colors: [ColorAnimation; 3],
     /// Which marker sets the renderer currently has: (rails, spawns).
@@ -236,6 +238,13 @@ fn load_level(
     for missing in &objects.missing {
         eprintln!("{}: couldn't load {missing}", info.id);
     }
+    // Objects' scripts: the game's shared scripts, then the level's own.
+    let mut scripts = data.global_scripts().unwrap_or_else(|e| {
+        eprintln!("warning: no shared scripts: {e:#}");
+        Vec::new()
+    });
+    scripts.extend(files.scripts.iter().cloned());
+    let behaviour = Behaviour::new(&nodes, &scripts);
     let sky = files
         .sky
         .as_ref()
@@ -290,8 +299,8 @@ fn load_level(
     ];
     let layers = ObjectLayers {
         goal_geometry: renderer.add_layer(&goal_geometry, false),
-        props: renderer.add_layer(&objects.props, false),
-        goal_props: renderer.add_layer(&objects.goal_props, false),
+        props: renderer.add_layer(&objects.props.mesh, false),
+        goal_props: renderer.add_layer(&objects.goal_props.mesh, false),
         crowd: renderer.add_layer(&objects.crowd.mesh, true),
         goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
     };
@@ -305,6 +314,7 @@ fn load_level(
             camera_paths,
             objects,
             layers,
+            behaviour,
             colors,
             markers: (false, false),
         },
@@ -322,9 +332,18 @@ struct ObjectLayers {
 }
 
 impl LoadedLevel {
-    /// Shows or hides the object layers, poses the pedestrians shown and
-    /// animates vertex colors.
-    fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32) {
+    /// Runs objects' scripts for `dt` seconds, shows or hides the object
+    /// layers, poses the pedestrians shown and animates vertex colors.
+    fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32, dt: f32) {
+        for (goal, copy, placement) in self.behaviour.update(&mut self.objects, seconds, dt) {
+            let (props, layer) = if goal {
+                (&self.objects.goal_props, self.layers.goal_props)
+            } else {
+                (&self.objects.props, self.layers.props)
+            };
+            let (first, vertices) = props.place(copy, placement);
+            self.renderer.update_layer(layer, first, &vertices);
+        }
         let l = &self.layers;
         let r = &mut self.renderer;
         let [world, sky, goal] = &self.colors;
@@ -834,7 +853,12 @@ impl<'a> App<'a> {
         let clock = self.started.elapsed().as_secs_f32();
         self.animate(dt, clock);
         if let Some(level) = &mut self.level {
-            level.update_objects(self.model.show_objects, self.model.show_goal_objects, clock);
+            level.update_objects(
+                self.model.show_objects,
+                self.model.show_goal_objects,
+                clock,
+                dt,
+            );
         }
         let p = self.camera.position;
         self.model.camera_text = format!(
@@ -1156,7 +1180,17 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     app.model.camera_text = loaded.start.describe();
     let mut camera = loaded.start;
     app.model.show_goal_objects = args.goal_objects;
-    loaded.update_objects(true, args.goal_objects, args.time);
+    // Let the objects' scripts run up to --time, a 30th of a second at a time.
+    let steps = (args.time * 30.0).ceil() as usize;
+    for step in 0..=steps {
+        let t = (step as f32 / 30.0).min(args.time);
+        loaded.update_objects(
+            true,
+            args.goal_objects,
+            t,
+            if step == 0 { 0.0 } else { 1.0 / 30.0 },
+        );
+    }
     if let Some(name) = &args.object {
         let node = loaded
             .nodes
@@ -1165,7 +1199,15 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             .find(|o| o.label.eq_ignore_ascii_case(name))
             .with_context(|| format!("no object named {name}"))?;
         let (eye, target) = objects::view_of(node);
-        camera = FlyCamera::looking_at(eye, target);
+        // Follow it to where its script has moved it by --time.
+        let index = loaded
+            .nodes
+            .objects
+            .iter()
+            .position(|o| std::ptr::eq(o, node))
+            .unwrap();
+        let moved = loaded.behaviour.position(index) - node.position;
+        camera = FlyCamera::looking_at(eye + moved, target + moved);
     }
     if let Some(c) = args.camera {
         camera = c;
