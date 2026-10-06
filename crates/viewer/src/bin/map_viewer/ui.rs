@@ -54,6 +54,10 @@ pub struct Model {
     pub show_sky: bool,
     pub show_rails: bool,
     pub show_spawns: bool,
+    /// Objects and pedestrians there at the start.
+    pub show_objects: bool,
+    /// Geometry, objects and pedestrians that goals create later.
+    pub show_goal_objects: bool,
     pub brighten: f32,
     pub collision: CollisionView,
     pub speed: f32,
@@ -144,6 +148,11 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 ui.checkbox(&mut model.show_sky, "Sky");
                 ui.checkbox(&mut model.show_rails, "Rails");
                 ui.checkbox(&mut model.show_spawns, "Spawn points");
+                ui.checkbox(&mut model.show_objects, "Objects and pedestrians");
+                ui.checkbox(&mut model.show_goal_objects, "Goal objects").on_hover_text(
+                    "Pickups, goal pedestrians, warp portals and other things that \
+                     goals and scripts add later. Not there when the level starts.",
+                );
                 ui.add(egui::Slider::new(&mut model.brighten, 0.0..=1.0).text("brighten dark areas"))
                     .on_hover_text("Raises the darkest lighting so you can see into shadows. 0 = as in the game.");
                 ui.add_enabled_ui(model.has_collision, |ui| {

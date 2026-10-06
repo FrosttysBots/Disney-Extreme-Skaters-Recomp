@@ -34,6 +34,7 @@ use desa_viewer::character::Character;
 use desa_viewer::collision::{self, CollisionView};
 use desa_viewer::level::Level;
 use desa_viewer::nodes::{LevelNodes, Spawn};
+use desa_viewer::objects::{self, LevelObjects};
 use desa_viewer::renderer::{self, Renderer, request_device};
 use desa_viewer::source::{GameData, LevelInfo};
 use settings::Settings;
@@ -91,6 +92,14 @@ struct Args {
     /// For --screenshot: camera distance from the character
     #[arg(long, requires = "screenshot", default_value_t = 170.0)]
     distance: f32,
+    /// For --screenshot: look at the object or pedestrian with this node
+    /// name (e.g. TRG_Goal_Letter_S)
+    #[arg(long, requires = "screenshot")]
+    object: Option<String>,
+    /// For --screenshot: also show what goals add later (pickups, goal
+    /// pedestrians, warp portals)
+    #[arg(long, requires = "screenshot")]
+    goal_objects: bool,
     /// For --screenshot: raise the character this far off the ground, as if
     /// in the air (animations leave jump height to the game's physics)
     #[arg(long, requires = "screenshot", default_value_t = 0.0)]
@@ -182,6 +191,8 @@ struct LoadedLevel {
     home: Mat4,
     /// The level's camera paths, by name.
     camera_paths: Vec<(String, CameraPath)>,
+    objects: LevelObjects,
+    layers: ObjectLayers,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -194,10 +205,31 @@ fn load_level(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
 ) -> Result<(LoadedLevel, String)> {
-    let files = data
+    let mut files = data
         .load_level(&info.id)
         .with_context(|| format!("could not read {}", info.title))?;
-    let world = Level::from_bytes(&files.scene, files.textures.as_deref())?;
+    let nodes = files
+        .nodes
+        .as_deref()
+        .and_then(|n| LevelNodes::from_bytes(n).ok())
+        .unwrap_or_default();
+    // Sectors that aren't there at the start go in their own layer.
+    let hidden = &nodes.hidden_sectors;
+    let world = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
+        !hidden.contains(&s)
+    })?;
+    let goal_geometry = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
+        hidden.contains(&s)
+    })?;
+    let sets = data.animation_sets().unwrap_or_else(|e| {
+        eprintln!("warning: no pedestrian animations: {e:#}");
+        Default::default()
+    });
+    data.add_animations(&mut files, &objects::needed_animations(&nodes, &sets))?;
+    let objects = LevelObjects::build(&nodes, &files, &sets);
+    for missing in &objects.missing {
+        eprintln!("{}: couldn't load {missing}", info.id);
+    }
     let sky = files
         .sky
         .as_ref()
@@ -206,11 +238,6 @@ fn load_level(
         .collision
         .as_deref()
         .and_then(|c| collision::from_bytes(c).ok());
-    let nodes = files
-        .nodes
-        .as_deref()
-        .and_then(|n| LevelNodes::from_bytes(n).ok())
-        .unwrap_or_default();
 
     let (center, radius) = world.focus;
     let start = nodes.start().map_or_else(
@@ -226,18 +253,21 @@ fn load_level(
         .start()
         .map_or(Mat4::from_translation(center), placement_at);
     let stats = format!(
-        "{} triangles, {} textures, {} rail segments, {} spawn points{}",
+        "{} triangles, {} textures, {} rail segments, {} spawn points, {} objects, {} pedestrians ({} more for goals){}",
         world.indices.len() / 3,
         world.textures.len() - 1,
         nodes.rails.len(),
         nodes.spawns.len(),
+        nodes.objects.len() - objects.crowd.len() - objects.goal_crowd.len(),
+        objects.crowd.len(),
+        objects.goal_crowd.len(),
         if collision.is_some() {
             ", collision"
         } else {
             ""
         },
     );
-    let renderer = Renderer::new(
+    let mut renderer = Renderer::new(
         device.clone(),
         queue.clone(),
         format,
@@ -245,6 +275,13 @@ fn load_level(
         sky.as_ref(),
         collision.as_deref(),
     );
+    let layers = ObjectLayers {
+        goal_geometry: renderer.add_layer(&goal_geometry, false),
+        props: renderer.add_layer(&objects.props, false),
+        goal_props: renderer.add_layer(&objects.goal_props, false),
+        crowd: renderer.add_layer(&objects.crowd.mesh, true),
+        goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
+    };
     Ok((
         LoadedLevel {
             renderer,
@@ -253,10 +290,44 @@ fn load_level(
             start,
             home,
             camera_paths,
+            objects,
+            layers,
             markers: (false, false),
         },
         stats,
     ))
+}
+
+/// The renderer layers holding a level's objects (`None` when empty).
+struct ObjectLayers {
+    goal_geometry: Option<usize>,
+    props: Option<usize>,
+    goal_props: Option<usize>,
+    crowd: Option<usize>,
+    goal_crowd: Option<usize>,
+}
+
+impl LoadedLevel {
+    /// Shows or hides the object layers and poses the pedestrians shown.
+    fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32) {
+        let l = &self.layers;
+        let r = &mut self.renderer;
+        for (id, shown) in [
+            (l.props, objects),
+            (l.crowd, objects),
+            (l.goal_geometry, goal_objects),
+            (l.goal_props, goal_objects),
+            (l.goal_crowd, goal_objects),
+        ] {
+            r.show_layer(id, shown);
+        }
+        if objects && !self.objects.crowd.is_empty() {
+            r.update_layer(l.crowd, &self.objects.crowd.pose(seconds));
+        }
+        if goal_objects && !self.objects.goal_crowd.is_empty() {
+            r.update_layer(l.goal_crowd, &self.objects.goal_crowd.pose(seconds));
+        }
+    }
 }
 
 /// Where a character stands at a spawn point, facing its way. Character
@@ -358,6 +429,8 @@ impl<'a> App<'a> {
                 show_sky: true,
                 show_rails: true,
                 show_spawns: true,
+                show_objects: true,
+                show_goal_objects: false,
                 brighten: 0.0,
                 collision: CollisionView::Hidden,
                 speed,
@@ -733,7 +806,11 @@ impl<'a> App<'a> {
         self.update(dt);
         self.play(dt);
         self.sync_view();
-        self.animate(dt, self.started.elapsed().as_secs_f32());
+        let clock = self.started.elapsed().as_secs_f32();
+        self.animate(dt, clock);
+        if let Some(level) = &mut self.level {
+            level.update_objects(self.model.show_objects, self.model.show_goal_objects, clock);
+        }
         let p = self.camera.position;
         self.model.camera_text = format!(
             "x {:.0}  y {:.0}  z {:.0}\nyaw {:.0}  pitch {:.0}",
@@ -1053,6 +1130,18 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     app.model.set_spawns(&loaded.nodes.spawns);
     app.model.camera_text = loaded.start.describe();
     let mut camera = loaded.start;
+    app.model.show_goal_objects = args.goal_objects;
+    loaded.update_objects(true, args.goal_objects, args.time);
+    if let Some(name) = &args.object {
+        let node = loaded
+            .nodes
+            .objects
+            .iter()
+            .find(|o| o.label.eq_ignore_ascii_case(name))
+            .with_context(|| format!("no object named {name}"))?;
+        let (eye, target) = objects::view_of(node);
+        camera = FlyCamera::looking_at(eye, target);
+    }
 
     if let Some(id) = &args.character {
         app.model.character.characters = data.characters();

@@ -6,5 +6,6 @@ pub mod character;
 pub mod collision;
 pub mod level;
 pub mod nodes;
+pub mod objects;
 pub mod renderer;
 pub mod source;

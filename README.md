@@ -28,6 +28,13 @@ The side panel lists the 11 levels and has toggles for the sky, rails
 collision, a brighten slider for dark areas, camera speed, and every
 spawn point by name to jump to.
 
+Levels are shown as they start, with every object and pedestrian the node
+array places there: goal pickups, vehicles and about 300 pedestrians, from
+Scar and Kerchak to hyena tourists and birds, each playing its idle
+animation. **Goal objects** adds what goals and scripts create later
+(the S-K-A-T-E letters, goal pedestrians, warp portals, pickups); see
+[Objects and pedestrians](#objects-and-pedestrians).
+
 Under **Character**, pick a character and one of their 125-133
 animations, then play, pause, change the speed or drag the time slider.
 The character stands on the level's start, and moves to each spawn point
@@ -191,7 +198,8 @@ checked against the running game.
 Every material pass is drawn with its blend mode (opaque, add, subtract,
 alpha blend, modulate, brighten, and their fixed-alpha variants), its own UV
 set, scrolling UVs and environment mapping. Not drawn yet: vertex-color
-animation, fog, and the objects placed by scripts (pedestrians, goal items).
+animation and fog. This viewer draws every sector; the Map Viewer leaves
+out the ones that aren't there at the start and adds objects.
 `desa model materials <file>` lists a level's materials by area covered,
 which helps track down rendering problems.
 
@@ -199,6 +207,28 @@ The level's collision is found automatically (`<X>col/Levels/<name>/` next to
 the `<X>Scn` folder) and shown with **K**, or `--show-collision overlay|only`
 for screenshots. Colors: yellow = trigger or non-collidable, red = vert
 (quarter pipes), blue = wall-ridable, purple = not skatable, gray = the rest.
+
+### Objects and pedestrians
+
+Besides rails and spawns, a level's node array places objects:
+
+- **`LevelGeometry` and `LevelObject`** nodes name sectors of the level
+  scene. Those without the `CreatedAtStart` flag aren't there when the
+  level starts: trigger boxes, goal pickups, warp portals that open later
+  (298 sectors on the hub).
+- **`GameObject` and `Vehicle`** nodes place a model, `Models/<path>.ngc`
+  in the level's archive (`X.prg`).
+- **`Pedestrian`** nodes place a skinned model from `XPed.prg` with a
+  `SkeletonName` and an `AnimName`: a script in `scripts/allanims.qb`
+  whose `LoadAnim` lines give each animation a role. The viewer plays the
+  `Ped_Guide_Idle1` or `Ped_M_Idle1` one. Some sets borrow animations
+  (birds use Zazu's; Tarzan's Buzz uses Buzz's from `anims_buzz.prg`).
+
+All 1,795 object nodes on the disc load. Objects are turned by `-heading`
+about Y, which is what mirroring Z does to a rotation; that's the opposite
+way round from the spawn convention above, and goal intro cameras don't say
+which is right (they see their pedestrian from the front 19 times out of
+40 this way).
 
 ## Scripts (QB)
 
@@ -382,9 +412,8 @@ from 1,079 files.
    skinned models, levels, collision, a level viewer, skeletons and
    animations, camera paths, and animated characters in the Map Viewer
    (done).
-2. **Level loading.** Rails and spawn points (done). Next: objects and
-   pedestrians from the node arrays, the collision BSP tree, fog and
-   vertex-color animation.
+2. **Level loading.** Rails, spawn points, objects and pedestrians (done).
+   Next: the collision BSP tree, fog and vertex-color animation.
 3. **QB scripts.** Decompiling and data parsing (done). Next: an
    interpreter that runs the game's scripts.
 4. **Skater physics.** Match the original's constants and update loop,

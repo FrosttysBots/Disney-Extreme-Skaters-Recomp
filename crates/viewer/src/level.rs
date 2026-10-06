@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use ngc_model::{Pass, Scene, pass_flags};
 use ngc_texture::TexDictionary;
 
@@ -26,6 +26,7 @@ pub struct Vertex {
 }
 
 /// RGBA8 pixels for every mip level, top row first.
+#[derive(Clone)]
 pub struct TextureData {
     /// The texture's name checksum (0 for the built-in white texture).
     pub checksum: u32,
@@ -120,6 +121,16 @@ impl Level {
 
     /// Builds a level from the contents of a `.scn.ngc` and its `.tex.ngc`.
     pub fn from_bytes(scene: &[u8], textures: Option<&[u8]>) -> Result<Level> {
+        Self::from_bytes_filtered(scene, textures, |_| true)
+    }
+
+    /// Like [`from_bytes`](Self::from_bytes), with only the sectors whose
+    /// checksum passes `keep`.
+    pub fn from_bytes_filtered(
+        scene: &[u8],
+        textures: Option<&[u8]>,
+        keep: impl Fn(u32) -> bool,
+    ) -> Result<Level> {
         let scene = Scene::parse(scene).context("could not parse the scene")?;
         let dictionary = match textures {
             Some(data) => {
@@ -144,7 +155,7 @@ impl Level {
         // Gather triangles per material, keeping first-seen order.
         let mut by_material: Vec<(u32, Vec<u32>)> = Vec::new();
         let mut material_slot: HashMap<u32, usize> = HashMap::new();
-        for sector in &scene.sectors {
+        for sector in scene.sectors.iter().filter(|s| keep(s.checksum)) {
             let base = level.vertices.len() as u32;
             for (i, position) in sector.positions.iter().enumerate() {
                 let mut uvs = [[0.0; 2]; UV_SETS];
@@ -217,6 +228,65 @@ impl Level {
             .skip(1)
             .position(|t| t.checksum == checksum)
             .map(|i| i + 1)
+    }
+
+    /// An empty level (just the white texture), to add instances to.
+    pub fn empty() -> Level {
+        Level {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            batches: Vec::new(),
+            textures: vec![TextureData {
+                checksum: 0,
+                width: 1,
+                height: 1,
+                levels: vec![vec![255; 4]],
+            }],
+            focus: (Vec3::ZERO, 1.0),
+        }
+    }
+
+    /// Adds a copy of `model` moved by `transform`. Copies of one model can
+    /// share its textures: pass the slot this returned for the first copy
+    /// as `textures` (`None` adds them). Different models can't share by
+    /// checksum alone, since some names repeat (every character's eyes are
+    /// `eyes.png`). `focus` isn't updated.
+    pub fn add_instance(
+        &mut self,
+        model: &Level,
+        transform: Mat4,
+        textures: Option<usize>,
+    ) -> usize {
+        let base = textures.unwrap_or_else(|| {
+            let base = self.textures.len() - 1;
+            self.textures.extend(model.textures.iter().skip(1).cloned());
+            base
+        });
+        let base_vertex = self.vertices.len() as u32;
+        let base_index = self.indices.len() as u32;
+        self.vertices.extend(model.vertices.iter().map(|v| {
+            Vertex {
+                position: transform.transform_point3(v.position.into()).into(),
+                normal: transform
+                    .transform_vector3(v.normal.into())
+                    .normalize_or_zero()
+                    .into(),
+                ..*v
+            }
+        }));
+        self.indices
+            .extend(model.indices.iter().map(|i| i + base_vertex));
+        for batch in &model.batches {
+            let mut batch = batch.clone();
+            batch.first_index += base_index;
+            for pass in &mut batch.passes {
+                if pass.texture != 0 {
+                    pass.texture += base;
+                }
+            }
+            self.batches.push(batch);
+        }
+        base
     }
 
     /// Adds `other`'s geometry after this one's (a character and its board).
