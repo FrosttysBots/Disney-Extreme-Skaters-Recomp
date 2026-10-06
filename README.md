@@ -21,7 +21,7 @@ to that engine family too.
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Skater physics | A first version on the game's own constants: push, steer, ollie, land on any level |
+| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, on any level |
 | Tricks, gameplay, menus, audio | Not started yet |
 
 Every format is checked against every file on the US disc (`GEXE52`):
@@ -57,7 +57,7 @@ but haven't been tried.
   [models](#model-formats), [skeletons and animations](#skeletons-and-animations),
   [textures](#texture-formats)
 - [Skater physics](#skater-physics): skating the levels with the game's
-  own constants
+  own physics code and constants
 - [Roadmap](#roadmap) and [reverse-engineering setup](#reverse-engineering-setup)
 
 | | |
@@ -105,10 +105,10 @@ front of them, and **Blink** makes them blink every few seconds (see
 frames.
 
 **Skate** puts the character on the level: W pushes, S brakes, A/D steer,
-holding Space crouches and letting go ollies, and Esc stops. The physics is
-a first version (see [Skater physics](#skater-physics)), with the game's
-own constants and the character's stats, and a chase camera set like the
-game's.
+holding Space crouches and letting go ollies, holding E grinds rails, and
+Esc stops. The physics is the game's own code as far as it's been read
+(see [Skater physics](#skater-physics)), with its constants and the
+character's stats, and a chase camera set like the game's.
 
 Under **Camera paths**, each level lists its cutscene, goal and warp
 cameras (7 to 46 per level). Click one to watch it; moving or looking
@@ -124,7 +124,7 @@ around takes over from wherever it is.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
-| W / S, A / D, Space, Esc | While skating: push, brake, steer, crouch (let go to ollie), stop |
+| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind, stop |
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -530,22 +530,23 @@ character's stats, which are in their profiles in `disneytricks.q`
 `min + (max - min) * s / 10`.
 
 The `skate` crate reads them and runs a skater over a level's collision,
-using the BSP trees for its ray casts: it follows the ground (snapping
-within those distances and tilting to the surface), pushes up to the kick
-speed, brakes, rolls down slopes, steers, stops at walls, ollies off the
-ground's normal, spins and falls in the air, and lands. On the Hub, Jessie
-reaches her kick speed of 425 a second and covers about 1,000 units in
-three seconds, and an ollie rises 63 units over 38 frames, as her jump
-speed and the gravity predict.
+using the BSP trees for its ray casts. Its update follows the game's own
+code in `main.dol`, found through the constants: the engine reads each
+one by its name (or its name's checksum), and those lead straight to the
+physics functions. Ported so far: pushing and drag, gravity along the
+ground, steering, braking, the speed limits, the ollie (stronger the
+longer the crouch), following the ground (and flying off the lip of a
+kicker), bouncing off walls on the ground and in the air, the air step,
+landing (including popping onto ledges) and grinding level rails (rail
+gravity, corners, jumping off). On the Hub, Jessie reaches her kick speed
+of 425 a second, covers about 1,000 units in three seconds, ollies 57
+units high and grinds the Hub's long rails.
 
-It is not yet the game's own physics: that needs the update code in
-`main.dol` compared frame by frame against Dolphin. That work has started:
-since the engine reads each constant by its name's checksum, those
-checksums lead straight to the physics code, and pushing and air gravity
-(divided by the hang-time stat) already match it.
-[docs/physics-notes.md](docs/physics-notes.md) maps what's been read so
-far. Turning rates are read as radians a second and the camera distances
-as feet, both guesses for now.
+[docs/physics-notes.md](docs/physics-notes.md) maps every function read,
+with addresses. Not yet: vert air, wall rides, manuals, tricks, balance
+and bails, moving objects, and a frame-by-frame check against Dolphin.
+Turning rates are read as radians a second and the camera distances as
+feet, both guesses for now.
 
 ## Roadmap
 
@@ -559,10 +560,10 @@ as feet, both guesses for now.
    runs objects' scripts, with path following and animations (done).
    Next: more commands, events (exceptions) and goals, which need a
    skater.
-4. **Skater physics.** The game's constants and a first skater that
-   pushes, steers, ollies and lands on any level (done). Next: the
-   original's update loop from `main.dol`, verified against Dolphin frame
-   by frame; then grinds, manuals, wallrides and vert.
+4. **Skater physics.** The game's constants, and its update code from
+   `main.dol` for the ground, walls, air, landing and grinding (done).
+   Next: a frame-by-frame check against Dolphin, then manuals, wall rides,
+   vert and balance.
 5. **Gameplay.** Tricks, scoring, goals, game modes, UI and audio.
 
 ## Reverse-engineering setup

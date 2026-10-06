@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use glam::{Mat4, Quat, Vec3};
 use ngc_anim::CameraPath;
-use skate::{Action as SkateAction, Input, Physics, Skater, Stats, World};
+use skate::{Action as SkateAction, Input, Physics, Rails, Segment, Skater, Stats, World};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -256,7 +256,18 @@ fn load_level(
         .collision
         .as_deref()
         .and_then(|c| ngc_collision::Collision::parse(c).ok())
-        .map(World::new);
+        .map(|c| {
+            World::new(c).with_rails(Rails::new(
+                nodes
+                    .rails
+                    .iter()
+                    .map(|r| Segment {
+                        start: r.start,
+                        end: r.end,
+                    })
+                    .collect(),
+            ))
+        });
     let sky = files
         .sky
         .as_ref()
@@ -692,6 +703,7 @@ impl<'a> App<'a> {
             turn: f32::from(u8::from(held(KeyCode::KeyD) || held(KeyCode::ArrowRight)))
                 - f32::from(u8::from(held(KeyCode::KeyA) || held(KeyCode::ArrowLeft))),
             crouch: held(KeyCode::Space),
+            grind: held(KeyCode::KeyE),
         };
         skater.update(input, physics, world, dt);
         self.placement = skater.placement();
@@ -705,6 +717,7 @@ impl<'a> App<'a> {
             SkateAction::Landing => (&["Land1", "LandSmall"], false),
             SkateAction::FlailLeft => (&["FlailLeft"], false),
             SkateAction::FlailRight => (&["FlailRight"], false),
+            SkateAction::Grinding => (&["GrindIn1", "GrindRange1"], false),
         };
         let mut time = skater.action_time;
         let mut chosen = None;

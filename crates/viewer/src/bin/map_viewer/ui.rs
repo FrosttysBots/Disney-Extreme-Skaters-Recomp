@@ -94,7 +94,8 @@ P: play or pause the character
 [ and ]: previous or next animation
 F1: hide or show this panel
 Skating: W push, S brake, A/D steer,
-  Space crouch (let go: ollie), Esc stop";
+  Space crouch (let go: ollie),
+  hold E to grind, Esc stop";
 
 pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -287,8 +288,8 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .button(label)
             .on_hover_text(
                 "Skate the character around the level: W push, S brake, A/D steer, \
-                 hold Space to crouch and let go to ollie, Esc to stop. A first version \
-                 of the physics, using the game's own constants.",
+                 hold Space to crouch and let go to ollie, hold E to grind rails, \
+                 Esc to stop. The game's own physics, as far as it's been read.",
             )
             .clicked()
         {

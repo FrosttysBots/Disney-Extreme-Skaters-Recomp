@@ -3,7 +3,7 @@ use std::path::Path;
 use desa_viewer::nodes::LevelNodes;
 use desa_viewer::source::GameData;
 use qb::vm::Program;
-use skate::{Action, Input, Physics, Skater, Stats, World};
+use skate::{Action, Input, Physics, Rails, Segment, Skater, Stats, World};
 
 /// Skates Jessie from the Hub's start: push for three seconds, then ollie,
 /// and check she rolls along the ground, speeds up, leaves it and lands;
@@ -25,8 +25,18 @@ fn real_skater_on_the_hub() {
     assert_eq!(physics.air_gravity, -1350.0);
 
     let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
-    let world = World::new(collision);
     let nodes = LevelNodes::from_bytes(files.nodes.as_ref().unwrap()).unwrap();
+    let rails = Rails::new(
+        nodes
+            .rails
+            .iter()
+            .map(|r| Segment {
+                start: r.start,
+                end: r.end,
+            })
+            .collect(),
+    );
+    let world = World::new(collision).with_rails(rails.clone());
     let start = nodes.start().unwrap();
     // Face the way the spawn's camera looks.
     let facing = start.facing();
@@ -104,4 +114,82 @@ fn real_skater_on_the_hub() {
         skater.position.z
     );
     assert!(skater.position.y > -10_000.0, "still in the level");
+
+    // Drop onto the longest level rail, moving along it, holding grind.
+    let rail = rails
+        .segments
+        .iter()
+        .filter(|r| (r.end - r.start).normalize().y.abs() < 0.2)
+        .max_by(|a, b| a.length().total_cmp(&b.length()))
+        .unwrap();
+    let along = rail.direction();
+    let mut skater = Skater::new(rail.start.lerp(rail.end, 0.25) + glam::Vec3::Y * 15.0, 0.0);
+    skater.on_ground = false;
+    skater.velocity = along * 400.0;
+    let grind = Input {
+        grind: true,
+        ..Input::default()
+    };
+    let mut grinding = 0;
+    for _ in 0..240 {
+        skater.update(grind, &physics, &world, 1.0 / 60.0);
+        if skater.grind.is_some() {
+            grinding += 1;
+        } else if grinding > 0 {
+            break;
+        }
+    }
+    println!(
+        "grind: on a {:.0}-unit rail for {grinding} frames, off at {:.0} {:.0} {:.0}",
+        rail.length(),
+        skater.position.x,
+        skater.position.y,
+        skater.position.z
+    );
+    assert!(grinding > 10);
+
+    // Every level rail, dropped onto from just above its middle and
+    // grinding it whichever way: the skater must end up back on the
+    // ground, never below the level (rails dip into the ground at their
+    // ends, and some run along walls).
+    let mut tried = 0;
+    let mut grinded = 0;
+    let mut fell = Vec::new();
+    for (i, rail) in rails.segments.iter().enumerate() {
+        for way in [1.0, -1.0] {
+            let middle = rail.start.lerp(rail.end, 0.5);
+            let mut skater = Skater::new(middle + glam::Vec3::Y * 10.0, 0.0);
+            skater.on_ground = false;
+            skater.velocity = rail.direction() * way * 300.0;
+            let mut was_grinding = false;
+            let mut lowest = f32::MAX;
+            for frame in 0..900 {
+                // Hold grind just long enough to get on.
+                let input = Input {
+                    grind: frame < 30,
+                    ..Input::default()
+                };
+                skater.update(input, &physics, &world, 1.0 / 60.0);
+                was_grinding |= skater.grind.is_some();
+                lowest = lowest.min(skater.position.y);
+                if was_grinding && skater.on_ground {
+                    break;
+                }
+            }
+            tried += 1;
+            grinded += usize::from(was_grinding);
+            if lowest < world.floor() - 400.0 {
+                fell.push((i, way));
+            }
+        }
+    }
+    println!(
+        "{grinded} of {tried} rail drops grinded, {} fell out of the level: {fell:?}",
+        fell.len()
+    );
+    // Rail 1567 hangs off a building at the edge of the Hub, over a quarter
+    // pipe with no floor in front of it: falling off it leaves the level
+    // (the game's out-of-bounds triggers aren't ported). Anything else
+    // falling out is a bug.
+    assert!(fell.iter().all(|&(i, _)| i == 1567), "{fell:?}");
 }

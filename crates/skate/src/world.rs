@@ -4,6 +4,8 @@
 use glam::Vec3;
 use ngc_collision::{Collision, face_flags};
 
+use crate::rails::Rails;
+
 /// Where a ray hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
@@ -17,11 +19,32 @@ pub struct Hit {
 
 pub struct World {
     collision: Collision,
+    /// The rails to grind.
+    pub rails: Rails,
 }
 
 impl World {
     pub fn new(collision: Collision) -> Self {
-        World { collision }
+        World {
+            collision,
+            rails: Rails::default(),
+        }
+    }
+
+    /// The bottom of the level's collision; nothing to land on below it
+    /// (no bottom without any collision).
+    pub fn floor(&self) -> f32 {
+        self.collision
+            .objects
+            .iter()
+            .map(|o| o.bbox[1])
+            .reduce(f32::min)
+            .unwrap_or(f32::NEG_INFINITY)
+    }
+
+    pub fn with_rails(mut self, rails: Rails) -> Self {
+        self.rails = rails;
+        self
     }
 
     /// The first solid face between `from` and `to`. Faces flagged

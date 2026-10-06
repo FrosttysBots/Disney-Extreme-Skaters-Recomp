@@ -151,6 +151,16 @@ pub struct Physics {
     pub wall_bounce_dont_slow_angle: f32,
     pub wall_bounce_dont_flail_speed: f32,
     pub head_height: f32,
+    /// Grinding: how far a rail can be to get onto it, gravity along it,
+    /// the boost getting on, the sharpest corner followed (degrees), how
+    /// far an ollie off it turns with the steering (degrees), and how long
+    /// after leaving a rail (seconds) before grinding again.
+    pub rail_max_snap: f32,
+    pub rail_gravity: f32,
+    pub rail_speed_boost: f32,
+    pub rail_corner_leave_angle: f32,
+    pub rail_jump_angle: f32,
+    pub regrind_time: f32,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -211,6 +221,12 @@ impl Physics {
             wall_bounce_dont_slow_angle: plain("Wall_Bounce_Dont_Slow_Angle", 30.0),
             wall_bounce_dont_flail_speed: plain("Wall_Bounce_Dont_Flail_Speed", 100.0),
             head_height: plain("Skater_default_head_height", 77.0),
+            rail_max_snap: plain("Rail_Max_Snap", 40.0),
+            rail_gravity: plain("Physics_Rail_Gravity", -2000.0),
+            rail_speed_boost: plain("Rail_Speed_Boost", 150.0),
+            rail_corner_leave_angle: plain("Rail_Corner_Leave_Angle", 50.0),
+            rail_jump_angle: plain("Rail_Jump_Angle", 15.0),
+            regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),

@@ -209,6 +209,56 @@ on-ground update switches on.
     `Skater_Min_Distance_To_Wall`.
   Ported, without the events, sounds and moving objects.
 
+- **Finding a rail** (0x800E52C4, called from 0x801078A8 with the move
+  from last frame's position to this one's): every rail node with a next
+  node whose box is within `Rail_Max_Snap` (40) of the move's; the
+  closest points between the move and the segment (0x80003CE0); with
+  `cos` the absolute dot product of their directions, the score is
+  `distance * (1.122 - cos)` (doubled when 0x800E4E48, perhaps which side
+  of the rail, disagrees with what's asked) and the lowest wins, if
+  `distance * (2 - cos)` is within `Rail_Max_Snap`; if the best is out of
+  reach, nothing is found unless a later rail scores better. The caller
+  passes a tolerance of 1 (any angle) and first checks three timers
+  against `Skater_regrind_time` (500 ms). When no level rail is found it
+  tries the rails of moving objects.
+- **Getting on** (0x80108470; it also starts lip tricks on vert): a line
+  from the skater to the rail point must not hit anything more than 6
+  short of it. A standing skater takes its facing as velocity; faster
+  than 10, the velocity is made horizontal keeping its length
+  (0x80009B3C), then projected on the rail (0x80009D00) keeping the
+  vertical speed aside, and `Rail_Speed_Boost` (150) is added along the
+  way it's going. The skater moves to the rail point, state 4.
+- **Grinding** (0x80100A70, 2,600 instructions with balance): gravity
+  `(0, Physics_Rail_Gravity, 0)` (-2000) projected on the rail is added
+  each frame; turning round flips the fakie flag (`+0x3588`). Past a
+  node it carries on to the next one (`+0x34`, or `+0x38` going
+  backwards) unless the corner is sharper than `Rail_Corner_Leave_Angle`
+  (50 degrees); the end of the rail drops it off (`OffRail`). Jumping
+  (0x800F5B40) turns the velocity by `Rail_Jump_Angle` (15 degrees)
+  towards the held direction and blocks the rail for
+  `Rail_minimum_rerail_time` (500 ms).
+  Each frame ends with a line from 1 above the old position to 1 above
+  the new one and 6 on (0x801032E4): hitting anything (the ground where
+  a rail dips into it, a wall) puts the skater back at the old position,
+  1 higher, with its velocity flattened against what it hit, in the air
+  (`OffRail`).
+  Ported: all of the above for level rails, without balance, bails, the
+  side check, moving objects' rails, lip tricks and the events. The
+  grind button is the viewer's guess (the game's call on the ground
+  depends on an argument not yet traced).
+
+- **Rails inside ledges.** Many rails run a few units below the top edge
+  of the ledge or kerb they follow, so a skater leaving one starts just
+  inside it, where the port's two-sided ray casts find the ledge's
+  inside faces. The port lifts a skater leaving a rail onto any ground
+  within `Physics_Ground_Snap_Up` above it, and puts one that falls 500
+  below the level's collision back where it last stood (the game has its
+  own out-of-bounds triggers). Dropped onto every rail of every level
+  both ways (`cargo run --release -p desa_viewer --example rail_drops`),
+  about 27 of 27,000 still fall out, at ledge edges over pits and drops
+  and at rails out of reach below the levels. How the game avoids this
+  (one-sided collision, perhaps) isn't known yet.
+
 ## Next
 
 Read the rest of the on-ground update and its helpers, then the air

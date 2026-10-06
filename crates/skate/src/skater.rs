@@ -41,6 +41,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use glam::{Mat4, Quat, Vec3};
 
 use crate::constants::Physics;
+use crate::rails::RailHit;
 use crate::world::{Hit, World};
 
 /// The controls held this step.
@@ -52,6 +53,8 @@ pub struct Input {
     pub turn: f32,
     /// Crouching; letting go jumps.
     pub crouch: bool,
+    /// Grind: get onto a rail within reach.
+    pub grind: bool,
 }
 
 /// What the skater is doing, for picking animations.
@@ -68,6 +71,18 @@ pub enum Action {
     /// Bounced off a wall fast enough to flail (turning left or right).
     FlailLeft,
     FlailRight,
+    /// On a rail.
+    Grinding,
+}
+
+/// Which rail segment the skater is grinding, which way along it, and
+/// how fast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grind {
+    pub segment: usize,
+    /// Towards the segment's end.
+    pub forwards: bool,
+    pub speed: f32,
 }
 
 /// Fixed physics step.
@@ -93,6 +108,12 @@ pub struct Skater {
     turn_time: f32,
     /// How long the skater has been crouched (tensing for an ollie).
     crouch_time: f32,
+    pub grind: Option<Grind>,
+    /// Seconds since it last left a rail.
+    since_rail: f32,
+    /// Where it last stood on the ground, to go back to if it falls out of
+    /// the level.
+    last_ground: Vec3,
     leftover: f32,
 }
 
@@ -110,6 +131,9 @@ impl Skater {
             crouched: false,
             turn_time: 0.0,
             crouch_time: 0.0,
+            grind: None,
+            since_rail: f32::MAX,
+            last_ground: position,
             leftover: 0.0,
         }
     }
@@ -177,7 +201,7 @@ impl Skater {
         self.action_time += STEP;
         self.crouch_time = if input.crouch {
             self.crouch_time + STEP
-        } else if self.on_ground {
+        } else if self.on_ground || self.grind.is_some() {
             self.crouch_time
         } else {
             0.0
@@ -187,11 +211,179 @@ impl Skater {
         } else {
             self.turn_time + STEP
         };
-        if self.on_ground {
+        let before = self.position;
+        if self.grind.is_some() {
+            self.grind_step(input, p, world);
+        } else if self.on_ground {
             self.ground_step(input, p, world);
         } else {
             self.air_step(input, p, world);
         }
+        if self.grind.is_none() {
+            self.since_rail = (self.since_rail + STEP).min(f32::MAX);
+            // Onto a rail met on the way (main.dol 0x801078A8), not too
+            // soon after leaving one.
+            if input.grind && self.since_rail >= p.regrind_time {
+                if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
+                    self.start_grind(hit, input, p, world);
+                }
+            }
+        }
+    }
+
+    /// The ollie's speed (0x800F62C4): stronger the longer the crouch, up
+    /// to the max tense time.
+    fn jump_speed(&self, p: &Physics) -> f32 {
+        let tense = (self.crouch_time / p.max_tense_time).min(1.0);
+        p.jump_speed_min + (p.jump_speed - p.jump_speed_min) * tense
+    }
+
+    /// Onto a rail (main.dol 0x80108470): at the point found, unless
+    /// something's in the way more than 6 short of it; the speed made
+    /// horizontal, then along the rail, plus `rail_speed_boost`.
+    fn start_grind(&mut self, hit: RailHit, input: Input, p: &Physics, world: &World) {
+        if let Some(block) = world.ray(self.position, hit.point) {
+            if block.point.distance(hit.point) > 6.0 {
+                return;
+            }
+        }
+        let rail = world.rails.segments[hit.segment];
+        let direction = rail.direction();
+        let mut velocity = self.velocity;
+        if velocity.x == 0.0 && velocity.z == 0.0 {
+            let facing = self.forward();
+            velocity.x = facing.x;
+            velocity.z = facing.z;
+        }
+        if velocity.length() > 10.0 {
+            velocity = along_keeping_length(velocity, Vec3::Y);
+        }
+        let along = velocity.dot(direction);
+        let forwards = along >= 0.0;
+        self.grind = Some(Grind {
+            segment: hit.segment,
+            forwards,
+            speed: along.abs() + p.rail_speed_boost,
+        });
+        self.position = hit.point;
+        self.on_ground = false;
+        self.up = Vec3::Y;
+        self.crouched = input.crouch;
+        let travel = if forwards { direction } else { -direction };
+        self.velocity = travel * (along.abs() + p.rail_speed_boost);
+        self.heading = travel.x.atan2(travel.z);
+        self.set_action(Action::Grinding);
+    }
+
+    /// Along the rail (main.dol 0x80100A70): rail gravity along it, on
+    /// round corners up to `rail_corner_leave_angle`, off the end or a
+    /// sharper corner, and an ollie off it when letting go of a crouch,
+    /// turned `rail_jump_angle` by the steering.
+    fn grind_step(&mut self, input: Input, p: &Physics, world: &World) {
+        let Some(mut grind) = self.grind else {
+            return;
+        };
+        let rails = &world.rails;
+        let mut rail = rails.segments[grind.segment];
+        let mut travel = rail.direction() * if grind.forwards { 1.0 } else { -1.0 };
+        grind.speed += p.rail_gravity * travel.y * STEP;
+        if grind.speed < 0.0 {
+            // Rolled back: the other way along the rail.
+            grind.speed = -grind.speed;
+            grind.forwards = !grind.forwards;
+            travel = -travel;
+        }
+
+        if self.crouched && !input.crouch {
+            self.crouched = false;
+            let turn = if input.turn < 0.0 {
+                p.rail_jump_angle.to_radians()
+            } else if input.turn > 0.0 {
+                -p.rail_jump_angle.to_radians()
+            } else {
+                0.0
+            };
+            let (sin, cos) = turn.sin_cos();
+            let v = travel * grind.speed;
+            let mut velocity = Vec3::new(cos * v.x + sin * v.z, v.y, -sin * v.x + cos * v.z);
+            velocity.y += self.jump_speed(p);
+            self.leave_rail(velocity, p, world);
+            return;
+        }
+        self.crouched = input.crouch;
+
+        let mut position = self.position + travel * grind.speed * STEP;
+        loop {
+            let joint = if grind.forwards { rail.end } else { rail.start };
+            let past = (position - joint).dot(travel);
+            if past <= 0.0 {
+                break;
+            }
+            let next = rails
+                .next(grind.segment, grind.forwards)
+                .filter(|&(n, same)| {
+                    let d = rails.segments[n].direction() * if same { 1.0 } else { -1.0 };
+                    d.dot(travel) >= p.rail_corner_leave_angle.to_radians().cos()
+                });
+            let Some((n, same)) = next else {
+                // Off the end, or a corner too sharp to follow.
+                if !self.grind_blocked(position, travel * grind.speed, p, world) {
+                    self.position = position;
+                    self.leave_rail(travel * grind.speed, p, world);
+                }
+                return;
+            };
+            grind.segment = n;
+            grind.forwards = same;
+            rail = rails.segments[n];
+            travel = rail.direction() * if same { 1.0 } else { -1.0 };
+            position = joint + travel * past;
+        }
+        if self.grind_blocked(position, travel * grind.speed, p, world) {
+            return;
+        }
+        self.position = position;
+        self.velocity = travel * grind.speed;
+        self.heading = travel.x.atan2(travel.z);
+        self.grind = Some(grind);
+        self.set_action(Action::Grinding);
+    }
+
+    /// Anything in the way along the rail (main.dol 0x801032E4): a line 1
+    /// up from where the skater is to 1 up from `to` and 6 on. Hitting
+    /// anything, like the ground where a rail dips into it, knocks it off
+    /// the rail where it was, 1 higher, its speed along what it hit.
+    fn grind_blocked(&mut self, to: Vec3, velocity: Vec3, p: &Physics, world: &World) -> bool {
+        let Some(direction) = (to - self.position).try_normalize() else {
+            return false;
+        };
+        let from = self.position + Vec3::Y;
+        let Some(hit) = world.ray(from, to + Vec3::Y + direction * 6.0) else {
+            return false;
+        };
+        self.position.y += 1.0;
+        self.leave_rail(velocity - hit.normal * velocity.dot(hit.normal), p, world);
+        true
+    }
+
+    fn leave_rail(&mut self, velocity: Vec3, p: &Physics, world: &World) {
+        // Rails often run along the edge of a ledge a little below its top:
+        // up onto whatever surface is just above the feet, so the air step
+        // doesn't start inside the ledge and fall through it. (This
+        // crate's own safeguard; the game lifts the skater 1 when knocked
+        // off.)
+        let above = self.position + Vec3::Y * p.ground_snap_up;
+        if let Some(hit) = world.ray(above, self.position) {
+            if hit.normal.y > 0.0 && !is_wall(&hit, p) {
+                self.position = hit.point + Vec3::Y * 0.1;
+            }
+        }
+        self.grind = None;
+        self.since_rail = 0.0;
+        self.velocity = velocity;
+        self.on_ground = false;
+        self.up = Vec3::Y;
+        self.set_action(Action::Air);
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
@@ -268,11 +460,9 @@ impl Skater {
         // Jump when letting go of a crouch.
         if self.crouched && !input.crouch {
             self.crouched = false;
-            // The ollie (0x800F62C4): stronger the longer the crouch, up
-            // to the max tense time; along the ground's normal when moving
+            // The ollie (0x800F62C4): along the ground's normal when moving
             // down, else straight up.
-            let tense = (self.crouch_time / p.max_tense_time).min(1.0);
-            let jump = p.jump_speed_min + (p.jump_speed - p.jump_speed_min) * tense;
+            let jump = self.jump_speed(p);
             let mut velocity = forward * speed;
             if velocity.y < 0.0 {
                 velocity += up * jump;
@@ -335,6 +525,7 @@ impl Skater {
         match ground {
             Some(hit) => {
                 self.position = hit.point;
+                self.last_ground = hit.point;
                 self.up = hit.normal;
                 self.velocity = forward * speed;
             }
@@ -432,9 +623,15 @@ impl Skater {
             return;
         }
         self.position = target;
-        // Fell out of the level.
-        if self.position.y < -100_000.0 {
+        // Fell out of the level, off its edge or through a gap: back to
+        // where it last stood. (The game uses its own out-of-bounds
+        // triggers, not ported; this is the crate's safety net.)
+        if self.position.y < world.floor() - 500.0 {
+            self.position = self.last_ground;
             self.velocity = Vec3::ZERO;
+            self.up = Vec3::Y;
+            self.on_ground = true;
+            self.set_action(Action::Standing);
         }
     }
 }
@@ -589,6 +786,52 @@ mod tests {
         assert_eq!(v.y, -500.0);
         let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
+    }
+
+    #[test]
+    fn grinds_down_a_rail_round_a_bend_and_off_a_sharp_corner() {
+        use crate::rails::{Rails, Segment};
+        let p = physics();
+        let empty = ngc_collision::Collision {
+            objects: Vec::new(),
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        };
+        let a = Vec3::new(0.0, 100.0, 0.0);
+        let b = Vec3::new(200.0, 80.0, 0.0);
+        // A 30 degree bend, then a right angle.
+        let c = b + Vec3::new(30f32.to_radians().cos(), 0.0, 30f32.to_radians().sin()) * 200.0;
+        let d = c + Vec3::new(-0.5, 0.0, 0.866) * 200.0;
+        let world = World::new(empty).with_rails(Rails::new(vec![
+            Segment { start: a, end: b },
+            Segment { start: b, end: c },
+            Segment { start: c, end: d },
+        ]));
+        let mut skater = Skater::new(Vec3::new(40.0, 110.0, 3.0), FRAC_PI_2);
+        skater.on_ground = false;
+        skater.velocity = Vec3::new(300.0, -100.0, 0.0);
+        let grind = Input {
+            grind: true,
+            ..Input::default()
+        };
+        skater.update(grind, &p, &world, STEP * 2.0);
+        let on = skater.grind.expect("onto the rail");
+        assert_eq!(on.segment, 0);
+        assert!(on.forwards);
+        // 300 along it, plus the boost.
+        assert!((on.speed - 450.0).abs() < 30.0, "{}", on.speed);
+        let mut reached_bend = false;
+        for _ in 0..120 {
+            skater.update(grind, &p, &world, STEP);
+            match skater.grind {
+                Some(g) => reached_bend |= g.segment == 1,
+                None => break,
+            }
+        }
+        assert!(reached_bend, "round the 30 degree bend");
+        assert!(skater.grind.is_none(), "off at the right angle");
+        assert_eq!(skater.action, Action::Air);
+        assert!((skater.position.distance(c)) < 20.0, "{}", skater.position);
     }
 
     #[test]
