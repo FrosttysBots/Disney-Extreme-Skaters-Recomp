@@ -214,7 +214,12 @@ fn main() {
             }
             let lift = Vec3::Y * 2.0;
             if let Some(hit) = world.ray(before + lift, after + lift) {
-                if hit.normal.y > 0.5 && after.y < hit.point.y - 5.0 {
+                // Under ground now: the ground is straight above the feet
+                // (stepping off an edge only clips its corner).
+                let under = world
+                    .ray(Vec3::new(after.x, hit.point.y + 1.0, after.z), after)
+                    .is_some_and(|h| h.normal.y > 0.5);
+                if hit.normal.y > 0.5 && after.y < hit.point.y - 5.0 && under {
                     throughs += 1;
                     if throughs <= 12 {
                         println!(

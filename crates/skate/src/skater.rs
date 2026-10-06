@@ -1115,10 +1115,11 @@ impl Skater {
         // crate's own safeguard; the game lifts the skater 1 when knocked
         // off.)
         let above = self.position + Vec3::Y * p.ground_snap_up;
-        if let Some(hit) = world.ray(above, self.position) {
-            if hit.normal.y > 0.0 && !is_wall(&hit, p) {
-                self.position = hit.point + Vec3::Y * 0.1;
-            }
+        // (Looking past anything above that isn't ground, like a railing.)
+        if let Some(hit) = world.ray_past(above, self.position, |hit| {
+            hit.normal.y > 0.0 && !is_wall(hit, p)
+        }) {
+            self.position = hit.point + Vec3::Y * 0.1;
         }
         self.grind = None;
         self.since_rail = 0.0;
