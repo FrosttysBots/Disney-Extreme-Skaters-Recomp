@@ -355,6 +355,41 @@ fn real_skater_on_the_hub() {
     ));
     assert!(careful_frames > lazy_frames);
 
+    // From a manual, Circle with a direction branches to another manual
+    // (`GroundManualTrickBranches`): with up, manual 2.
+    let mut brancher = Skater::new(start.position, facing.x.atan2(facing.z));
+    brancher.tricks = book.clone();
+    for _ in 0..90 {
+        brancher.update(push, &physics, &world, 1.0 / 60.0);
+    }
+    let tap = |push: bool, brake: bool, grab: bool| Input {
+        push,
+        brake,
+        grab,
+        ..Input::default()
+    };
+    for input in [
+        tap(false, false, false),
+        tap(true, false, false),
+        tap(false, false, false),
+        tap(false, true, false),
+        tap(false, false, false),
+        tap(true, false, false),
+        tap(true, false, true),
+        tap(false, false, false),
+    ] {
+        brancher.update(input, &physics, &world, 1.0 / 60.0);
+    }
+    let names: Vec<_> = brancher
+        .combo_tricks
+        .tricks
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    println!("manual branch: {names:?}");
+    assert!(brancher.manual);
+    assert_eq!(names, ["Twistin' in the Wind", "Hunker Down, Li'l Lady"]);
+
     // Keep pushing: sooner or later a wall turns her away.
     let mut flails = 0;
     let mut turned = 0.0f32;
@@ -409,6 +444,37 @@ fn real_skater_on_the_hub() {
         skater.position.z
     );
     assert!(grinding > 10);
+
+    // Grinding with a direction pressed: that direction's grind
+    // (`GrindTricks`: right is grind 3).
+    let rail = rails
+        .segments
+        .iter()
+        .filter(|r| (r.end - r.start).normalize().y.abs() < 0.2)
+        .max_by(|a, b| a.length().total_cmp(&b.length()))
+        .unwrap();
+    let mut grinder = Skater::new(rail.start.lerp(rail.end, 0.25) + glam::Vec3::Y * 15.0, 0.0);
+    grinder.tricks = book.clone();
+    grinder.on_ground = false;
+    grinder.velocity = rail.direction() * 400.0;
+    let right = Input {
+        turn: 1.0,
+        ..Input::default()
+    };
+    grinder.update(right, &physics, &world, 1.0 / 60.0);
+    let grind = Input {
+        grind: true,
+        ..Input::default()
+    };
+    for _ in 0..20 {
+        grinder.update(grind, &physics, &world, 1.0 / 60.0);
+        if grinder.grind.is_some() {
+            break;
+        }
+    }
+    let grinding = grinder.balance_trick.as_ref().map(|t| t.name.clone());
+    println!("grind with right: {grinding:?}");
+    assert_eq!(grinding.as_deref(), Some("Yeeeeee-HAW!"));
 
     // Every level rail, dropped onto from just above its middle and
     // grinding it whichever way: the skater must end up back on the

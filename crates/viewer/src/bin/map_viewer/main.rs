@@ -785,7 +785,8 @@ impl<'a> App<'a> {
         };
         let length =
             |anim: u32| by_checksum(anim).map_or(1.0, |i| character.animations[i].1.duration);
-        if let Some((anim, at)) = skater.lip_pose(length) {
+        let balance_pose = skater.balance_pose(length);
+        if let Some((anim, at)) = balance_pose {
             if let Some(index) = by_checksum(anim) {
                 let duration = character.animations[index].1.duration;
                 chosen = Some((index, duration));
@@ -812,7 +813,9 @@ impl<'a> App<'a> {
             // A balance pose (`ManualRange1`, `GrindRange1`) follows the
             // balance meter from one end of the animation to the other,
             // as the game plays its range animations.
-            let range = character.animations[index].0.contains("Range") && skater.lip.is_none();
+            let range = character.animations[index].0.contains("Range")
+                && skater.lip.is_none()
+                && balance_pose.is_none();
             if let Some(meter) = skater.balance_meter().filter(|_| range) {
                 time = (meter + 1.0) / 2.0 * duration;
                 duration = duration.max(f32::EPSILON);

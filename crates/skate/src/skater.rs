@@ -47,7 +47,7 @@ use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
 use crate::rails::RailHit;
 use crate::score::Combo;
-use crate::tricks::{Button, Dir, Kind, LipTrick, TrickBook};
+use crate::tricks::{BalanceTrick, Button, Dir, Kind, LipTrick, TrickBook};
 use crate::world::{Hit, World};
 
 /// The controls held this step.
@@ -276,6 +276,9 @@ pub struct Skater {
     last_total: u32,
     /// In the special manual.
     pub special_manual: bool,
+    /// The grind or manual being balanced, and how long.
+    pub balance_trick: Option<BalanceTrick>,
+    balance_time: f32,
     /// On a lip.
     pub lip: Option<Lip>,
     /// The lip trick's way out, playing in the air after it.
@@ -339,6 +342,8 @@ impl Skater {
             special: false,
             last_total: 0,
             special_manual: false,
+            balance_trick: None,
+            balance_time: 0.0,
             lip: None,
             lip_out: None,
             presses: Vec::new(),
@@ -599,6 +604,7 @@ impl Skater {
             self.since_down + STEP
         };
         self.clock += STEP;
+        self.balance_time += STEP;
         if !self.manual {
             self.special_manual = false;
         }
@@ -737,6 +743,25 @@ impl Skater {
         a.0 == Press::Dir(first) && b.0 == Press::Dir(second) && self.clock - a.1 <= SPECIAL_WINDOW
     }
 
+    /// Into a manual (or from one manual to another): the meter starts
+    /// anew for a new manual, carrying the combo's lean over.
+    fn start_manual(&mut self, trick: Option<BalanceTrick>, new: bool, p: &Physics) {
+        if new {
+            self.manual = true;
+            self.special_manual = false;
+            self.balance.start(&p.manual_balance, !self.combo);
+            self.combo = true;
+        }
+        let named = trick
+            .as_ref()
+            .map(|t| (t.name.clone(), t.score))
+            .or_else(|| self.tricks.manual.clone());
+        self.credit(named, true);
+        self.balance_trick = trick;
+        self.balance_time = 0.0;
+        self.set_action(Action::Manual);
+    }
+
     /// The direction pressed last, if within `window` seconds.
     fn last_dir_within(&self, window: f32) -> Option<Dir> {
         self.presses
@@ -859,10 +884,20 @@ impl Skater {
         self.set_action(Action::Air);
     }
 
-    /// The lip's animation: its way in, then its range held along the
-    /// balance meter (backwards, `PlayRangeAnimBackwards`), or its way out
-    /// after it.
-    pub fn lip_pose(&self, length: impl Fn(u32) -> f32) -> Option<(u32, f32)> {
+    /// The animation of the grind, manual or lip being balanced: its way
+    /// in, then its range held along the balance meter (a lip's backwards,
+    /// `PlayRangeAnimBackwards`), or a lip's way out after it.
+    pub fn balance_pose(&self, length: impl Fn(u32) -> f32) -> Option<(u32, f32)> {
+        if self.lip.is_none() && (self.manual || self.grind.is_some()) {
+            let trick = self.balance_trick.as_ref()?;
+            if let Some(init) = trick.init {
+                if self.balance_time < length(init) {
+                    return Some((init, self.balance_time));
+                }
+            }
+            let meter = (self.balance.angle / METER).clamp(-1.0, 1.0);
+            return Some((trick.range, (meter + 1.0) / 2.0 * length(trick.range)));
+        }
         if let Some(lip) = &self.lip {
             if let Some(init) = lip.trick.init {
                 if lip.time < length(init) {
@@ -913,7 +948,17 @@ impl Skater {
         self.balance.start(&p.grind_balance, !self.combo);
         self.combo = true;
         self.trick = None;
-        self.credit(self.tricks.grind.clone(), true);
+        // The grind for the direction pressed with the button
+        // (`GrindTricks`).
+        let dir = self.last_dir_within(0.5);
+        let grind = TrickBook::balance_trick(&self.tricks.grinds, dir);
+        let named = grind
+            .as_ref()
+            .map(|g| (g.name.clone(), g.score))
+            .or_else(|| self.tricks.grind.clone());
+        self.credit(named, true);
+        self.balance_trick = grind;
+        self.balance_time = 0.0;
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,
@@ -1089,12 +1134,32 @@ impl Skater {
         // (`DoBalanceTrick ButtonA = Up ButtonB = Down`).
         let pressed_pair = (input.push && self.since_up == 0.0 && self.since_down <= MANUAL_WINDOW)
             || (input.brake && self.since_down == 0.0 && self.since_up <= MANUAL_WINDOW);
-        if !self.manual && pressed_pair && !input.crouch && self.action != Action::BailManual {
-            self.manual = true;
-            self.balance.start(&p.manual_balance, !self.combo);
-            self.combo = true;
-            self.credit(self.tricks.manual.clone(), true);
-            self.set_action(Action::Manual);
+        // Circle with a direction: manuals 2 to 5 (`ManualTricks`), or a
+        // branch to them from a manual (`GroundManualTrickBranches`).
+        let circle = self.pressed.1;
+        let branch = if circle {
+            Dir::from_held(input.push, input.brake, input.turn < 0.0, input.turn > 0.0)
+                .or_else(|| self.last_dir_within(0.4))
+                .filter(|d| matches!(d, Dir::Up | Dir::Down | Dir::Left | Dir::Right))
+        } else {
+            None
+        };
+        let bailing = matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        );
+        if !bailing && !input.crouch {
+            if let Some(dir) = branch {
+                let trick = TrickBook::balance_trick(&self.tricks.manuals, Some(dir));
+                let same =
+                    trick.as_ref().map(|t| &t.name) == self.balance_trick.as_ref().map(|t| &t.name);
+                if trick.is_some() && !(self.manual && same) {
+                    self.start_manual(trick, !self.manual, p);
+                }
+            } else if !self.manual && pressed_pair {
+                let trick = TrickBook::balance_trick(&self.tricks.manuals, None);
+                self.start_manual(trick, true, p);
+            }
         }
         // The special manual: its combination while in a manual, with the
         // meter full (the `Manual` script's `SpecialManualTricks`).
@@ -1104,6 +1169,8 @@ impl Skater {
                     self.special_manual = true;
                     self.balance.start(&p.manual_balance, false);
                     self.credit(Some(trick), true);
+                    self.balance_trick = self.tricks.special_manual_trick.clone();
+                    self.balance_time = 0.0;
                 }
             }
         }
@@ -1509,11 +1576,8 @@ impl Skater {
                     && (self.since_up - self.since_down).abs() <= MANUAL_WINDOW
                     && self.since_up.max(self.since_down) < 1.0
                 {
-                    self.manual = true;
-                    self.balance.start(&p.manual_balance, !self.combo);
-                    self.combo = true;
-                    self.credit(self.tricks.manual.clone(), true);
-                    self.set_action(Action::Manual);
+                    let trick = TrickBook::balance_trick(&self.tricks.manuals, None);
+                    self.start_manual(trick, true, p);
                     return;
                 }
                 self.end_combo(true);

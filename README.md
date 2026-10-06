@@ -132,6 +132,8 @@ around takes over from wherever it is.
 | R | Back to the start |
 | W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind (in the air), stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
+| F + W / S / A / D | On the ground or in a manual: manuals 2 to 5 (each character has five) |
+| W / S / A / D with E | Onto a rail: grinds 2 to 5 (none: grind 1) |
 | Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
 | Two directions, then Q (or E in a manual) | With the special meter full: the character's special grab (or manual) |
 | E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |

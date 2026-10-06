@@ -19,5 +19,5 @@ pub use constants::{Physics, Stats};
 pub use rails::{RailHit, Rails, Segment};
 pub use score::{Combo, ComboTrick};
 pub use skater::{Action, Grind, Input, Landed, Lip, Phase, Playing, Skater, VertAir};
-pub use tricks::{Button, Dir, Kind, LipTrick, Trick, TrickBook};
+pub use tricks::{BalanceTrick, Button, Dir, Kind, LipTrick, Trick, TrickBook};
 pub use world::{Hit, World};

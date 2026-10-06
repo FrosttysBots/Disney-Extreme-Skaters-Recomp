@@ -388,6 +388,15 @@ on-ground update switches on.
   can-push test (0x800F43F0) passes under the kick speed with no button.
   Ported: all of these (the skate crate's `anims` module picks them),
   AutoKick on by default, and the yaw bail; not the pitch and roll bails.
+- **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
+  the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
+  none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left
+  `Grind5` (`Grind1_180`... when turning 180 onto the rail, not ported).
+  `ManualTricks` and `GroundManualTrickBranches` (`manualtricks.q`) start
+  or branch to `Manual2` to `5` with Circle and a direction (400 ms);
+  up-down is `Manual1`. Each trick names its in and range animations
+  (`InitAnim`, `anim` or `BalanceAnim`), played along the balance meter.
+  Ported.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3

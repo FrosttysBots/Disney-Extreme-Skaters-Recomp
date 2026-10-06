@@ -108,6 +108,16 @@ pub struct LipTrick {
     pub no_ollie: bool,
 }
 
+/// A grind or manual: its name and score, and its animations in and
+/// held (balanced along the meter).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BalanceTrick {
+    pub name: String,
+    pub score: u32,
+    pub init: Option<u32>,
+    pub range: u32,
+}
+
 /// A character's tricks and the combinations that do them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrickBook {
@@ -130,6 +140,15 @@ pub struct TrickBook {
     /// none (`Lip_Triangle`), and the special (two directions then grind,
     /// within a second, `SpecialLipTricks`).
     pub lips: Vec<(Option<Dir>, LipTrick)>,
+    /// Grinds by the direction pressed with the grind button
+    /// (`GrindTricks`: none `Grind1`, up `Grind2`, right `Grind3`, down
+    /// `Grind4`, left `Grind5`), and manuals by the direction with Circle
+    /// (`ManualTricks`, `GroundManualTrickBranches`: `Manual2` to `5`; the
+    /// up-down press is `Manual1`).
+    pub grinds: Vec<(Option<Dir>, BalanceTrick)>,
+    pub manuals: Vec<(Option<Dir>, BalanceTrick)>,
+    /// The special manual's animations and name.
+    pub special_manual_trick: Option<BalanceTrick>,
     pub special_lip: Option<(Dir, Dir, LipTrick)>,
     /// How long each animation runs, in seconds, from whoever has the
     /// character's animations loaded (see [`TrickBook::set_durations`]).
@@ -232,6 +251,42 @@ impl TrickBook {
         book.grind = named("Grind1");
         book.manual = named("Manual1");
 
+        // Grinds and manuals, by slot.
+        let balance = |slot_name: &str, init: &str, range: &str| -> Option<BalanceTrick> {
+            let trick = program.value(table.get(checksum(slot_name))?.as_name()?)?;
+            parse_balance(trick, init, range)
+        };
+        for (slot_name, dirs) in [
+            ("Grind1", vec![None]),
+            (
+                "Grind2",
+                vec![Some(Dir::Up), Some(Dir::UpLeft), Some(Dir::UpRight)],
+            ),
+            ("Grind3", vec![Some(Dir::Right)]),
+            (
+                "Grind4",
+                vec![Some(Dir::Down), Some(Dir::DownLeft), Some(Dir::DownRight)],
+            ),
+            ("Grind5", vec![Some(Dir::Left)]),
+        ] {
+            if let Some(trick) = balance(slot_name, "InitAnim", "anim") {
+                for dir in dirs {
+                    book.grinds.push((dir, trick.clone()));
+                }
+            }
+        }
+        for (slot_name, dir) in [
+            ("Manual1", None),
+            ("Manual2", Some(Dir::Up)),
+            ("Manual3", Some(Dir::Right)),
+            ("Manual4", Some(Dir::Down)),
+            ("Manual5", Some(Dir::Left)),
+        ] {
+            if let Some(trick) = balance(slot_name, "InitAnim", "BalanceAnim") {
+                book.manuals.push((dir, trick));
+            }
+        }
+
         // Lips, by slot.
         for (slot_name, dir) in [
             ("Lip_Triangle", None),
@@ -262,6 +317,8 @@ impl TrickBook {
                 book.tricks.push(trick);
                 book.special_air = Some((air.0, air.1, book.tricks.len() - 1));
             }
+            book.special_manual_trick =
+                trick("Manual").and_then(|t| parse_balance(t, "InitAnim", "BalanceAnim"));
             if let Some(trick) = trick("Manual") {
                 let params = trick.get(checksum("params"));
                 let score = params
@@ -300,6 +357,17 @@ impl TrickBook {
             .iter()
             .find(|(a, _)| *a == anim)
             .map_or(1.0, |&(_, d)| d.max(0.01))
+    }
+
+    /// The grind or manual for a direction (or the plain one).
+    pub fn balance_trick(
+        list: &[(Option<Dir>, BalanceTrick)],
+        dir: Option<Dir>,
+    ) -> Option<BalanceTrick> {
+        list.iter()
+            .find(|(d, _)| dir.is_some() && *d == dir)
+            .or_else(|| list.iter().find(|(d, _)| d.is_none()))
+            .map(|(_, t)| t.clone())
     }
 
     /// The trick for a button pressed with a direction held (or none).
@@ -363,6 +431,21 @@ fn special_lip_slot(character: &str) -> Option<(Dir, Dir)> {
         "nala" => (U, R),
         "kid" => (D, L),
         _ => return None,
+    })
+}
+
+/// A `Grind` or `Manual` trick, with the keys its animations are under.
+fn parse_balance(trick: &Value, init: &str, range: &str) -> Option<BalanceTrick> {
+    let params = trick.get(checksum("params"))?;
+    Some(BalanceTrick {
+        name: trick_name(trick),
+        score: params
+            .get(checksum("score"))
+            .and_then(Value::as_int)
+            .unwrap_or(0)
+            .max(0) as u32,
+        init: params.get(checksum(init)).and_then(Value::as_name),
+        range: params.get(checksum(range)).and_then(Value::as_name)?,
     })
 }
 
