@@ -93,19 +93,31 @@ on-ground update switches on.
   0x800F34D0 says it can't, the velocity is slowed by the brake rate times
   the frame time along itself; below twice that, or if it would reverse,
   it stops. Ported.
-- **Ground following** (0x800F52AC, 549 instructions): casts from
-  `Physics_Ground_Snap_Up` above (the `_SKITCHING` values while
-  skitching), compares the new ground normal with the current one, and
-  when moving onto ground that falls away by more than
-  `Ground_stick_angle` (30, in degrees; `Ground_stick_angle_forward`, 60,
-  while skater `+0x804` is set) it doesn't stick: the `GroundGone`
-  exception fires and the skater is in the air. Otherwise it allows a
-  snap down of `Physics_Ground_Snap_Down` plus the distance travelled
-  times the tangent of the angle between the normals. Ported: the stick
-  angle. Not yet: the extra snap distance, the forward angle, and what
-  `+0x804` is. It also leads to `Normal_Lerp_Speed` (tilting). The game also
-  has a `moon_gravity` cheat (it multiplies air gravity).
-
+- **Ground following** (0x800F52AC, 549 instructions): a line down the
+  skater's up axis (matrix row `+0x54`) from `Physics_Ground_Snap_Up`
+  above the new position (the `_SKITCHING` value while skitching) to 200
+  below. No hit, or a wall (by 0x800F66F0; a wall at or above the feet
+  pushes the skater to the hit plus its normal first), and the ground is
+  gone. Otherwise, with the facing (`+0x64`, not the velocity) flattened
+  onto the new face and onto the current ground (`+0x3A10`), keeping
+  length (0x80009B3C), and `cos` their dot product:
+  - if the facing points along the new normal (the ground falls away
+    ahead) and `0 < cos < cos(Ground_stick_angle)` (30 degrees;
+    `Ground_stick_angle_forward`, 60, while `+0x804` is set), it doesn't
+    stick;
+  - if the skater is above the face, it only snaps down as far as the
+    distance moved this frame times `tan(acos(cos))`, or
+    `Physics_Ground_Snap_Down` (8.2) if that's more;
+  - sticking, 0x800F4ED0 makes the face's normal the ground normal and
+    the matrix's up at once (the drawn normal at `+0x3A00` eases over,
+    `+0x3A34` reset to 1, `Normal_Lerp_Speed`), and the skater goes to the
+    hit point. Then trigger events (types 4 and 5) for leaving and
+    entering trigger faces, and the score.
+  - not sticking: 0x800F612C(skater, 1) puts it in the air and the
+    `GroundGone` exception fires.
+  Ported: all but skitching, the forward angle, the events and how the
+  drawn tilt eases. The game also has a `moon_gravity` cheat (it
+  multiplies air gravity).
 - **The ollie** (0x800F62C4, the scripts' `Jump` command): the jump speed
   is `min + (max - min) * tense / skater_max_tense_time`, where `tense`
   is the crouch time (skater `+0x3478`, capped at the max, 200 ms) and

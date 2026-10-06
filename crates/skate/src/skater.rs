@@ -1,22 +1,20 @@
 //! A skater rolling over a level's collision.
 //!
-//! This is a first version driven by the game's constants (see
-//! `constants`), not yet a frame-exact copy of the game's physics: that
-//! needs the update code in `main.dol` compared against the running game.
-//! What's been read from that code so far is in `docs/physics-notes.md`
-//! and matches it here: pushing along the current velocity up to the kick
-//! speed, drag while pushing, gravity along the whole ground plane, the
-//! velocity kept along the board (it can roll backwards), the speed
-//! limits, steering (sharp while braking, building up when nearly
-//! stopped), air spins at the air rotation stat, and air gravity divided
-//! by the hang-time stat, braking, and the ollie's strength from how long
-//! the skater crouched. On the ground, walls bounce as
-//! in the game. Ground snapping and the rest of the air update are still
-//! this crate's own.
+//! This follows the game's own update code in `main.dol`, as far as it's
+//! been read (see `docs/physics-notes.md`), with the game's constants
+//! (see `constants`): pushing, drag, gravity along the ground, the velocity
+//! kept along the board (it can roll backwards), the speed limits,
+//! steering, braking, the ollie, following the ground, walls on the ground
+//! and in the air, the air step, landing and the ledge pop. Not yet
+//! checked frame by frame against the running game, and without grinds,
+//! manuals, vert air, wall rides, tricks, moving objects and the game's
+//! events.
 //!
-//! - **On the ground** the skater follows the surface: each step it moves
-//!   along its heading, then looks for ground from `ground_snap_up` above
-//!   to `ground_snap_down` below and stands on it, tilting to its normal.
+//! - **On the ground** the skater follows the surface as the game does
+//!   (0x800F52AC): each step it moves along its heading, then looks down
+//!   from `ground_snap_up` above, and stands on the ground there if it
+//!   isn't falling away more than `ground_stick_angle` ahead and is within
+//!   `ground_snap_down` (more at a sharp change of slope).
 //!   Pushing accelerates up to the kick speed (higher when crouched),
 //!   braking slows, slopes pull with `ground_gravity`, and steering turns
 //!   at `ground_rotation`. No ground means it rolled off an edge.
@@ -72,8 +70,6 @@ pub enum Action {
     FlailRight,
 }
 
-/// Steeper than this (cosine of the angle from vertical) is a wall.
-const WALL_COSINE: f32 = 0.5;
 /// Fixed physics step.
 const STEP: f32 = 1.0 / 60.0;
 
@@ -84,6 +80,10 @@ pub struct Skater {
     pub heading: f32,
     /// The surface it stands on (up when in the air).
     pub up: Vec3,
+    /// `up` eased for drawing: the game tilts the skater's model over to a
+    /// new slope gradually (`Normal_Lerp_Speed`) while its physics uses
+    /// the new normal at once. The easing here is this crate's.
+    pub shown_up: Vec3,
     pub on_ground: bool,
     pub action: Action,
     /// Seconds in the current action.
@@ -103,6 +103,7 @@ impl Skater {
             velocity: Vec3::ZERO,
             heading,
             up: Vec3::Y,
+            shown_up: Vec3::Y,
             on_ground: true,
             action: Action::Standing,
             action_time: 0.0,
@@ -129,7 +130,7 @@ impl Skater {
     /// Where to draw the skater: standing on `up`, facing its heading.
     pub fn placement(&self) -> Mat4 {
         let yaw = Quat::from_rotation_y(self.heading);
-        let tilt = Quat::from_rotation_arc(Vec3::Y, self.up.normalize_or(Vec3::Y));
+        let tilt = Quat::from_rotation_arc(Vec3::Y, self.shown_up.normalize_or(Vec3::Y));
         Mat4::from_rotation_translation(tilt * yaw, self.position)
     }
 
@@ -172,6 +173,7 @@ impl Skater {
     }
 
     fn step(&mut self, input: Input, p: &Physics, world: &World) {
+        self.shown_up = self.shown_up.lerp(self.up, 0.25).normalize_or(Vec3::Y);
         self.action_time += STEP;
         self.crouch_time = if input.crouch {
             self.crouch_time + STEP
@@ -322,25 +324,23 @@ impl Skater {
             }
         }
 
-        // Stand on whatever is under the new spot.
+        // Ground following (main.dol 0x800F52AC): down the skater's up from
+        // `ground_snap_up` above the new spot.
         let from = target + up * p.ground_snap_up;
-        let to = target - up * p.ground_snap_down;
-        // Ground falling away more sharply than the stick angle isn't
-        // followed: the skater flies off, like off the top of a kicker
-        // (main.dol 0x800F52AC).
-        let sticks = |normal: Vec3| {
-            let turning_down =
-                normal.dot(forward * speed.signum()) > up.dot(forward * speed.signum());
-            !turning_down || normal.dot(up) >= p.ground_stick_angle.to_radians().cos()
-        };
-        match world.ray(from, to) {
-            Some(hit) if hit.normal.y > WALL_COSINE && sticks(hit.normal) => {
+        let to = target - up * 200.0;
+        let ground = world
+            .ray(from, to)
+            .filter(|hit| !is_wall(hit, p))
+            .filter(|hit| sticks(hit, self.position, target, forward, up, p));
+        match ground {
+            Some(hit) => {
                 self.position = hit.point;
-                self.up = self.up.lerp(hit.normal, 0.25).normalize_or(Vec3::Y);
+                self.up = hit.normal;
                 self.velocity = forward * speed;
             }
-            _ => {
-                // Rolled off an edge.
+            None => {
+                // The ground is gone: off an edge, or over the lip of a
+                // kicker (the game's `GroundGone`).
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
@@ -437,6 +437,32 @@ impl Skater {
             self.velocity = Vec3::ZERO;
         }
     }
+}
+
+/// Whether the skater stays on the ground it found under its new spot
+/// (main.dol 0x800F52AC). Going by its facing, not its speed: ground ahead
+/// falling away more than `ground_stick_angle` from the ground it's on
+/// isn't followed; and it only snaps down as far as `ground_snap_down`, or
+/// further at a sharp change of slope (as far as moving on along the old
+/// slope would leave it above the new one).
+fn sticks(hit: &Hit, from: Vec3, to: Vec3, facing: Vec3, up: Vec3, p: &Physics) -> bool {
+    // Facing the same way as the new normal: the ground falls away ahead.
+    let falling_away = facing.dot(hit.normal) > 0.0;
+    let on_new = along_keeping_length(facing, hit.normal);
+    let on_old = along_keeping_length(facing, up);
+    let cos = on_new.dot(on_old);
+    if falling_away && cos > 0.0 && cos < p.ground_stick_angle.to_radians().cos() {
+        return false;
+    }
+    let height = up.dot(to - hit.point);
+    if height > 0.0 {
+        let angle = cos.clamp(-1.0, 1.0).acos();
+        let reach = (from.distance(to) * angle.tan()).max(p.ground_snap_down);
+        if to.distance(hit.point) > reach {
+            return false;
+        }
+    }
+    true
 }
 
 /// Up onto a ledge (main.dol 0x800F81A8): straight down from
@@ -563,6 +589,67 @@ mod tests {
         assert_eq!(v.y, -500.0);
         let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
+    }
+
+    #[test]
+    fn sticks_to_gentle_slopes_and_not_over_a_lip() {
+        let p = physics();
+        let hit = |normal: Vec3, point: Vec3| Hit {
+            point,
+            normal: normal.normalize(),
+            fraction: 0.5,
+            flags: 0,
+        };
+        let (from, to) = (Vec3::ZERO, Vec3::new(0.0, 0.0, 10.0));
+        let slope = |degrees: f32| {
+            let (s, c) = degrees.to_radians().sin_cos();
+            // Falling away ahead (+Z) by this many degrees.
+            Vec3::new(0.0, c, s)
+        };
+        // Flat ground just below: stick.
+        assert!(sticks(
+            &hit(Vec3::Y, Vec3::new(0.0, -1.0, 10.0)),
+            from,
+            to,
+            Vec3::Z,
+            Vec3::Y,
+            &p
+        ));
+        // Falling away 10 degrees: stick; 45: fly off the lip.
+        assert!(sticks(
+            &hit(slope(10.0), to),
+            from,
+            to,
+            Vec3::Z,
+            Vec3::Y,
+            &p
+        ));
+        assert!(!sticks(
+            &hit(slope(45.0), to),
+            from,
+            to,
+            Vec3::Z,
+            Vec3::Y,
+            &p
+        ));
+        // Rising 45 degrees ahead (a ramp): stick.
+        assert!(sticks(
+            &hit(slope(-45.0), to),
+            from,
+            to,
+            Vec3::Z,
+            Vec3::Y,
+            &p
+        ));
+        // Flat ground 20 below: too far to snap down to.
+        assert!(!sticks(
+            &hit(Vec3::Y, Vec3::new(0.0, -20.0, 10.0)),
+            from,
+            to,
+            Vec3::Z,
+            Vec3::Y,
+            &p
+        ));
     }
 
     #[test]
