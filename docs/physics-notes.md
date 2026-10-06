@@ -29,6 +29,9 @@ finds the code; useful hits:
 | 0x800F6020 | Reads a stat-scaled constant (`r4`) for the skater (`r3`) |
 | 0x80163710 | Square root (used for vector lengths) |
 | 0x800F44B0 | Is the skater crouched? |
+| 0x80030EA4 | Reads a global float by name (a string, checksummed first) |
+| 0x800F46C4 | Quadratic drag: `v -= v * |v| * k * 60 * dt` |
+| 0x800F4AC0 | Linear friction: slows `v` by `k * dt` along itself, never reversing it |
 
 ## The skater object
 
@@ -56,7 +59,29 @@ on-ground update switches on.
   to the velocity, then by state brakes (0x800F418C) or pushes. So slope
   gravity acts along the whole ground plane, sideways too; the port only
   applies it along the facing so far. It calls about 35 helpers still to
-  be read, steering (0x800ED848), speed limits and friction among them.
+  be read. Next in it, behind a debug flag (`WalkTest`, `skitch_speed_match`
+  are other such names), come blocks that halve the speed or add 200 in
+  a direction; then it works out the proposed position (position +
+  velocity * dt, at skater `+0x39A8`) for the collision checks.
+- **Drag and friction** (0x800F4CF0): while the push button is held (skater
+  `+0x3A38`), or another flag is set, or a friction value at `+0x3A58`
+  differs from `Physics_Rolling_Friction`: quadratic drag with
+  `Physics_Crouched_Air_Friction` or `Physics_Standing_Air_Friction`
+  (0x800F49B8), then linear friction with the `+0x3A58` value times 60
+  (0x800F4C9C, unless 0x800F3564 says otherwise). Ported: the drag while
+  pushing. Not yet: when `+0x3A58` changes (terrain, perhaps).
+- **Along the board** (0x800F4D5C): the velocity is turned to the facing,
+  keeping its length and its sign, so the skater can roll backwards.
+  Ported.
+- **Speed limits** (0x800F4834), on horizontal speed only (vertical speed
+  is set aside and put back): above `Skater_Max_Max_Speed_Stat` it's
+  clamped, above `Skater_Max_Speed_Stat` it gets quadratic drag with
+  `Physics_Heavy_Air_Friction`. A timer at skater `+0x3594` (a speed
+  boost) swaps in other limits while it runs. Ported, without the boost.
+- Other helpers by the constants they reach: steering is 0x800ED848
+  (`Physics_Ground_Rotation`, 801 instructions), tilting to the ground
+  0x800F52AC (`Normal_Lerp_Speed`), braking 0x800F418C. The game also
+  has a `moon_gravity` cheat (it multiplies air gravity).
 
 ## Next
 

@@ -96,6 +96,9 @@ pub struct Physics {
     pub standing_acceleration: f32,
     pub crouched_acceleration: f32,
     pub max_speed: f32,
+    /// The hard limit on horizontal speed; between `max_speed` and this,
+    /// `heavy_air_friction` drags the skater back.
+    pub max_max_speed: f32,
     pub jump_speed: f32,
     /// Gravity in the air, before dividing by `air_hang` (the game does
     /// that: `main.dol` at 0x800FC634).
@@ -106,6 +109,11 @@ pub struct Physics {
     pub ground_gravity: f32,
     pub brake_acceleration: f32,
     pub rolling_friction: f32,
+    /// Quadratic drag while pushing, standing or crouched, and above
+    /// `max_speed`.
+    pub standing_air_friction: f32,
+    pub crouched_air_friction: f32,
+    pub heavy_air_friction: f32,
     pub ground_rotation: f32,
     pub air_rotation: f32,
     pub ground_snap_up: f32,
@@ -146,12 +154,16 @@ impl Physics {
             standing_acceleration: scaled("Physics_Standing_Acceleration_Stat", 650.0),
             crouched_acceleration: scaled("Physics_Crouching_Acceleration_stat", 1100.0),
             max_speed: scaled("Skater_Max_Speed_Stat", 800.0),
+            max_max_speed: scaled("Skater_Max_Max_Speed_Stat", 1000.0),
             jump_speed: scaled("Physics_Jump_Speed_Stat", 425.0),
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
             ground_gravity: plain("Physics_Ground_Gravity", -1000.0),
             brake_acceleration: plain("Physics_Brake_Acceleration", 900.0),
             rolling_friction: plain("Physics_Rolling_Friction", 0.00001),
+            standing_air_friction: plain("Physics_Standing_Air_Friction", 0.00001),
+            crouched_air_friction: plain("Physics_Crouched_Air_Friction", 0.000002),
+            heavy_air_friction: plain("Physics_Heavy_Air_Friction", 0.00001),
             ground_rotation: plain("Physics_Ground_Rotation", 1.8),
             air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),

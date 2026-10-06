@@ -3,9 +3,12 @@
 //! This is a first version driven by the game's constants (see
 //! `constants`), not yet a frame-exact copy of the game's physics: that
 //! needs the update code in `main.dol` compared against the running game.
-//! What's been read from that code so far is in `docs/physics-notes.md`;
-//! pushing (along the current velocity, up to the kick speed) and air
-//! gravity (divided by the hang-time stat) already match it.
+//! What's been read from that code so far is in `docs/physics-notes.md`
+//! and matches it here: pushing along the current velocity up to the kick
+//! speed, drag while pushing, gravity along the whole ground plane, the
+//! velocity kept along the board (it can roll backwards), the speed
+//! limits, and air gravity divided by the hang-time stat. Steering,
+//! braking, ground snapping and the air update are still this crate's own.
 //!
 //! - **On the ground** the skater follows the surface: each step it moves
 //!   along its heading, then looks for ground from `ground_snap_up` above
@@ -136,25 +139,51 @@ impl Skater {
         // Forward along the surface.
         let flat = self.forward();
         let forward = (flat - up * flat.dot(up)).normalize_or(flat);
-        let mut speed = self.velocity.dot(forward).max(0.0);
+        let mut velocity = self.velocity;
+
+        // Gravity along the ground plane, sideways too (main.dol 0x800FB3E4).
+        let gravity = Vec3::Y * p.ground_gravity;
+        velocity += (gravity - up * gravity.dot(up)) * STEP;
 
         if input.push {
-            let (top, accel) = if input.crouch {
-                (p.max_crouched_kick_speed, p.crouched_acceleration)
+            let (top, accel, friction) = if input.crouch {
+                (
+                    p.max_crouched_kick_speed,
+                    p.crouched_acceleration,
+                    p.crouched_air_friction,
+                )
             } else {
-                (p.max_standing_kick_speed, p.standing_acceleration)
+                (
+                    p.max_standing_kick_speed,
+                    p.standing_acceleration,
+                    p.standing_air_friction,
+                )
             };
-            if speed < top {
-                speed = (speed + accel * STEP).min(top);
+            // Push along the current velocity while under the kick speed
+            // (0x800F43F0, 0x800F44CC), with drag (0x800F4CF0).
+            if velocity.length() <= top {
+                let direction = velocity.try_normalize().unwrap_or(forward);
+                velocity += direction * accel * STEP;
             }
+            velocity = drag(velocity, friction);
         }
         if input.brake {
-            speed = (speed - p.brake_acceleration * STEP).max(0.0);
+            let length = velocity.length();
+            if length > 0.0 {
+                velocity *= (length - p.brake_acceleration * STEP).max(0.0) / length;
+            }
         }
-        // Slopes: gravity along the surface.
-        speed += Vec3::Y.dot(forward) * p.ground_gravity * STEP;
-        speed -= p.rolling_friction * speed * speed * STEP * 60.0;
-        speed = speed.clamp(0.0, p.max_speed);
+        // Along the board, keeping the sign: it can roll backwards
+        // (0x800F4D5C).
+        let sign = if velocity.dot(forward) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        velocity = forward * velocity.length() * sign;
+        // Speed limits, on the horizontal speed (0x800F4834).
+        velocity = limit_speed(velocity, p);
+        let mut speed = velocity.dot(forward);
 
         // Jump when letting go of a crouch.
         if self.crouched && !input.crouch {
@@ -169,8 +198,9 @@ impl Skater {
 
         // Walls ahead at knee height.
         let knee = self.position + up * p.forward_collision_height;
-        let reach = speed * STEP + p.min_distance_to_wall;
-        if let Some(hit) = world.ray(knee, knee + forward * reach) {
+        let reach = speed.abs() * STEP + p.min_distance_to_wall;
+        let ahead = forward * speed.signum();
+        if let Some(hit) = world.ray(knee, knee + ahead * reach) {
             if hit.normal.y.abs() < WALL_COSINE {
                 speed = 0.0;
             }
@@ -203,7 +233,7 @@ impl Skater {
             Action::Crouching
         } else if input.push && speed < p.max_crouched_kick_speed {
             Action::Pushing
-        } else if speed > 5.0 {
+        } else if speed.abs() > 5.0 {
             Action::Rolling
         } else {
             Action::Standing
@@ -254,5 +284,55 @@ impl Skater {
         if self.position.y < -100_000.0 {
             self.velocity = Vec3::ZERO;
         }
+    }
+}
+
+/// Quadratic drag: `v -= v * |v| * k * 60 * step` (0x800F46C4).
+fn drag(v: Vec3, k: f32) -> Vec3 {
+    if v.length_squared() <= 1e-5 {
+        return v;
+    }
+    v - v * v.length() * k * 60.0 * STEP
+}
+
+/// The game's speed limits on horizontal speed: a hard cap at
+/// `max_max_speed`, and heavy drag above `max_speed` (0x800F4834).
+fn limit_speed(v: Vec3, p: &Physics) -> Vec3 {
+    let mut flat = Vec3::new(v.x, 0.0, v.z);
+    let speed = flat.length();
+    if speed > p.max_max_speed {
+        flat *= p.max_max_speed / speed;
+    }
+    if flat.length() > p.max_speed {
+        flat = drag(flat, p.heavy_air_friction);
+    }
+    Vec3::new(flat.x, v.y, flat.z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn physics() -> Physics {
+        Physics::new(&qb::vm::Program::new(), &crate::Stats::default())
+    }
+
+    #[test]
+    fn drag_grows_with_the_square_of_speed() {
+        let slow = drag(Vec3::new(100.0, 0.0, 0.0), 1e-5);
+        let fast = drag(Vec3::new(500.0, 0.0, 0.0), 1e-5);
+        // 100 * 100 * 1e-5 * 60 / 60 = 0.1; 500 * 500 * ... = 2.5.
+        assert!((100.0 - slow.x - 0.1).abs() < 1e-4);
+        assert!((500.0 - fast.x - 2.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn speed_is_capped_horizontally_only() {
+        let p = physics();
+        let v = limit_speed(Vec3::new(3000.0, -500.0, 0.0), &p);
+        assert!(v.x <= p.max_max_speed);
+        assert_eq!(v.y, -500.0);
+        let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
+        assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
     }
 }
