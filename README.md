@@ -21,7 +21,8 @@ to that engine family too.
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Physics, gameplay, menus, audio | Not started yet |
+| Skater physics | A first version on the game's own constants: push, steer, ollie, land on any level |
+| Tricks, gameplay, menus, audio | Not started yet |
 
 Every format is checked against every file on the US disc (`GEXE52`):
 69 archives (5,616 files), 3,364 textures and 48 loading screens, 408
@@ -55,6 +56,8 @@ but haven't been tried.
   [scripts](#scripts-qb), [collision](#collision-format),
   [models](#model-formats), [skeletons and animations](#skeletons-and-animations),
   [textures](#texture-formats)
+- [Skater physics](#skater-physics): skating the levels with the game's
+  own constants
 - [Roadmap](#roadmap) and [reverse-engineering setup](#reverse-engineering-setup)
 
 | | |
@@ -101,6 +104,12 @@ front of them, and **Blink** makes them blink every few seconds (see
 [Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
 frames.
 
+**Skate** puts the character on the level: W pushes, S brakes, A/D steer,
+holding Space crouches and letting go ollies, and Esc stops. The physics is
+a first version (see [Skater physics](#skater-physics)), with the game's
+own constants and the character's stats, and a chase camera set like the
+game's.
+
 Under **Camera paths**, each level lists its cutscene, goal and warp
 cameras (7 to 46 per level). Click one to watch it; moving or looking
 around takes over from wherever it is.
@@ -115,6 +124,7 @@ around takes over from wherever it is.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
+| W / S, A / D, Space, Esc | While skating: push, brake, steer, crouch (let go to ollie), stop |
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -142,6 +152,7 @@ camera directly. The pictures in `docs/screenshots` were made that way.
 | `ngc_anim` | Parses `.ske` skeletons and `.ska.ngc` animations, samples them and poses skinned characters |
 | `ngc_collision` | Parses `.col.ngc` collision meshes and their BSP trees, repairing the fields the original tool corrupted |
 | `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
+| `skate` | Skater physics: the game's constants and character stats, ray casts against collision, the skater |
 | `desa_viewer` | Level, object and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
 
@@ -507,6 +518,30 @@ from 1,079 files.
 | `.ske` | 53 | Skeletons (decoded) |
 | `.fnt.ngc` | 32 | Fonts |
 
+## Skater physics
+
+The game keeps its physics tuning in scripts: `PHYSICS.q` holds about 200
+constants in the game's units (which look like inches): kick speeds of
+355-496 a second (675 crouched), a top speed of 700-900, ollies at 400-450
+up, air gravity of -1350, ground snapping 13 up and 8.2 down, and the
+chase cameras. Many are `{ (min, max) STATS_X }` pairs scaled by one of a
+character's stats, which are in their profiles in `disneytricks.q`
+(Woody: `Air = 11`, `spin = 4`, ...); a stat of `s` gives
+`min + (max - min) * s / 10`.
+
+The `skate` crate reads them and runs a skater over a level's collision,
+using the BSP trees for its ray casts: it follows the ground (snapping
+within those distances and tilting to the surface), pushes up to the kick
+speed, brakes, rolls down slopes, steers, stops at walls, ollies off the
+ground's normal, spins and falls in the air, and lands. On the Hub, Jessie
+reaches her kick speed of 425 a second and covers about 1,000 units in
+three seconds, and an ollie rises 63 units over 38 frames, as her jump
+speed and the gravity predict.
+
+It is not yet the game's own physics: that needs the update code in
+`main.dol` compared frame by frame against Dolphin. Turning rates are
+read as radians a second and the camera distances as feet, both guesses.
+
 ## Roadmap
 
 1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
@@ -519,8 +554,10 @@ from 1,079 files.
    runs objects' scripts, with path following and animations (done).
    Next: more commands, events (exceptions) and goals, which need a
    skater.
-4. **Skater physics.** Match the original's constants and update loop,
-   verified against Dolphin frame by frame.
+4. **Skater physics.** The game's constants and a first skater that
+   pushes, steers, ollies and lands on any level (done). Next: the
+   original's update loop from `main.dol`, verified against Dolphin frame
+   by frame; then grinds, manuals, wallrides and vert.
 5. **Gameplay.** Tricks, scoring, goals, game modes, UI and audio.
 
 ## Reverse-engineering setup

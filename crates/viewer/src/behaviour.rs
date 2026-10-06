@@ -138,6 +138,11 @@ impl Behaviour {
         self.states[object].alive
     }
 
+    /// The loaded scripts and global values (the game's constants too).
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+
     /// How many scripts are still running.
     pub fn running(&self) -> usize {
         self.threads

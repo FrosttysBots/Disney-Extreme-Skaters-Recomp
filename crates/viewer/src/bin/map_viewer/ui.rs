@@ -14,6 +14,7 @@ pub enum Action {
     /// Show a character (an index into `characters`), or none.
     LoadCharacter(Option<usize>),
     LookAtCharacter,
+    ToggleSkate,
     PlayCameraPath(usize),
     StopCameraPath,
 }
@@ -40,6 +41,9 @@ pub struct CharacterModel {
     /// Whether the character has blink frames, and whether to use them.
     pub can_blink: bool,
     pub blink: bool,
+    /// Whether the level has collision to skate on, and whether skating.
+    pub can_skate: bool,
+    pub skating: bool,
 }
 
 /// Everything the panel shows or edits.
@@ -88,7 +92,9 @@ Tab: next spawn point
 R: back to the start
 P: play or pause the character
 [ and ]: previous or next animation
-F1: hide or show this panel";
+F1: hide or show this panel
+Skating: W push, S brake, A/D steer,
+  Space crouch (let go: ollie), Esc stop";
 
 pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -271,6 +277,27 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
              timing here is our own.",
         );
     });
+    ui.add_enabled_ui(model.can_skate, |ui| {
+        let label = if model.skating {
+            "Stop skating"
+        } else {
+            "Skate"
+        };
+        if ui
+            .button(label)
+            .on_hover_text(
+                "Skate the character around the level: W push, S brake, A/D steer, \
+                 hold Space to crouch and let go to ollie, Esc to stop. A first version \
+                 of the physics, using the game's own constants.",
+            )
+            .clicked()
+        {
+            actions.push(Action::ToggleSkate);
+        }
+    });
+    if model.skating {
+        return;
+    }
     if ui
         .button("Look at the character")
         .on_hover_text("The character stands on the last spawn point you went to (Tab).")

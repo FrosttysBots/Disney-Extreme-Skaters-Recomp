@@ -76,6 +76,16 @@ impl Program {
     pub fn value(&self, name: u32) -> Option<&Value> {
         self.values.get(&name)
     }
+
+    /// Adds or replaces a global value.
+    pub fn add_value(&mut self, name: u32, value: Value) {
+        self.values.insert(name, value);
+    }
+
+    /// Every global value, in no particular order.
+    pub fn values(&self) -> impl Iterator<Item = (&u32, &Value)> {
+        self.values.iter()
+    }
 }
 
 /// What a host command did.

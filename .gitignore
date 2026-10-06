@@ -12,3 +12,6 @@
 
 # Built programs for sharing
 /dist/
+
+# Local tools (an emulator unpacked next to the project)
+/Dolphin-x64/

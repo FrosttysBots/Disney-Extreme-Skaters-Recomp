@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use glam::{Mat4, Quat, Vec3};
 use ngc_anim::CameraPath;
+use skate::{Action as SkateAction, Input, Physics, Skater, Stats, World};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -101,6 +102,10 @@ struct Args {
     /// name (e.g. TRG_Goal_Letter_S)
     #[arg(long, requires = "screenshot")]
     object: Option<String>,
+    /// For --screenshot: skate the character forward (holding W) for this
+    /// many seconds first, and look through the chase camera
+    #[arg(long, requires = "character", default_value_t = 0.0)]
+    skate: f32,
     /// For --screenshot: also show what goals add later (pickups, goal
     /// pedestrians, warp portals)
     #[arg(long, requires = "screenshot")]
@@ -199,6 +204,8 @@ struct LoadedLevel {
     objects: LevelObjects,
     layers: ObjectLayers,
     behaviour: Behaviour,
+    /// The collision as a world to skate on.
+    world: Option<World>,
     /// Animated vertex colors of the level, its sky and its goal geometry.
     colors: [ColorAnimation; 3],
     /// Which marker sets the renderer currently has: (rails, spawns).
@@ -245,6 +252,11 @@ fn load_level(
     });
     scripts.extend(files.scripts.iter().cloned());
     let behaviour = Behaviour::new(&nodes, &scripts);
+    let skate_world = files
+        .collision
+        .as_deref()
+        .and_then(|c| ngc_collision::Collision::parse(c).ok())
+        .map(World::new);
     let sky = files
         .sky
         .as_ref()
@@ -315,6 +327,7 @@ fn load_level(
             objects,
             layers,
             behaviour,
+            world: skate_world,
             colors,
             markers: (false, false),
         },
@@ -447,6 +460,8 @@ struct App<'a> {
     character: Option<Character>,
     /// Where the character stands.
     placement: Mat4,
+    /// Skating: the skater, its constants and the chase camera's eye.
+    skating: Option<(Skater, Physics, Vec3)>,
     /// The animation the character's time belongs to.
     shown_animation: usize,
     last_frame: Instant,
@@ -497,6 +512,8 @@ impl<'a> App<'a> {
                     duration: 0.0,
                     can_blink: false,
                     blink: true,
+                    can_skate: false,
+                    skating: false,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -506,6 +523,7 @@ impl<'a> App<'a> {
             next_spawn: 0,
             character: None,
             placement: Mat4::IDENTITY,
+            skating: None,
             shown_animation: 0,
             last_frame: Instant::now(),
             started: Instant::now(),
@@ -628,6 +646,96 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Starts or stops skating the character from where it stands.
+    fn toggle_skate(&mut self) {
+        if self.skating.take().is_some() {
+            self.model.character.skating = false;
+            self.model.character.playing = true;
+            return;
+        }
+        let (Some(level), Some(index)) = (&self.level, self.model.character.current) else {
+            return;
+        };
+        if level.world.is_none() {
+            return;
+        }
+        let id = &self.model.character.characters[index].id;
+        let program = level.behaviour.program();
+        let physics = Physics::new(program, &Stats::of(program, id));
+        let position = self.placement.transform_point3(Vec3::ZERO);
+        let forward = self.placement.transform_vector3(Vec3::Z);
+        let skater = Skater::new(position, forward.x.atan2(forward.z));
+        self.stop_camera_path();
+        self.skating = Some((skater, physics, self.camera.position));
+        self.model.character.skating = true;
+        self.model.character.playing = false;
+        self.set_looking(false);
+    }
+
+    /// Moves the skater by the keys held, picks its animation and follows
+    /// it with the camera.
+    fn skate(&mut self, dt: f32) {
+        let (Some((skater, physics, eye)), Some(level), Some(character)) =
+            (&mut self.skating, &self.level, &self.character)
+        else {
+            return;
+        };
+        let Some(world) = &level.world else { return };
+        let typing = self
+            .gpu
+            .as_ref()
+            .is_some_and(|g| g.egui_ctx.wants_keyboard_input());
+        let held = |k| !typing && self.keys.contains(&k);
+        let input = Input {
+            push: held(KeyCode::KeyW) || held(KeyCode::ArrowUp),
+            brake: held(KeyCode::KeyS) || held(KeyCode::ArrowDown),
+            turn: f32::from(u8::from(held(KeyCode::KeyD) || held(KeyCode::ArrowRight)))
+                - f32::from(u8::from(held(KeyCode::KeyA) || held(KeyCode::ArrowLeft))),
+            crouch: held(KeyCode::Space),
+        };
+        skater.update(input, physics, world, dt);
+        self.placement = skater.placement();
+
+        // Animation: by what the skater is doing.
+        let (names, looping): (&[&str], bool) = match skater.action {
+            SkateAction::Standing | SkateAction::Rolling => (&["StandIdle"], true),
+            SkateAction::Pushing => (&["PushCycle1"], true),
+            SkateAction::Crouching => (&["CrouchIdle", "Crouch"], true),
+            SkateAction::Air => (&["Ollie", "AirIdle"], false),
+            SkateAction::Landing => (&["Land1", "LandSmall"], false),
+        };
+        let mut time = skater.action_time;
+        let mut chosen = None;
+        for (i, name) in names.iter().enumerate() {
+            let Some(index) = character.animation(name) else {
+                continue;
+            };
+            let duration = character.animations[index].1.duration;
+            // One-off moves: the first plays, then the next one loops.
+            if !looping && i + 1 < names.len() && time > duration {
+                time -= duration;
+                continue;
+            }
+            chosen = Some((index, duration));
+            break;
+        }
+        if let Some((index, duration)) = chosen {
+            let model = &mut self.model.character;
+            model.animation = index;
+            self.shown_animation = index;
+            model.duration = duration;
+            model.time = if duration > 0.0 { time % duration } else { 0.0 };
+        }
+
+        // Chase camera: the game's medium camera, in feet.
+        let forward = skater.forward();
+        let target = skater.position + Vec3::Y * physics.head_height * 0.6;
+        let wanted = skater.position - forward * physics.camera_behind * 12.0
+            + Vec3::Y * physics.camera_above * 12.0;
+        *eye = eye.lerp(wanted, 1.0 - (-dt * 6.0).exp());
+        self.camera = FlyCamera::looking_at(*eye, target);
+    }
+
     fn character_index(&self, id: &str) -> Option<usize> {
         self.model
             .character
@@ -639,6 +747,8 @@ impl<'a> App<'a> {
     /// Shows character `index` (in the panel's list), or none.
     fn load_character(&mut self, index: Option<usize>) {
         self.character = None;
+        self.skating = None;
+        self.model.character.skating = false;
         self.model.character.current = None;
         self.model.character.animations.clear();
         if let Some(level) = &mut self.level {
@@ -671,6 +781,7 @@ impl<'a> App<'a> {
                 model.time = 0.0;
                 model.current = Some(index);
                 model.can_blink = character.blink.is_some();
+                model.can_skate = self.level.as_ref().is_some_and(|l| l.world.is_some());
                 // The spawn marker would stand right through the character.
                 if self.character.is_none() {
                     self.model.show_spawns = false;
@@ -806,6 +917,10 @@ impl<'a> App<'a> {
     }
 
     fn update(&mut self, dt: f32) {
+        // The keys drive the skater instead while skating.
+        if self.skating.is_some() {
+            return;
+        }
         let typing = self
             .gpu
             .as_ref()
@@ -848,6 +963,7 @@ impl<'a> App<'a> {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.update(dt);
+        self.skate(dt);
         self.play(dt);
         self.sync_view();
         let clock = self.started.elapsed().as_secs_f32();
@@ -922,6 +1038,7 @@ impl<'a> App<'a> {
                 }
                 ui::Action::LoadCharacter(i) => self.load_character(i),
                 ui::Action::LookAtCharacter => self.camera = camera_facing(self.placement),
+                ui::Action::ToggleSkate => self.toggle_skate(),
             }
         }
         // Load after the "Loading" message has been on screen for a frame.
@@ -953,7 +1070,12 @@ impl<'a> App<'a> {
 
     fn key_pressed(&mut self, code: KeyCode, repeat: bool) {
         match code {
-            KeyCode::Escape => self.set_looking(false),
+            KeyCode::Escape => {
+                self.set_looking(false);
+                if self.skating.is_some() {
+                    self.toggle_skate();
+                }
+            }
             KeyCode::F1 if !repeat => self.model.panel_open = !self.model.panel_open,
             KeyCode::KeyK if !repeat && self.model.has_collision => {
                 self.model.collision = self.model.collision.next();
@@ -1241,6 +1363,15 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         app.placement = Mat4::from_translation(Vec3::Y * args.lift) * app.placement;
         camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
         app.level = Some(loaded);
+        if args.skate > 0.0 {
+            app.toggle_skate();
+            app.keys.insert(KeyCode::KeyW);
+            let steps = (args.skate * 60.0).round() as usize;
+            for _ in 0..steps {
+                app.skate(1.0 / 60.0);
+            }
+            camera = app.camera;
+        }
         // The blink clock follows --time too, so blinks can be captured.
         app.animate(0.0, args.time);
         loaded = app.level.take().unwrap();

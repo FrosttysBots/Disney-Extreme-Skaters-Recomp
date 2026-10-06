@@ -1,0 +1,228 @@
+//! The physics constants, read from the game's own scripts (`PHYSICS.q`),
+//! and the character stats that scale many of them.
+//!
+//! A stat-scaled constant is written `{ (min, max) [limit = n] STATS_X }`:
+//! the value for stat `s` is `min + (max - min) * s / 10`, at most `limit`
+//! (stats run past 10; the game's cheats set them to 16). Characters' stats
+//! are in their profiles (in `disneytricks.q`): `Air`, `Ollie`, `speed`,
+//! `spin` and so on, 5 by default (`Skater_Default_Stats`).
+//!
+//! Distances are in the game's units, which look like inches (the skater's
+//! head is 77 up; speeds of 400-900 a second are skating speeds). Turning
+//! rates are taken as radians a second; both readings are this crate's
+//! assumptions until checked against the running game.
+
+use qb::vm::Program;
+use qb::{Value, checksum};
+
+/// A character's stats, in the order of the `STATS_*` indices.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stats(pub [f32; 10]);
+
+impl Default for Stats {
+    fn default() -> Self {
+        Stats([5.0; 10])
+    }
+}
+
+/// The profile keys for each stat index (`STATS_AIR = 0`, ...).
+const STAT_KEYS: [&str; 10] = [
+    "Air",
+    "hangtime",
+    "Ollie",
+    "speed",
+    "spin",
+    "flip_speed",
+    "switch",
+    "rail_balance",
+    "lip_balance",
+    "manual_balance",
+];
+
+impl Stats {
+    /// The stats from the profile whose `Name` is `character` (such as
+    /// `jessie`), searching every global value; the defaults if none.
+    pub fn of(program: &Program, character: &str) -> Stats {
+        let name = checksum(character);
+        let mut found = None;
+        for (_, value) in program.values() {
+            find_profile(value, name, &mut found);
+            if found.is_some() {
+                break;
+            }
+        }
+        let Some(profile) = found else {
+            return Stats::default();
+        };
+        let mut stats = Stats::default();
+        for (i, key) in STAT_KEYS.iter().enumerate() {
+            if let Some(v) = profile.get(checksum(key)).and_then(Value::as_f32) {
+                stats.0[i] = v;
+            }
+        }
+        stats
+    }
+}
+
+fn find_profile<'a>(value: &'a Value, name: u32, found: &mut Option<&'a Value>) {
+    if found.is_some() {
+        return;
+    }
+    match value {
+        Value::Struct(items) => {
+            let named = value.get(checksum("Name")).and_then(Value::as_name) == Some(name);
+            if named && value.get(checksum("Air")).is_some() {
+                *found = Some(value);
+                return;
+            }
+            for (_, v) in items {
+                find_profile(v, name, found);
+            }
+        }
+        Value::Array(items) => {
+            for v in items {
+                find_profile(v, name, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The constants the skater uses, with stats applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Physics {
+    pub max_standing_kick_speed: f32,
+    pub max_crouched_kick_speed: f32,
+    pub standing_acceleration: f32,
+    pub crouched_acceleration: f32,
+    pub max_speed: f32,
+    pub jump_speed: f32,
+    pub air_gravity: f32,
+    pub ground_gravity: f32,
+    pub brake_acceleration: f32,
+    pub rolling_friction: f32,
+    pub ground_rotation: f32,
+    pub air_rotation: f32,
+    pub ground_snap_up: f32,
+    pub ground_snap_down: f32,
+    pub min_distance_to_wall: f32,
+    pub forward_collision_height: f32,
+    pub head_height: f32,
+    /// Chase camera: distance behind and height above (in feet, as the
+    /// game's camera settings seem to be), and its horizontal FOV.
+    pub camera_behind: f32,
+    pub camera_above: f32,
+    pub camera_fov: f32,
+}
+
+impl Physics {
+    /// Reads the constants from `program` (which must have `PHYSICS.q`
+    /// loaded), scaled by `stats`. Missing values fall back to the ones on
+    /// the US disc.
+    pub fn new(program: &Program, stats: &Stats) -> Physics {
+        let scaled =
+            |name: &str, fallback: f32| stat_value(program, name, stats).unwrap_or(fallback);
+        let plain = |name: &str, fallback: f32| {
+            program
+                .value(checksum(name))
+                .and_then(Value::as_f32)
+                .unwrap_or(fallback)
+        };
+        let camera = program.value(checksum("Skater_Camera_Standard_Medium"));
+        let camera_value = |key: &str, fallback: f32| {
+            camera
+                .and_then(|c| c.get(checksum(key)))
+                .and_then(Value::as_f32)
+                .unwrap_or(fallback)
+        };
+        Physics {
+            max_standing_kick_speed: scaled("Skater_Max_Standing_Kick_Speed_Stat", 425.5),
+            max_crouched_kick_speed: scaled("Skater_Max_Crouched_Kick_Speed_Stat", 575.0),
+            standing_acceleration: scaled("Physics_Standing_Acceleration_Stat", 650.0),
+            crouched_acceleration: scaled("Physics_Crouching_Acceleration_stat", 1100.0),
+            max_speed: scaled("Skater_Max_Speed_Stat", 800.0),
+            jump_speed: scaled("Physics_Jump_Speed_Stat", 425.0),
+            air_gravity: plain("Physics_Air_Gravity", -1350.0),
+            ground_gravity: plain("Physics_Ground_Gravity", -1000.0),
+            brake_acceleration: plain("Physics_Brake_Acceleration", 900.0),
+            rolling_friction: plain("Physics_Rolling_Friction", 0.00001),
+            ground_rotation: plain("Physics_Ground_Rotation", 1.8),
+            air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
+            ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
+            ground_snap_down: plain("Physics_Ground_Snap_Down", 8.2),
+            min_distance_to_wall: plain("Skater_Min_Distance_To_Wall", 8.0),
+            forward_collision_height: plain("Skater_First_Forward_Collision_Height", 8.1),
+            head_height: plain("Skater_default_head_height", 77.0),
+            camera_behind: camera_value("behind", 12.0),
+            camera_above: camera_value("above", 4.3),
+            camera_fov: camera_value("horiz_fov", 72.0),
+        }
+    }
+}
+
+/// A `{ (min, max) [limit = n] STATS_X }` constant for these stats.
+fn stat_value(program: &Program, name: &str, stats: &Stats) -> Option<f32> {
+    let value = program.value(checksum(name))?;
+    let Value::Struct(items) = value else {
+        return value.as_f32();
+    };
+    let (min, max) = items.iter().find_map(|(k, v)| match (k, v) {
+        (None, Value::Pair([a, b])) => Some((*a, *b)),
+        _ => None,
+    })?;
+    // The stat is a bare name (STATS_SPEED) whose global value is its index.
+    let stat = items
+        .iter()
+        .filter(|(k, _)| k.is_none())
+        .find_map(|(_, v)| match v {
+            Value::Name(n) => program.value(*n).and_then(Value::as_f32),
+            _ => None,
+        })
+        .and_then(|i| stats.0.get(i as usize).copied())
+        .unwrap_or(5.0);
+    let mut v = min + (max - min) * stat / 10.0;
+    if let Some(limit) = value.get(checksum("limit")).and_then(Value::as_f32) {
+        v = v.min(limit);
+    }
+    Some(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_scale_constants_up_to_their_limit() {
+        let mut program = Program::new();
+        // STATS_SPEED = 3 / Speed_Stat = { (100.0, 200.0) limit = 180 STATS_SPEED }
+        program.add_value(checksum("STATS_SPEED"), Value::Integer(3));
+        program.add_value(
+            checksum("Speed_Stat"),
+            Value::Struct(vec![
+                (None, Value::Pair([100.0, 200.0])),
+                (Some(checksum("limit")), Value::Integer(180)),
+                (None, Value::Name(checksum("STATS_SPEED"))),
+            ]),
+        );
+        let mut stats = Stats::default();
+        assert_eq!(stat_value(&program, "Speed_Stat", &stats), Some(150.0));
+        stats.0[3] = 10.0;
+        assert_eq!(stat_value(&program, "Speed_Stat", &stats), Some(180.0));
+    }
+
+    #[test]
+    fn finds_a_characters_profile() {
+        let mut program = Program::new();
+        let profile = Value::Struct(vec![
+            (Some(checksum("Name")), Value::Name(checksum("woody"))),
+            (Some(checksum("Air")), Value::Integer(11)),
+            (Some(checksum("spin")), Value::Integer(4)),
+        ]);
+        program.add_value(checksum("profiles"), Value::Array(vec![profile]));
+        let stats = Stats::of(&program, "woody");
+        assert_eq!(stats.0[0], 11.0);
+        assert_eq!(stats.0[4], 4.0);
+        assert_eq!(stats.0[3], 5.0);
+        assert_eq!(Stats::of(&program, "buzz"), Stats::default());
+    }
+}

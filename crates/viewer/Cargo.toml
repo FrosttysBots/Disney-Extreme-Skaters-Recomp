@@ -23,6 +23,7 @@ egui-winit = "0.33"
 gc_disc = { version = "0.1.0", path = "../gc_disc" }
 glam = "0.34.0"
 ngc_anim.workspace = true
+skate.workspace = true
 ngc_collision = { version = "0.1.0", path = "../ngc_collision" }
 ngc_model = { version = "0.1.0", path = "../ngc_model" }
 ngc_texture = { version = "0.1.0", path = "../ngc_texture" }
