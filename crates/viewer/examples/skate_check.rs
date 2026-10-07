@@ -220,7 +220,7 @@ fn main() {
             chase.update(&skater, &physics, &world, dt);
             if world
                 .ray_requiring(
-                    chase.target,
+                    chase.focus,
                     chase.eye,
                     ngc_collision::face_flags::CAMERA_COLLIDABLE,
                 )
@@ -230,7 +230,7 @@ fn main() {
             }
             // And behind faces the camera's line lets through (poles,
             // fences): seen past, as the game does.
-            if world.ray(chase.target, chase.eye).is_some() {
+            if world.ray(chase.focus, chase.eye).is_some() {
                 past += 1;
             }
             // Shaking: the camera jerking one way then straight back (its

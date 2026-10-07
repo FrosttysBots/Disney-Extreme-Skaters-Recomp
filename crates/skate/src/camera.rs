@@ -46,8 +46,12 @@ const ZOOM_ABOVE: f32 = 3.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChaseCamera {
     pub eye: Vec3,
-    /// Where it looks: the focus point.
+    /// A point it looks at: along the way it faces, pitched down by the
+    /// tilt, as far out as the focus is.
     pub target: Vec3,
+    /// The point it follows (lerping after the skater) and hangs behind;
+    /// lines to the eye start here.
+    pub focus: Vec3,
     /// The flat direction it looks along.
     dir: Vec3,
     /// How far from the target walls let it be: in at once, back out
@@ -72,13 +76,14 @@ impl ChaseCamera {
     /// Behind a skater, settled.
     pub fn behind(skater: &Skater, p: &Physics) -> Self {
         let dir = skater.forward();
-        let target = look_at(skater, p);
-        let eye = target - dir * p.camera_behind * FOOT + Vec3::Y * p.camera_above * FOOT;
+        let focus = look_at(skater, p);
+        let eye = focus - dir * p.camera_behind * FOOT + Vec3::Y * p.camera_above * FOOT;
         ChaseCamera {
             eye,
-            target,
+            target: tilted(eye, dir, focus, p),
+            focus,
             dir,
-            reach: eye.distance(target),
+            reach: eye.distance(focus),
             backwards: false,
             zoom: 1.0,
             landed: 0.0,
@@ -158,7 +163,7 @@ impl ChaseCamera {
             (p.camera_lerp_xz, p.camera_lerp_y)
         };
         let across = rate(xz);
-        let mut target = self.target;
+        let mut target = self.focus;
         target.x += (at.x - target.x) * across;
         target.z += (at.z - target.z) * across;
         target.y += (at.y - target.y) * rate(y);
@@ -240,8 +245,17 @@ impl ChaseCamera {
         };
         let reach = self.reach.min(full);
         self.eye = target + (eye - target).normalize_or_zero() * reach;
-        self.target = target;
+        self.focus = target;
+        self.target = tilted(self.eye, self.dir, target, p);
     }
+}
+
+/// What the camera looks at from `eye`: along `dir` pitched down by the
+/// tilt, as far out as `focus`.
+fn tilted(eye: Vec3, dir: Vec3, focus: Vec3, p: &Physics) -> Vec3 {
+    let (sin, cos) = p.camera_tilt.sin_cos();
+    let look = Vec3::new(dir.x * cos, -sin, dir.z * cos);
+    eye + look * eye.distance(focus).max(1.0)
 }
 
 /// A little above the skater's middle, along the way it stands (on a
