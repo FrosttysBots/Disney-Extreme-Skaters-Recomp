@@ -125,6 +125,9 @@ struct Args {
     /// its clock
     #[arg(long, requires = "skate")]
     run: Option<f32>,
+    /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
+    #[arg(long, requires = "skate")]
+    letters: bool,
     /// For --run: once skated, show the run's replay this many seconds in
     #[arg(long, requires = "run")]
     replay_at: Option<f32>,
@@ -506,6 +509,22 @@ struct ReplayFrame {
     clock: f32,
 }
 
+/// The S-K-A-T-E letters goal under way.
+struct LetterRun {
+    /// The letters' objects, S to E, and which are got.
+    objects: [usize; 5],
+    got: [bool; 5],
+    /// Seconds left, out of the goal's time.
+    left: f32,
+    time: f32,
+    over: bool,
+}
+
+/// How near the skater picks a letter up: `Obj_SetInnerRadius 8` (feet).
+const LETTER_RADIUS: f32 = 8.0 * 12.0;
+/// How fast the letters spin (`Obj_RotY speed = 200`, degrees a second).
+const LETTER_SPIN: f32 = 200.0;
+
 /// How long a run lasts (`StartGoal_TrickAttack time = 120`).
 const RUN_TIME: f32 = 120.0;
 
@@ -600,6 +619,8 @@ struct App<'a> {
     /// them again (seconds) while a replay plays.
     recording: Vec<ReplayFrame>,
     replay: Option<f32>,
+    /// The S-K-A-T-E letters goal under way.
+    letters: Option<LetterRun>,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -675,6 +696,9 @@ impl<'a> App<'a> {
                     run_clock: None,
                     run_result: None,
                     replaying: false,
+                    can_letters: false,
+                    letters: None,
+                    letters_result: None,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                 },
@@ -694,6 +718,7 @@ impl<'a> App<'a> {
             run: None,
             recording: Vec::new(),
             replay: None,
+            letters: None,
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -769,6 +794,11 @@ impl<'a> App<'a> {
                 let shop = info.id.eq_ignore_ascii_case("SkateShop");
                 self.model.character.can_skate =
                     self.character.is_some() && !shop && level.world.is_some();
+                self.model.character.can_letters = level
+                    .nodes
+                    .objects
+                    .iter()
+                    .any(|o| o.name == qb::checksum("TRG_Goal_Letter_S"));
                 self.model.has_collision = level.renderer.has_collision();
                 if !self.model.has_collision {
                     self.model.collision = CollisionView::Hidden;
@@ -960,6 +990,16 @@ impl<'a> App<'a> {
         self.recording.clear();
         self.replay = None;
         self.model.character.replaying = false;
+        // The letters go when the goal does.
+        if let Some(letters) = self.letters.take() {
+            if let Some(level) = &mut self.level {
+                for object in letters.objects {
+                    level.behaviour.set_alive(object, false);
+                }
+            }
+        }
+        self.model.character.letters = None;
+        self.model.character.letters_result = None;
         self.model.character.run_clock = None;
         self.model.character.run_result = None;
         self.blend_from = None;
@@ -1058,6 +1098,112 @@ impl<'a> App<'a> {
                 ending: None,
                 over: false,
             });
+        }
+    }
+
+    /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
+    /// letters appear, spinning and bobbing (`SkateLetter_InitLetter`,
+    /// `bounce_skate_letter`), and the skater starts at the goal's restart
+    /// node facing the S.
+    fn start_letters(&mut self) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(level) = &self.level else { return };
+        let Some(goal) = desa_viewer::goals::skate_letters(level.behaviour.program(), &level.id)
+        else {
+            return;
+        };
+        let objects = goal.letters.map(|name| level.behaviour.object(name));
+        if objects.iter().any(Option::is_none) {
+            return;
+        }
+        let objects = objects.map(Option::unwrap);
+        let start = goal
+            .restart
+            .and_then(|name| level.nodes.nodes.iter().find(|n| n.name == name))
+            .and_then(|n| n.position);
+        if let Some(start) = start {
+            let to = level.behaviour.position(objects[0]) - start;
+            self.placement =
+                Mat4::from_rotation_translation(Quat::from_rotation_y(to.x.atan2(to.z)), start);
+        } else {
+            self.placement = level.home;
+        }
+        self.toggle_skate();
+        if self.skating.is_none() {
+            return;
+        }
+        let Some(level) = &mut self.level else { return };
+        for object in objects {
+            level.behaviour.set_alive(object, true);
+            level.behaviour.set_spin(object, LETTER_SPIN.to_radians());
+            level
+                .behaviour
+                .run_script(object, qb::checksum("bounce_skate_letter"));
+        }
+        self.letters = Some(LetterRun {
+            objects,
+            got: [false; 5],
+            left: goal.time,
+            time: goal.time,
+            over: false,
+        });
+    }
+
+    /// Counts the letters goal down and picks up the letters the skater
+    /// reaches (`Obj_SetInnerRadius 8`, `SkateLetter_GotLetter`): gone,
+    /// shown on screen, with the goal sound. All five wins; out of time
+    /// loses.
+    fn update_letters(&mut self, dt: f32) {
+        let (Some(run), Some((skater, ..)), Some(level)) =
+            (&mut self.letters, &mut self.skating, &mut self.level)
+        else {
+            return;
+        };
+        let model = &mut self.model.character;
+        model.letters = Some(run.got);
+        model.run_clock = Some(run.left);
+        if run.over {
+            return;
+        }
+        run.left = (run.left - dt).max(0.0);
+        let body = skater.position + Vec3::Y * 30.0;
+        for (i, &object) in run.objects.iter().enumerate() {
+            if run.got[i] || body.distance(level.behaviour.position(object)) > LETTER_RADIUS {
+                continue;
+            }
+            run.got[i] = true;
+            level.behaviour.set_alive(object, false);
+            let letter = "SKATE".chars().nth(i).unwrap_or('?');
+            skater.message = Some((letter.to_string(), 1.0));
+            if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                audio.play_named(qb::checksum("GoalDone"), 1.0);
+            }
+        }
+        model.letters = Some(run.got);
+        let won = run.got.iter().all(|g| *g);
+        if won || run.left == 0.0 {
+            run.over = true;
+            let taken = run.time - run.left;
+            let mut best = None;
+            if won {
+                let key = format!(
+                    "letters.{}.{}",
+                    level.id,
+                    model
+                        .current
+                        .map_or("", |i| model.characters[i].id.as_str())
+                );
+                best = self.settings.best.get(&key).map(|ms| *ms as f32 / 1000.0);
+                if best.is_none_or(|b| taken < b) {
+                    self.settings
+                        .best
+                        .insert(key, (taken * 1000.0).round() as u32);
+                    self.settings.save();
+                }
+            }
+            model.letters_result = Some((won, taken, best));
         }
     }
 
@@ -1743,6 +1889,7 @@ impl<'a> App<'a> {
         self.update(dt);
         self.skate(dt);
         self.update_run(dt);
+        self.update_letters(dt);
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -1836,6 +1983,7 @@ impl<'a> App<'a> {
                 ui::Action::LookAtCharacter => self.camera = camera_facing(self.placement),
                 ui::Action::ToggleSkate => self.toggle_skate(),
                 ui::Action::StartRun => self.start_run(),
+                ui::Action::StartLetters => self.start_letters(),
                 ui::Action::Replay => {
                     if !self.recording.is_empty() {
                         self.replay = Some(0.0);
@@ -2198,7 +2346,25 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.placement = Mat4::from_translation(Vec3::new(v[0], v[1], v[2]))
                     * Mat4::from_rotation_y(v[3].to_radians());
             }
-            app.toggle_skate();
+            if args.letters {
+                let from = app.placement.transform_point3(Vec3::ZERO);
+                app.start_letters();
+                // From --skate-from, if given, rather than the goal's start
+                // (dropped there).
+                if let (Some(_), Some((skater, ..))) = (&args.skate_from, &mut app.skating) {
+                    skater.position = from;
+                    skater.on_ground = false;
+                }
+                if let Some(run) = &app.letters {
+                    let level = app.level.as_ref().unwrap();
+                    for (letter, o) in "SKATE".chars().zip(run.objects) {
+                        let p = level.behaviour.position(o);
+                        println!("letter {letter} at {:.0} {:.0} {:.0}", p.x, p.y, p.z);
+                    }
+                }
+            } else {
+                app.toggle_skate();
+            }
             if let Some(left) = args.run {
                 app.run = Some(Run {
                     left,
@@ -2228,6 +2394,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 }
                 app.skate(1.0 / 60.0);
                 app.update_run(1.0 / 60.0);
+                app.update_letters(1.0 / 60.0);
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
                 if let Some(level) = &mut app.level {

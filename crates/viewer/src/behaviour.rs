@@ -25,6 +25,7 @@
 //!   [orient]` (at once without a speed), `Obj_MoveToRelPos (x, y, z) time
 //!   = seconds` (relative to the object's facing), `Obj_LookAtNode`,
 //!   `Obj_WaitMove` and `Obj_IsMoving`.
+//! - `Obj_RotY speed = degrees a second` and `Obj_StopRotating`.
 //! - `playsound` / `obj_playsound name [Vol = percent]`: collected in
 //!   [`Behaviour::sounds`] for the viewer to play.
 //!
@@ -68,6 +69,8 @@ struct State {
     was_outside: bool,
     /// Exceptions set: (exception, script, params).
     exceptions: Vec<(u32, u32, Params)>,
+    /// Turning about Y (radians a second; `Obj_RotY`).
+    spin: f32,
 }
 
 #[derive(Default)]
@@ -142,6 +145,7 @@ impl Behaviour {
                 was_inside: false,
                 was_outside: true,
                 exceptions: Vec::new(),
+                spin: 0.0,
             })
             .collect();
         let threads = nodes
@@ -178,6 +182,33 @@ impl Behaviour {
             starting: Vec::new(),
             sounds: Vec::new(),
         }
+    }
+
+    /// The object with this node name.
+    pub fn object(&self, name: u32) -> Option<usize> {
+        self.object_named(name)
+    }
+
+    /// Makes an object exist or not (its own script isn't run), stopping
+    /// what it was doing.
+    pub fn set_alive(&mut self, object: usize, alive: bool) {
+        let state = &mut self.states[object];
+        state.alive = alive;
+        state.dirty = true;
+        state.moving = None;
+        state.spin = 0.0;
+        state.exceptions.clear();
+        self.threads.retain(|(o, _)| *o != object);
+    }
+
+    /// Runs `script` as the object's script.
+    pub fn run_script(&mut self, object: usize, script: u32) {
+        self.start(object, Thread::new(script, Vec::new()));
+    }
+
+    /// Sets an object spinning about Y (radians a second).
+    pub fn set_spin(&mut self, object: usize, spin: f32) {
+        self.states[object].spin = spin;
     }
 
     /// Where the skater is now, for the scripts' radii (`None` when not
@@ -232,6 +263,10 @@ impl Behaviour {
     /// Moves objects heading straight for a spot.
     fn move_straight(&mut self, i: usize, dt: f32) {
         let state = &mut self.states[i];
+        if state.spin != 0.0 && state.alive {
+            state.rotation = Quat::from_rotation_y(state.spin * dt) * state.rotation;
+            state.dirty = true;
+        }
         let Some((to, speed, orient)) = state.moving else {
             return;
         };
@@ -593,6 +628,11 @@ impl Host for Commands<'_> {
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
             }
+        } else if name == c("Obj_RotY") {
+            let speed = args.get(c("speed")).and_then(Value::as_f32).unwrap_or(0.0);
+            b.states[object].spin = speed.to_radians();
+        } else if name == c("Obj_StopRotating") {
+            b.states[object].spin = 0.0;
         } else if name == c("Obj_ShadowOff") || name == c("Obj_ShadowOn") {
             // Pedestrians cast no shadows here anyway.
         } else if name == c("Obj_PlayAnim") {

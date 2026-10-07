@@ -27,8 +27,18 @@ fn main() {
         "hud_jumpgap",
         "hud_specialtrickaa",
         "copinghit3_11",
+        "goaldone",
     ] {
         println!("skater sound {name}: {}", skater.contains_key(name));
+    }
+    // Sounds the levels' object scripts play (birds taking off).
+    for (level, name) in [
+        ("hub", "wingflaps_away_01"),
+        ("beach", "shortgull"),
+        ("graveyard", "crow01"),
+    ] {
+        let files = data.sounds(&format!("{level}.prg")).unwrap();
+        println!("{level} sound {name}: {}", files.contains_key(name));
     }
     for level in data.levels() {
         let files = data.sounds(&format!("{}.prg", level.id)).unwrap();

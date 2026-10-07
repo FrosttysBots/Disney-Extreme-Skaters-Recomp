@@ -17,6 +17,8 @@ pub enum Action {
     ToggleSkate,
     /// A two-minute run from the level's start (again).
     StartRun,
+    /// The level's S-K-A-T-E letters goal (again).
+    StartLetters,
     /// Watch the run just skated again, or stop watching.
     Replay,
     StopReplay,
@@ -68,6 +70,12 @@ pub struct CharacterModel {
     pub run_result: Option<(u32, u32, bool)>,
     /// Watching the run again.
     pub replaying: bool,
+    /// The level has S-K-A-T-E letters; while collecting them, which are
+    /// got; once it's over, whether they all were, in how long, and the
+    /// best time before.
+    pub can_letters: bool,
+    pub letters: Option<[bool; 5]>,
+    pub letters_result: Option<(bool, f32, Option<f32>)>,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
@@ -260,6 +268,88 @@ fn run_result(
         });
 }
 
+/// The S-K-A-T-E letters, under the clock: bright when got.
+fn letters_hud(ctx: &egui::Context, got: [bool; 5]) {
+    egui::Area::new(egui::Id::new("letters"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                for (letter, got) in "SKATE".chars().zip(got) {
+                    let colour = if got {
+                        egui::Color32::from_rgb(255, 205, 50)
+                    } else {
+                        egui::Color32::from_white_alpha(60)
+                    };
+                    ui.label(
+                        egui::RichText::new(letter.to_string())
+                            .size(24.0)
+                            .strong()
+                            .color(colour)
+                            .background_color(egui::Color32::from_black_alpha(120)),
+                    );
+                }
+            });
+        });
+}
+
+/// `m:ss`.
+fn clock_text(seconds: f32) -> String {
+    let s = seconds.max(0.0).round() as u32;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// The end of the letters goal: done in how long against the best, or out
+/// of time.
+fn letters_result(
+    ctx: &egui::Context,
+    (won, time, best): (bool, f32, Option<f32>),
+    actions: &mut Vec<Action>,
+) {
+    egui::Area::new(egui::Id::new("letters_result"))
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    if won {
+                        ui.heading("S-K-A-T-E!");
+                        ui.label(egui::RichText::new(clock_text(time)).size(30.0).strong());
+                        match best {
+                            Some(best) if best <= time => {
+                                ui.label(format!("Best {}", clock_text(best)));
+                            }
+                            Some(best) => {
+                                ui.label(
+                                    egui::RichText::new("New best!")
+                                        .size(18.0)
+                                        .color(egui::Color32::from_rgb(255, 220, 60)),
+                                );
+                                ui.label(format!("Last best {}", clock_text(best)));
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new("New best!")
+                                        .size(18.0)
+                                        .color(egui::Color32::from_rgb(255, 220, 60)),
+                                );
+                            }
+                        }
+                    } else {
+                        ui.heading("Out of time");
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Again").clicked() {
+                            actions.push(Action::StartLetters);
+                        }
+                        if ui.button("Done").clicked() {
+                            actions.push(Action::ToggleSkate);
+                        }
+                    });
+                });
+            });
+        });
+}
+
 /// While a replay plays: a label saying so, and a button to stop it.
 fn replay_banner(ctx: &egui::Context, actions: &mut Vec<Action>) {
     egui::Area::new(egui::Id::new("replay"))
@@ -341,6 +431,12 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         special_meter(ctx, model.character.special);
         if let Some(left) = model.character.run_clock {
             run_clock(ctx, left);
+        }
+        if let Some(got) = model.character.letters {
+            letters_hud(ctx, got);
+        }
+        if let Some(result) = model.character.letters_result {
+            letters_result(ctx, result, &mut actions);
         }
         if model.character.replaying {
             replay_banner(ctx, &mut actions);
@@ -546,6 +642,19 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .clicked()
         {
             actions.push(Action::StartRun);
+        }
+    });
+    ui.add_enabled_ui(model.can_skate && model.can_letters, |ui| {
+        if ui
+            .button("S-K-A-T-E letters")
+            .on_hover_text(
+                "The level's letters goal: collect the five spinning letters S, K, A, T and E \
+                 before the clock (the level's own goal time) runs out. The best time for each \
+                 level and character is kept.",
+            )
+            .clicked()
+        {
+            actions.push(Action::StartLetters);
         }
     });
     ui.horizontal(|ui| {

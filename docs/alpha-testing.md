@@ -72,12 +72,17 @@ skater is and what it's doing.
   skater brakes to a stop and the score goes against your best for that
   level and character (kept between runs). Replay watches the run again,
   through the same camera, with the score and combos as they were.
+- S-K-A-T-E letters (the panel's button, on every level that has them):
+  the level's letters goal, its own time (a minute on Beach and Canyon,
+  two elsewhere) to collect the five spinning letters from the goal's
+  start. Best times are kept.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game
 
 - Not yet: wall rides (the game barely uses them), skitching, the
-  Simplified controls, goals and the other gameplay modes, and the level's
+  Simplified controls, goals besides the letters and the other gameplay
+  modes, and the level's
   other triggers (breakables, goal pickups).
 - Approximations of our own: the camera follows the game's camera
   update (a lagging focus, turning, the quick swing after vert, zooming
