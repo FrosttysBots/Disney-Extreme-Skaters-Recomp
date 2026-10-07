@@ -67,6 +67,21 @@ impl Anim {
     }
 }
 
+/// How long the scripts blend into an animation (`PlayAnim ... BlendPeriod`):
+/// none into an ollie or a backwards landing, a flash into a flail, a tenth
+/// of a second into landings, and the usual 0.3 seconds otherwise (tricks,
+/// bails, crouching, the air).
+pub fn blend_period(name: &str) -> f32 {
+    match name {
+        "Ollie" | "Nollie" | "LandBackward1" | "LandBackward2" => 0.0,
+        "StandFlailLeft" | "StandFlailRight" | "CrouchFlailLeft" | "CrouchFlailRight" => 0.03,
+        "Land1" | "Land2" | "LandSmall" | "LandSketchy" | "CrouchBumpDown" | "BailGrindGetUp" => {
+            0.1
+        }
+        _ => 0.3,
+    }
+}
+
 /// How the skater came down (for `Land2`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Landing {
@@ -158,7 +173,16 @@ pub fn choose(skater: &Skater) -> Anim {
                     Anim::into("StandTurnRight", "StandTurnRightIdle", STEER)
                 }
             } else if crouched {
-                Anim::into("Crouch", "CrouchIdle", STEER)
+                // `DoCrouch_slope`: crouched, a bump over a change in the
+                // slope, else `CrouchIdle` (never the `Crouch` animation,
+                // which some characters have for another skeleton).
+                match skater.bump {
+                    Some((true, _)) => Anim::into("CrouchBumpUp", "CrouchIdle", STEER).committed(),
+                    Some((false, _)) => {
+                        Anim::into("CrouchBumpDown", "CrouchIdle", STEER).committed()
+                    }
+                    None => Anim::cycle("CrouchIdle", STEER),
+                }
             } else if skater.pushing {
                 Anim::cycle("PushCycle1", GROUND).committed()
             } else {

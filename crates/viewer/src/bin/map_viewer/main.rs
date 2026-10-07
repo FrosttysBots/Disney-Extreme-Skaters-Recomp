@@ -114,6 +114,10 @@ struct Args {
     /// without it W is held throughout
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
+    /// For --skate: start at x,y,z facing a heading in degrees (0 along +Z,
+    /// 90 along +X) instead of the level's start
+    #[arg(long, requires = "screenshot", allow_hyphen_values = true)]
+    skate_from: Option<String>,
     /// For --screenshot: also show what goals add later (pickups, goal
     /// pedestrians, warp portals)
     #[arg(long, requires = "screenshot")]
@@ -408,6 +412,9 @@ impl LoadedLevel {
 
 /// Where a character stands at a spawn point, facing its way. Character
 /// models face +Z.
+/// A character's bones, each relative to its parent.
+type Pose = Vec<(Quat, Vec3)>;
+
 fn placement_at(spawn: &Spawn) -> Mat4 {
     Mat4::from_rotation_translation(
         Quat::from_rotation_arc(Vec3::Z, spawn.facing()),
@@ -485,6 +492,10 @@ struct App<'a> {
     skating: Option<(Skater, Physics, ChaseCamera)>,
     /// The animation the character's time belongs to.
     shown_animation: usize,
+    /// Skating: the pose shown (blended), and the pose being blended from
+    /// with seconds into the blend and its length.
+    skate_pose: Option<Pose>,
+    blend_from: Option<(Pose, f32, f32)>,
     last_frame: Instant,
     started: Instant,
     error: Option<anyhow::Error>,
@@ -553,6 +564,8 @@ impl<'a> App<'a> {
             placement: Mat4::IDENTITY,
             skating: None,
             shown_animation: 0,
+            skate_pose: None,
+            blend_from: None,
             last_frame: Instant::now(),
             started: Instant::now(),
             error: None,
@@ -687,6 +700,8 @@ impl<'a> App<'a> {
 
     /// Starts or stops skating the character from where it stands.
     fn toggle_skate(&mut self) {
+        self.skate_pose = None;
+        self.blend_from = None;
         if self.skating.take().is_some() {
             self.model.character.skating = false;
             self.model.character.playing = true;
@@ -724,6 +739,11 @@ impl<'a> App<'a> {
             });
         }
         skater.tricks = tricks;
+        // Standing on the ground to start, not dropped onto it.
+        if let Some(world) = &level.world {
+            let heading = skater.heading;
+            skater.place(position, heading, &physics, world);
+        }
         // Falling out of the level puts the skater back at the nearest
         // spawn point.
         skater.spawns = level
@@ -733,6 +753,16 @@ impl<'a> App<'a> {
             .map(|spawn| {
                 let facing = spawn.facing();
                 (spawn.position, facing.x.atan2(facing.z))
+            })
+            .collect();
+        // Teleporters: trigger faces whose scripts send the skater to a
+        // restart.
+        skater.teleports = desa_viewer::triggers::teleports(&level.nodes, program)
+            .into_iter()
+            .map(|(object, i)| {
+                let spawn = &level.nodes.spawns[i];
+                let facing = spawn.facing();
+                (object, (spawn.position, facing.x.atan2(facing.z)))
             })
             .collect();
         self.stop_camera_path();
@@ -927,19 +957,47 @@ impl<'a> App<'a> {
                 time = (meter + 1.0) / 2.0 * duration;
                 duration = duration.max(f32::EPSILON);
             }
+            // Into a different animation: blend from the pose shown, as
+            // the game's `PlayAnim` does over its `BlendPeriod`.
+            let name = character.animations[index].0.as_str();
+            if index != self.shown_animation {
+                let period = skate::anims::blend_period(name);
+                self.blend_from = match (&self.skate_pose, period > 0.0) {
+                    (Some(pose), true) => Some((pose.clone(), 0.0, period)),
+                    _ => None,
+                };
+            }
             let model = &mut self.model.character;
             model.animation = index;
             self.shown_animation = index;
             model.duration = duration;
-            if hold {
-                time = time.min(duration * 0.999);
-            }
-            model.time = if duration > 0.0 {
-                time.min(duration * 0.999) % duration
-            } else {
+            // Held on its last frame, or looping round.
+            model.time = if duration <= 0.0 {
                 0.0
+            } else if hold {
+                time.clamp(0.0, duration * 0.999)
+            } else {
+                time.rem_euclid(duration)
             };
         }
+
+        // The pose: the animation's, blended from the last one's.
+        let model = &self.model.character;
+        let mut local = character.local_pose(model.animation, model.time);
+        if let Some((from, elapsed, period)) = &mut self.blend_from {
+            *elapsed += dt;
+            let t = (*elapsed / *period).clamp(0.0, 1.0);
+            // Eased, so it starts and settles gently.
+            let t = t * t * (3.0 - 2.0 * t);
+            for (to, from) in local.iter_mut().zip(from.iter()) {
+                to.0 = from.0.slerp(to.0, t);
+                to.1 = from.1.lerp(to.1, t);
+            }
+            if *elapsed >= *period {
+                self.blend_from = None;
+            }
+        }
+        self.skate_pose = Some(local);
 
         // Chase camera, on the game's medium camera settings.
         chase.update(skater, physics, world, dt);
@@ -1039,6 +1097,21 @@ impl<'a> App<'a> {
             model.time = 0.0;
         }
         model.duration = character.animations[model.animation].1.duration;
+        // Skating poses the character itself (blending animations).
+        if let (Some(_), Some(pose)) = (&self.skating, &self.skate_pose) {
+            level
+                .renderer
+                .pose_character(&character.pose_local(pose, self.placement));
+            if let Some(blink) = character.blink {
+                let eyes = if model.blink {
+                    blink.texture_at(clock)
+                } else {
+                    blink.eyes
+                };
+                level.renderer.swap_character_texture(blink.eyes, eyes);
+            }
+            return;
+        }
         if model.playing && model.duration > 0.0 {
             // Everything loops here, even one-off moves like an ollie.
             model.time = (model.time + dt * model.speed) % model.duration;
@@ -1606,6 +1679,16 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
         app.level = Some(loaded);
         if args.skate > 0.0 {
+            if let Some(from) = &args.skate_from {
+                let v: Vec<f32> = from
+                    .split(',')
+                    .map(|x| x.trim().parse())
+                    .collect::<Result<_, _>>()
+                    .context("--skate-from is x,y,z,heading")?;
+                anyhow::ensure!(v.len() == 4, "--skate-from is x,y,z,heading");
+                app.placement = Mat4::from_translation(Vec3::new(v[0], v[1], v[2]))
+                    * Mat4::from_rotation_y(v[3].to_radians());
+            }
             app.toggle_skate();
             let script = args
                 .skate_keys
@@ -1630,6 +1713,23 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.skate(1.0 / 60.0);
             }
             camera = app.camera;
+            if let Some((skater, ..)) = &app.skating {
+                let model = &app.model.character;
+                let shown = app
+                    .character
+                    .as_ref()
+                    .and_then(|c| c.animations.get(model.animation))
+                    .map_or("-", |(name, _)| name.as_str());
+                println!(
+                    "skate: {} | anim {shown} at {:.2}/{:.2} (picked {} at {:.2}) | {}",
+                    model.skate_status.replace('\n', ", "),
+                    model.time,
+                    model.duration,
+                    skater.anim.first,
+                    skater.anim_time,
+                    model.combo.as_deref().unwrap_or("").replace('\n', " / ")
+                );
+            }
         }
         // The blink clock follows --time too, so blinks can be captured.
         app.animate(0.0, args.time);

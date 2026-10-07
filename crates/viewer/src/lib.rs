@@ -10,3 +10,4 @@ pub mod nodes;
 pub mod objects;
 pub mod renderer;
 pub mod source;
+pub mod triggers;

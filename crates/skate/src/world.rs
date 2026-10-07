@@ -15,6 +15,11 @@ pub struct Hit {
     /// How far along the ray, from 0 to 1.
     pub fraction: f32,
     pub flags: u16,
+    /// The face's terrain (`TERRAIN_...` in `TERRAIN.q`).
+    pub terrain: u16,
+    /// The checksum of the collision object it belongs to (its node's
+    /// name).
+    pub object: u32,
 }
 
 pub struct World {
@@ -62,6 +67,35 @@ impl World {
         None
     }
 
+    /// The collision objects with trigger faces (flagged to run a script
+    /// when the skater touches them) that the line from `from` to `to`
+    /// crosses, solid or not.
+    pub fn triggers(&self, from: Vec3, to: Vec3) -> Vec<u32> {
+        let min = from.min(to) - Vec3::splat(0.5);
+        let max = from.max(to) + Vec3::splat(0.5);
+        let direction = to - from;
+        let mut out = Vec::new();
+        for object in &self.collision.objects {
+            let [x0, y0, z0, x1, y1, z1] = object.bbox;
+            if max.x < x0 || min.x > x1 || max.y < y0 || min.y > y1 || max.z < z0 || min.z > z1 {
+                continue;
+            }
+            object.bsp.faces_near(min.to_array(), max.to_array(), |f| {
+                let face = &object.faces[usize::from(f)];
+                if face.flags & face_flags::TRIGGER == 0 || out.contains(&object.checksum) {
+                    return;
+                }
+                let [a, b, c] = face
+                    .indices
+                    .map(|i| Vec3::from(object.vertices[usize::from(i)]));
+                if intersect(from, direction, a, b, c).is_some() {
+                    out.push(object.checksum);
+                }
+            });
+        }
+        out
+    }
+
     /// The first solid face between `from` and `to`. Faces flagged
     /// non-collidable (triggers, decals) are passed through.
     pub fn ray(&self, from: Vec3, to: Vec3) -> Option<Hit> {
@@ -93,6 +127,8 @@ impl World {
                             normal,
                             fraction: t,
                             flags: face.flags,
+                            terrain: face.terrain,
+                            object: object.checksum,
                         });
                     }
                 }

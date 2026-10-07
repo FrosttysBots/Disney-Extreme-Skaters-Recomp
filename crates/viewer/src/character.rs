@@ -19,7 +19,7 @@
 //! may not blink. [`Blink`] plays them anyway, on a timing of our own.
 
 use anyhow::{Context, Result, bail};
-use glam::Mat4;
+use glam::{Mat4, Quat, Vec3};
 use ngc_anim::{Animation, KeyTables, Skeleton, pose};
 use ngc_model::Scene;
 
@@ -98,8 +98,19 @@ impl Character {
     /// The mesh's vertices posed by animation `index` at `seconds`, then
     /// moved into the world by `placement`.
     pub fn pose(&self, index: usize, seconds: f32, placement: Mat4) -> Vec<Vertex> {
-        let local = self.animations[index].1.sample(seconds);
-        let posed = pose::model_space(&self.skeleton, &local);
+        self.pose_local(&self.local_pose(index, seconds), placement)
+    }
+
+    /// Each bone's transform (relative to its parent) in animation `index`
+    /// at `seconds`.
+    pub fn local_pose(&self, index: usize, seconds: f32) -> Vec<(Quat, Vec3)> {
+        self.animations[index].1.sample(seconds)
+    }
+
+    /// The mesh's vertices in a pose of parent-relative bone transforms
+    /// (such as two animations blended), moved by `placement`.
+    pub fn pose_local(&self, local: &[(Quat, Vec3)], placement: Mat4) -> Vec<Vertex> {
+        let posed = pose::model_space(&self.skeleton, local);
         let matrices: Vec<Mat4> = pose::skinning(&self.rest, &posed)
             .into_iter()
             .map(|m| placement * m)

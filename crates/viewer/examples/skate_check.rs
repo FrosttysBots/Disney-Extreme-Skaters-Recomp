@@ -10,12 +10,12 @@
 //! `MISSES=1` lists the rail approaches that didn't grind; `TRACE=run:frame`
 //! prints 25 frames of a random run from there (and why the ground was
 //! lost); `SHAKES=1` lists where the camera shook; `PROBE=x,y,z` lists the
-//! faces around a spot.
+//! faces around a spot; `RAILS=x,z,radius` lists the rails near one.
 use std::path::Path;
 
 use desa_viewer::nodes::LevelNodes;
 use desa_viewer::source::GameData;
-use glam::Vec3;
+use glam::{Vec3, Vec3Swizzles};
 use qb::vm::Program;
 use skate::{ChaseCamera, Input, Physics, Rails, Segment, Skater, Stats, TrickBook, World};
 
@@ -49,6 +49,24 @@ fn main() {
     let world = World::new(collision).with_rails(rails.clone());
     let dt = 1.0 / 60.0;
 
+    // RAILS=x,z,radius: the rail pieces with an end within the radius.
+    if let Ok(near) = std::env::var("RAILS") {
+        let v: Vec<f32> = near.split(',').map(|x| x.parse().unwrap()).collect();
+        let at = glam::Vec2::new(v[0], v[1]);
+        for r in &nodes.rails {
+            let d = at.distance(r.start.xz()).min(at.distance(r.end.xz()));
+            if d < v[2] {
+                println!(
+                    "rail {:.0} -> {:.0} ({:.0} long)",
+                    r.start,
+                    r.end,
+                    r.start.distance(r.end)
+                );
+            }
+        }
+        return;
+    }
+
     // PROBE=x,y,z: every face on the vertical line through a spot, and
     // what's around it at knee height.
     if let Ok(probe) = std::env::var("PROBE") {
@@ -58,8 +76,8 @@ fn main() {
         let mut from = at + Vec3::Y * 30.0;
         while let Some(hit) = world.ray(from, to) {
             println!(
-                "down: {:.2} normal {:.2} flags {:#x}",
-                hit.point, hit.normal, hit.flags
+                "down: {:.2} normal {:.2} flags {:#x} terrain {} object {:#010x}",
+                hit.point, hit.normal, hit.flags, hit.terrain, hit.object
             );
             from = hit.point - Vec3::Y * 0.01;
         }

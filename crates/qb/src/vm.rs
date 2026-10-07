@@ -69,6 +69,11 @@ impl Program {
         self.scripts.insert(name, body);
     }
 
+    /// A script's body, as tokens.
+    pub fn script(&self, name: u32) -> Option<&[Token]> {
+        self.scripts.get(&name).map(Vec::as_slice)
+    }
+
     pub fn has_script(&self, name: u32) -> bool {
         self.scripts.contains_key(&name)
     }

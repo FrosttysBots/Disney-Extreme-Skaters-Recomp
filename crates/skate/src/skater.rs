@@ -205,6 +205,9 @@ const CREEP_SPEED: f32 = 50.0;
 /// this fraction of the kick speed.
 const PUSH_TIME: f32 = 0.8;
 const PUSH_AGAIN: f32 = 0.9;
+/// Rolling backwards faster than this, a push speeds it up that way (a
+/// fakie push); slower, it pushes the way the board faces.
+const PUSH_FAKIE_SPEED: f32 = 30.0;
 
 /// Reverting: the button within 200 ms before landing (`{ Press, R2, 200 }`
 /// in `GROUNDTRICKS.q`), or within the 5 frames after (`Land2`'s
@@ -236,6 +239,11 @@ pub struct Skater {
     /// Seconds in the current action.
     pub action_time: f32,
     crouched: bool,
+    /// The ground's slope along the way the skater faces, in degrees (up
+    /// positive), and a bump crouched over a change in it of more than 5
+    /// degrees (`DoCrouch_slope`): up or down, and seconds left of it.
+    slope: f32,
+    pub bump: Option<(bool, f32)>,
     /// How long a turn has been held, in seconds.
     turn_time: f32,
     /// How long the skater has been crouched (tensing for an ollie).
@@ -250,6 +258,10 @@ pub struct Skater {
     pub spawns: Vec<(Vec3, f32)>,
     /// Print why the ground was lost, for debugging (off by default).
     pub trace: bool,
+    /// Trigger faces that move the skater (teleporters, water and the
+    /// like, as the level's `TriggerScript`s do): their collision object's
+    /// checksum, and where to and facing which way.
+    pub teleports: HashMap<u32, (Vec3, f32)>,
     /// Pushing by itself while under the kick speed (the controller's
     /// AutoKick option, on by default; the game's can-push test at
     /// 0x800F43F0 reads it from `+0x3A38`). Off, it pushes while the up
@@ -348,6 +360,8 @@ impl Skater {
             action: Action::Standing,
             action_time: 0.0,
             crouched: false,
+            slope: 0.0,
+            bump: None,
             turn_time: 0.0,
             crouch_time: 0.0,
             grind: None,
@@ -355,6 +369,7 @@ impl Skater {
             last_ground: position,
             spawns: Vec::new(),
             trace: false,
+            teleports: HashMap::new(),
             auto_kick: true,
             pushing: false,
             push_left: 0.0,
@@ -548,6 +563,48 @@ impl Skater {
         self.trick = (!done).then_some(playing);
     }
 
+    /// `GetSlope` and `DoCrouch_slope`: the slope along the board, and a
+    /// crouched bump when it changes by more than 5 degrees in a frame.
+    fn follow_slope(&mut self, crouched: bool) {
+        let flat = self.forward();
+        let along = (flat - self.up * flat.dot(self.up)).normalize_or(flat);
+        let slope = along.y.clamp(-1.0, 1.0).asin().to_degrees();
+        let change = slope - self.slope;
+        self.slope = slope;
+        if let Some((_, left)) = &mut self.bump {
+            *left -= STEP;
+            if *left <= 0.0 {
+                self.bump = None;
+            }
+        }
+        if crouched && change.abs() > 5.0 && self.bump.is_none() {
+            let up = change > 0.0;
+            let name = if up { "CrouchBumpUp" } else { "CrouchBumpDown" };
+            let length = self.anim_length(name);
+            self.bump = Some((up, if length > 0.0 { length } else { 0.4 }));
+        }
+        if !crouched {
+            self.bump = None;
+        }
+    }
+
+    /// Touching a trigger face of a teleporter (the level's `TriggerScript`
+    /// sends the skater to a restart: `Teleporter`, `Teleporter_water` and
+    /// the like): there, standing, the combo lost.
+    fn check_teleports(&mut self, before: Vec3, world: &World, p: &Physics) {
+        if self.teleports.is_empty() {
+            return;
+        }
+        // Along the way at knee height (planes stood up across a passage),
+        // and through the feet (water and floors).
+        let knee = Vec3::Y * 10.0;
+        let mut touched = world.triggers(before + knee, self.position + knee);
+        touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
+        if let Some(&(position, heading)) = touched.iter().find_map(|o| self.teleports.get(o)) {
+            self.place(position, heading, p, world);
+        }
+    }
+
     /// How long an animation runs (0 if it isn't known).
     pub fn anim_length(&self, name: &str) -> f32 {
         self.anim_lengths.get(name).copied().unwrap_or(0.0)
@@ -603,7 +660,9 @@ impl Skater {
 
     /// About to land.
     pub fn landing_soon(&self) -> bool {
-        self.landing_soon
+        // Only in the air: the last landing's stretch doesn't carry over
+        // into the next takeoff.
+        self.landing_soon && !self.on_ground && self.grind.is_none()
     }
 
     /// The balance meter from -1 to 1 while balancing a manual or a grind.
@@ -790,6 +849,7 @@ impl Skater {
                 }
             }
         }
+        self.check_teleports(before, world, p);
         self.update_special();
         let anim = anims::choose(self);
         // A committed animation plays its first part through unless
@@ -1232,6 +1292,12 @@ impl Skater {
         let Some(hit) = world.ray(from, to + Vec3::Y + direction * 6.0) else {
             return false;
         };
+        if self.trace {
+            eprintln!(
+                "knocked off the rail at {:?} by a face at {:?} normal {:?} flags {:#x}",
+                self.position, hit.point, hit.normal, hit.flags
+            );
+        }
         self.position.y += 1.0;
         self.leave_rail(velocity - hit.normal * velocity.dot(hit.normal), p, world);
         true
@@ -1414,7 +1480,13 @@ impl Skater {
             // Push along the current velocity while under the kick speed
             // (0x800F43F0, 0x800F44CC), with drag (0x800F4CF0).
             if self.pushing && velocity.length() <= top {
-                let direction = velocity.try_normalize().unwrap_or(forward);
+                // From (nearly) standing, the way the board faces: a slope
+                // creeping it backwards mustn't make it push backwards.
+                let direction = if velocity.dot(forward) > -PUSH_FAKIE_SPEED {
+                    forward
+                } else {
+                    velocity.normalize()
+                };
                 velocity += direction * accel * STEP;
             }
             velocity = drag(velocity, friction);
@@ -1577,6 +1649,7 @@ impl Skater {
                 self.ground_flags = hit.flags;
                 self.up = hit.normal;
                 self.velocity = forward * speed;
+                self.follow_slope(input.crouch);
             }
             None => {
                 if self.trace {
@@ -1660,6 +1733,8 @@ impl Skater {
     }
 
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // A push stops when the skater leaves the ground.
+        self.push_left = 0.0;
         if let Some((_, time)) = self.lip_out.as_mut() {
             *time += STEP;
         }
@@ -1708,7 +1783,15 @@ impl Skater {
                 let ramp = self.vert.is_some() && hit.flags & ngc_collision::face_flags::VERT != 0;
                 if !ground && !ramp {
                     self.air_bounce(hit.normal);
-                    target = hit.point - lift + hit.normal * p.min_distance_to_wall;
+                    // Out of the wall across, flat, as far as needed; the
+                    // rise or fall carries on (a wall leaning over the
+                    // ground would otherwise put the feet under the floor).
+                    let normal =
+                        Vec3::new(hit.normal.x, 0.0, hit.normal.z).normalize_or(hit.normal);
+                    let out = (target + lift - hit.point).dot(normal);
+                    if out < p.min_distance_to_wall {
+                        target += normal * (p.min_distance_to_wall - out);
+                    }
                 }
             }
         }
@@ -1735,6 +1818,7 @@ impl Skater {
                     self.velocity = Vec3::ZERO;
                 }
                 self.on_ground = true;
+                self.landing_soon = false;
                 let from_vert = self.vert.is_some();
                 self.vert = None;
                 self.lip_out = None;
@@ -2111,6 +2195,8 @@ mod tests {
             normal: normal.normalize(),
             fraction: 0.5,
             flags: 0,
+            terrain: 0,
+            object: 0,
         };
         let (from, to) = (Vec3::ZERO, Vec3::new(0.0, 0.0, 10.0));
         let slope = |degrees: f32| {

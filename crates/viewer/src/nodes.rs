@@ -44,6 +44,8 @@ pub struct Spawn {
     pub heading: f32,
     /// The restart `Type` (Player1, Multiplayer, Generic...).
     pub kind: String,
+    /// The node's `Name` checksum.
+    pub name: u32,
 }
 
 impl Spawn {
@@ -151,6 +153,10 @@ pub struct LevelNodes {
     pub hidden_sectors: HashSet<u32>,
     /// Every node in the array, in order.
     pub nodes: Vec<PathNode>,
+    /// Level geometry that runs a script when the skater touches its
+    /// trigger faces: the node's name (its collision object's checksum)
+    /// and the `TriggerScript`.
+    pub geometry_scripts: Vec<(u32, u32)>,
 }
 
 impl LevelNodes {
@@ -234,6 +240,12 @@ impl LevelNodes {
                     }
                 }
                 Some(c) if c == key("LevelGeometry") || c == key("LevelObject") => {
+                    if let (Some(name), Some(script)) = (
+                        node.get(key("Name")).and_then(Value::as_name),
+                        node.get(key("TriggerScript")).and_then(Value::as_name),
+                    ) {
+                        out.geometry_scripts.push((name, script));
+                    }
                     if !node.has_flag(key("CreatedAtStart")) {
                         if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
                             out.hidden_sectors.insert(name);
@@ -283,6 +295,7 @@ impl LevelNodes {
                         position: pos,
                         heading,
                         kind,
+                        name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
                     });
                 }
                 _ => {}
@@ -424,6 +437,7 @@ mod tests {
             position: Vec3::ZERO,
             heading: 0.0,
             kind: String::new(),
+            name: 0,
         };
         let free = spawn.camera();
         assert!(free.position.z > 250.0);
@@ -462,6 +476,7 @@ mod tests {
             position: Vec3::ZERO,
             heading,
             kind: String::new(),
+            name: 0,
         };
         // Script +Z is mesh -Z; a quarter turn still faces +X.
         assert!(spawn(0.0).facing().abs_diff_eq(Vec3::NEG_Z, 1e-6));
