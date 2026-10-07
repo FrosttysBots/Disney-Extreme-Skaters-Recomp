@@ -94,6 +94,11 @@ pub struct Audio {
     /// again each time it ends).
     music: Option<Player>,
     ambience: Option<(Player, Vec<u8>)>,
+    /// The character's voice lines by kind (`bail`, `trick`), the line
+    /// playing, and a little randomness for which and whether.
+    voices: HashMap<String, Vec<Clip>>,
+    voice: Option<Player>,
+    seed: u64,
 }
 
 impl Audio {
@@ -110,6 +115,9 @@ impl Audio {
             grind: None,
             music: None,
             ambience: None,
+            voices: HashMap::new(),
+            voice: None,
+            seed: 0x9E37_79B9_7F4A_7C15,
         })
     }
 
@@ -138,6 +146,48 @@ impl Audio {
             .collect();
         self.terrain = terrain;
         self.rail_terrain = rail_terrain;
+    }
+
+    /// The character's voice lines: each line's kind and `.dsp` sound.
+    pub fn load_voices(&mut self, lines: Vec<(String, Vec<u8>)>) {
+        self.voices.clear();
+        for (kind, data) in lines {
+            if let Ok(sound) = Sound::parse(&data) {
+                self.voices.entry(kind).or_default().push(Clip {
+                    rate: sound.sample_rate,
+                    samples: sound.floats(),
+                });
+            }
+        }
+    }
+
+    /// A number from 0 to 1 (xorshift).
+    fn random(&mut self) -> f32 {
+        self.seed ^= self.seed << 13;
+        self.seed ^= self.seed >> 7;
+        self.seed ^= self.seed << 17;
+        (self.seed >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// One of the character's `kind` lines, `chance` percent of the time
+    /// (`PlaySkaterStream Type = ... chance = ...`), unless one's playing.
+    fn say(&mut self, kind: &str, chance: f32) {
+        if self.voice.as_ref().is_some_and(|v| !v.empty()) || self.random() * 100.0 >= chance {
+            return;
+        }
+        let pick = self.random();
+        let Some(clip) = self
+            .voices
+            .get(kind)
+            .filter(|lines| !lines.is_empty())
+            .map(|lines| &lines[((pick * lines.len() as f32) as usize).min(lines.len() - 1)])
+        else {
+            return;
+        };
+        let player = Player::connect_new(self.sink.mixer());
+        player.set_volume(MASTER * 1.2);
+        player.append(clip.buffer());
+        self.voice = Some(player);
     }
 
     /// Silences the loops and the music (skating stopped).
@@ -234,7 +284,15 @@ impl Audio {
                     self.play_terrain(rail.unwrap_or(skater.terrain), Moment::GrindLand)
                 }
                 SkateSound::Cess => self.play_terrain(skater.terrain, Moment::Cess),
-                SkateSound::Bail => self.play("bail_knee1", 1.0, 1.0),
+                SkateSound::Bail => {
+                    self.play("bail_knee1", 1.0, 1.0);
+                    // `GeneralBail`: `PlaySkaterStream Type = "bail" chance = 50`.
+                    self.say("bail", 50.0);
+                }
+                // `genericTrickStreamChance` (5), every time for a special.
+                SkateSound::Trick { special } => {
+                    self.say("trick", if special { 100.0 } else { 5.0 })
+                }
                 SkateSound::Smack => self.play("bodysmacka", 1.0, 1.0),
                 SkateSound::Gap => self.play("hud_jumpgap", 1.0, 1.0),
                 SkateSound::Teleport => self.play("bigsplash", 1.0, 1.0),

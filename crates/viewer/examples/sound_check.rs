@@ -78,6 +78,19 @@ fn main() {
             None => println!("music {track}: MISSING"),
         }
     }
+    // Each character's voice lines.
+    for who in ["jessie", "woody", "simba", "zurg", "kid"] {
+        let lines = data.voices(who).unwrap();
+        let decoded = lines
+            .iter()
+            .filter(|(_, d)| ngc_sound::Sound::parse(d).is_ok())
+            .count();
+        let tricks = lines.iter().filter(|(k, _)| k == "trick").count();
+        println!(
+            "voices {who}: {} lines ({tricks} trick), {decoded} decode",
+            lines.len()
+        );
+    }
     if play {
         let files = data.sounds("hub.prg").unwrap();
         let sound = ngc_sound::Sound::parse(&files["ollieconc"]).unwrap();

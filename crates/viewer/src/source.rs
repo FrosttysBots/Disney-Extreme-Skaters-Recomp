@@ -432,6 +432,89 @@ impl GameData {
         characters
     }
 
+    /// A character's voice lines (`streams/streams.wad`, indexed by
+    /// `streams.hed`: `\Streams\pros\jessie\jessie_bail01`...): each line's
+    /// kind (`bail`, `trick`) and its `.dsp` sound.
+    pub fn voices(&mut self, character: &str) -> Result<Vec<(String, Vec<u8>)>> {
+        let prefix = format!("\\streams\\pros\\{}\\", character.to_ascii_lowercase());
+        let Some(index) = self.stream_file("streams.hed", None)? else {
+            return Ok(Vec::new());
+        };
+        // Entries: offset, size (little-endian), and a name padded to 4.
+        let mut lines = Vec::new();
+        let mut at = 0;
+        while at + 8 <= index.len() {
+            let offset = u32::from_le_bytes(index[at..at + 4].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(index[at + 4..at + 8].try_into().unwrap()) as u64;
+            at += 8;
+            let Some(end) = index[at..].iter().position(|&b| b == 0) else {
+                break;
+            };
+            let name = String::from_utf8_lossy(&index[at..at + end]).to_ascii_lowercase();
+            at = (at + end + 4) & !3;
+            if name.is_empty() {
+                break;
+            }
+            if let Some(rest) = name.strip_prefix(&prefix) {
+                let kind: String = rest
+                    .rsplit('_')
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .filter(|c| !c.is_ascii_digit())
+                    .collect();
+                lines.push((kind, offset, size));
+            }
+        }
+        let mut out = Vec::new();
+        for (kind, offset, size) in lines {
+            if let Some(data) = self.stream_file("streams.wad", Some((offset, size)))? {
+                out.push((kind, data));
+            }
+        }
+        Ok(out)
+    }
+
+    /// A file of the `streams` folder, or a range of it.
+    fn stream_file(&mut self, name: &str, range: Option<(u64, u64)>) -> Result<Option<Vec<u8>>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let data = match self {
+            GameData::Disc { disc, .. } => {
+                let path = disc
+                    .fst()
+                    .files()
+                    .find(|n| n.path.to_ascii_lowercase() == format!("streams/{name}"))
+                    .map(|n| n.path.clone());
+                let Some(path) = path else { return Ok(None) };
+                let whole = disc.read_file(&path)?;
+                match range {
+                    Some((offset, size)) => whole
+                        .get(offset as usize..(offset + size) as usize)
+                        .map(<[u8]>::to_vec),
+                    None => Some(whole),
+                }
+            }
+            GameData::Folder(dir) => {
+                let Some(path) = dir.parent().map(|d| d.join("streams").join(name)) else {
+                    return Ok(None);
+                };
+                let Ok(mut file) = File::open(&path) else {
+                    return Ok(None);
+                };
+                match range {
+                    Some((offset, size)) => {
+                        file.seek(SeekFrom::Start(offset))?;
+                        let mut buf = vec![0; size as usize];
+                        file.read_exact(&mut buf)?;
+                        Some(buf)
+                    }
+                    None => Some(fs::read(&path)?),
+                }
+            }
+        };
+        Ok(data)
+    }
+
     /// A streamed music track (`music/dtk/NAME.dtk`, ignoring case), or
     /// none if it isn't there.
     pub fn music(&mut self, name: &str) -> Result<Option<Vec<u8>>> {

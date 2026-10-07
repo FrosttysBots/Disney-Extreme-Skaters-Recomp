@@ -792,6 +792,10 @@ impl<'a> App<'a> {
             })
             .collect();
         audio.load(files, terrain, rail_terrain);
+        if let Some(index) = self.model.character.current {
+            let id = self.model.character.characters[index].id.clone();
+            audio.load_voices(data.voices(&id).unwrap_or_default());
+        }
         // The songs, shuffled, and this level's ambience.
         let track = |v: &qb::Value| match v.get(qb::checksum("on_disk")) {
             Some(qb::Value::String(s)) => {

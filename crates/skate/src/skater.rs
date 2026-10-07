@@ -93,6 +93,12 @@ pub enum SkateSound {
     Gap,
     /// Put back somewhere by a teleporter (water's splash).
     Teleport,
+    /// A trick began (an air trick, a grind, a lip): the character may say
+    /// something (`PlaySkaterStream Type = "trick"`), always for a
+    /// special.
+    Trick {
+        special: bool,
+    },
 }
 
 /// What the skater is doing, for picking animations.
@@ -611,6 +617,9 @@ impl Skater {
                 })
                 .map(|(_, _, i)| i);
             if let Some(index) = special.or_else(|| self.tricks.air_trick(button, dir)) {
+                self.sounds.push(SkateSound::Trick {
+                    special: special.is_some(),
+                });
                 self.trick = Some(Playing {
                     trick: index,
                     time: 0.0,
@@ -1158,6 +1167,7 @@ impl Skater {
     /// for the direction pressed in the last half second, else the plain
     /// one; held still on the coping, standing on the ramp's face.
     fn start_lip(&mut self, at: Vec3, out: Vec3, p: &Physics) {
+        self.sounds.push(SkateSound::Trick { special: false });
         let special = self
             .tricks
             .special_lip
@@ -1346,6 +1356,7 @@ impl Skater {
         self.balance_trick = grind;
         self.balance_time = 0.0;
         self.sounds.push(SkateSound::RailOn);
+        self.sounds.push(SkateSound::Trick { special: false });
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,

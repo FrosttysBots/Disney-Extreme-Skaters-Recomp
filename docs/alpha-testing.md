@@ -54,14 +54,15 @@ skater is and what it's doing.
 - Coming down a quarter pipe or landing a 180: you turn round and ride
   switch (the character mirrored, as the game shows it).
 - Sound: the game's own effects for each surface (rolling, ollies,
-  landings, grinds), bails, gaps and slides; the level's ambience; and
-  the soundtrack (the Music box in the panel).
+  landings, grinds), bails, gaps and slides; the characters' own lines
+  when they bail or start a trick; the level's ambience; and the
+  soundtrack (the Music box in the panel).
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game
 
 - Not yet: wall rides (the game barely uses them), skitching, the
-  Simplified controls, the characters' voices, goals and gameplay modes, and the level's
+  Simplified controls, goals and gameplay modes, and the level's
   other triggers (breakables, goal pickups).
 - Approximations of our own: the camera follows the game's camera
   update (a lagging focus, turning, the quick swing after vert, zooming
