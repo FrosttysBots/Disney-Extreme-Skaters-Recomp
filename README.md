@@ -148,6 +148,12 @@ X flips, B grabs, Y grinds, and the shoulder buttons revert. It rumbles
 where the game's does (ollies, landings, grinds, reverts, flails, bails);
 the panel's Rumble box turns that off, and the `pad_check` example
 checks that a pad can rumble.
+
+The panel's **2 minute run** is the game's single session (Trick Attack):
+two minutes from the level's start, the last combo counting once it
+lands, and the best score for each level and character kept in the
+settings file. `--run SECONDS` with `--skate` screenshots one with that
+much time left.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |

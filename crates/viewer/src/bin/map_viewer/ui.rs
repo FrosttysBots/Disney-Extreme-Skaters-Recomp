@@ -15,6 +15,8 @@ pub enum Action {
     LoadCharacter(Option<usize>),
     LookAtCharacter,
     ToggleSkate,
+    /// A two-minute run from the level's start (again).
+    StartRun,
     PlayCameraPath(usize),
     StopCameraPath,
 }
@@ -57,6 +59,10 @@ pub struct CharacterModel {
     pub music: bool,
     /// The gamepad rumbles where the game's does.
     pub rumble: bool,
+    /// In a two-minute run: the seconds left, and once it's over the
+    /// score, the best before it, and whether it beat it.
+    pub run_clock: Option<f32>,
+    pub run_result: Option<(u32, u32, bool)>,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
@@ -185,6 +191,67 @@ fn special_meter(ctx: &egui::Context, (fill, full): (f32, bool)) {
         });
 }
 
+/// A two-minute run's clock, top centre (`the_time`), red for the last
+/// ten seconds.
+fn run_clock(ctx: &egui::Context, left: f32) {
+    let seconds = left.ceil() as u32;
+    let colour = if left <= 10.0 {
+        egui::Color32::from_rgb(255, 80, 60)
+    } else {
+        egui::Color32::WHITE
+    };
+    egui::Area::new(egui::Id::new("run_clock"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 16.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{}:{:02}", seconds / 60, seconds % 60))
+                    .size(26.0)
+                    .strong()
+                    .color(colour)
+                    .background_color(egui::Color32::from_black_alpha(140)),
+            );
+        });
+}
+
+/// The end of a two-minute run: the score against the best.
+fn run_result(
+    ctx: &egui::Context,
+    (score, best, record): (u32, u32, bool),
+    actions: &mut Vec<Action>,
+) {
+    egui::Area::new(egui::Id::new("run_result"))
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.heading("Run over");
+                    ui.label(egui::RichText::new(format!("{score}")).size(30.0).strong());
+                    if record {
+                        ui.label(
+                            egui::RichText::new("New best!")
+                                .size(18.0)
+                                .color(egui::Color32::from_rgb(255, 220, 60)),
+                        );
+                        if best > 0 {
+                            ui.label(format!("Last best {best}"));
+                        }
+                    } else {
+                        ui.label(format!("Best {best}"));
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Again").clicked() {
+                            actions.push(Action::StartRun);
+                        }
+                        if ui.button("Done").clicked() {
+                            actions.push(Action::ToggleSkate);
+                        }
+                    });
+                });
+            });
+        });
+}
+
 /// The balance meter, bottom centre: a bar with a marker that slides to
 /// either end as the skater leans.
 fn balance_meter(ctx: &egui::Context, meter: f32) {
@@ -244,6 +311,12 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
         }
         special_meter(ctx, model.character.special);
+        if let Some(left) = model.character.run_clock {
+            run_clock(ctx, left);
+        }
+        if let Some(result) = model.character.run_result {
+            run_result(ctx, result, &mut actions);
+        }
     }
     if !model.panel_open {
         return actions;
@@ -432,6 +505,17 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .clicked()
         {
             actions.push(Action::ToggleSkate);
+        }
+        if ui
+            .button("2 minute run")
+            .on_hover_text(
+                "The game's single session (Trick Attack): two minutes from the level's start \
+                 to score all you can. When the clock runs out, the combo you're in still \
+                 counts once it lands. The best score for each level and character is kept.",
+            )
+            .clicked()
+        {
+            actions.push(Action::StartRun);
         }
     });
     ui.horizontal(|ui| {

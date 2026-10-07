@@ -63,12 +63,17 @@ skater is and what it's doing.
   when they bail or start a trick; "Special Trick" and its sound for
   specials; the coping knock going into a lip; the level's ambience; and the
   soundtrack (the Music box in the panel).
+- A 2 minute run (the panel's button): the game's single session, two
+  minutes from the level's start to score what you can. When the clock
+  runs out, the combo you're in still counts once it lands, then the
+  skater brakes to a stop and the score goes against your best for that
+  level and character (kept between runs).
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game
 
 - Not yet: wall rides (the game barely uses them), skitching, the
-  Simplified controls, goals and gameplay modes, and the level's
+  Simplified controls, goals and the other gameplay modes, and the level's
   other triggers (breakables, goal pickups).
 - Approximations of our own: the camera follows the game's camera
   update (a lagging focus, turning, the quick swing after vert, zooming

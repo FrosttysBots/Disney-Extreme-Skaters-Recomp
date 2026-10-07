@@ -121,6 +121,10 @@ struct Args {
     /// 90 along +X) instead of the level's start
     #[arg(long, requires = "screenshot", allow_hyphen_values = true)]
     skate_from: Option<String>,
+    /// For --skate: skate a two-minute run with this many seconds left on
+    /// its clock
+    #[arg(long, requires = "skate")]
+    run: Option<f32>,
     /// For --screenshot: also show what goals add later (pickups, goal
     /// pedestrians, warp portals)
     #[arg(long, requires = "screenshot")]
@@ -462,6 +466,19 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
         .collect()
 }
 
+/// A two-minute run (the game's single session).
+struct Run {
+    /// Seconds left on the clock.
+    left: f32,
+    /// Out of time with the last combo landed: seconds since, braking.
+    ending: Option<f32>,
+    /// Stopped, with the result up.
+    over: bool,
+}
+
+/// How long a run lasts (`StartGoal_TrickAttack time = 120`).
+const RUN_TIME: f32 = 120.0;
+
 /// A character's bones, each relative to its parent.
 type Pose = Vec<(Quat, Vec3)>;
 
@@ -547,6 +564,8 @@ struct App<'a> {
     sparks: sparks::Sparks,
     /// The gamepad's rumble.
     rumble: rumble::Rumble,
+    /// A two-minute run under way.
+    run: Option<Run>,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -619,6 +638,8 @@ impl<'a> App<'a> {
                     sound: true,
                     music: true,
                     rumble: true,
+                    run_clock: None,
+                    run_result: None,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                 },
@@ -635,6 +656,7 @@ impl<'a> App<'a> {
             audio: None,
             sparks: sparks::Sparks::new(),
             rumble: rumble::Rumble::new(),
+            run: None,
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -897,6 +919,9 @@ impl<'a> App<'a> {
     /// Starts or stops skating the character from where it stands.
     fn toggle_skate(&mut self) {
         self.skate_pose = None;
+        self.run = None;
+        self.model.character.run_clock = None;
+        self.model.character.run_result = None;
         self.blend_from = None;
         if self.skating.take().is_some() {
             self.model.character.skating = false;
@@ -975,6 +1000,80 @@ impl<'a> App<'a> {
         self.model.character.skating = true;
         self.model.character.playing = false;
         self.set_looking(false);
+    }
+
+    /// Starts a two-minute run (`StartGoal_TrickAttack time = 120`) from
+    /// where the character stands at the level's start.
+    fn start_run(&mut self) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(level) = &self.level else { return };
+        self.placement = level.home;
+        self.toggle_skate();
+        if self.skating.is_some() {
+            self.run = Some(Run {
+                left: RUN_TIME,
+                ending: None,
+                over: false,
+            });
+        }
+    }
+
+    /// Counts a two-minute run down. Out of time, the combo under way
+    /// still counts: once the skater's back on the ground with no combo,
+    /// the run ends (`EndOfRun`): the skater brakes to a stop and the
+    /// score goes against the best.
+    fn update_run(&mut self, dt: f32) {
+        let (Some(run), Some((skater, ..))) = (&mut self.run, &self.skating) else {
+            return;
+        };
+        self.model.character.run_clock = Some(run.left);
+        if run.over {
+            return;
+        }
+        run.left = (run.left - dt).max(0.0);
+        let bailing = matches!(
+            skater.action,
+            SkateAction::Bail
+                | SkateAction::BailFall { .. }
+                | SkateAction::BailManual
+                | SkateAction::BailGrind
+        );
+        match &mut run.ending {
+            None if run.left == 0.0
+                && skater.on_ground
+                && !bailing
+                && skater.combo_tricks.is_empty()
+                && skater.trick.is_none() =>
+            {
+                run.ending = Some(0.0)
+            }
+            Some(time) => {
+                *time += dt;
+                if (*time > 1.0 && skater.speed().abs() < 20.0) || *time > 5.0 {
+                    run.over = true;
+                    let key = format!(
+                        "{}.{}",
+                        self.level.as_ref().map_or("", |l| l.id.as_str()),
+                        self.model.character.current.map_or("", |i| self
+                            .model
+                            .character
+                            .characters[i]
+                            .id
+                            .as_str())
+                    );
+                    let best = self.settings.best.get(&key).copied().unwrap_or(0);
+                    let record = skater.score > best;
+                    if record {
+                        self.settings.best.insert(key, skater.score);
+                        self.settings.save();
+                    }
+                    self.model.character.run_result = Some((skater.score, best, record));
+                }
+            }
+            None => {}
+        }
     }
 
     /// Moves the skater by the keys held, picks its animation and follows
@@ -1061,7 +1160,17 @@ impl<'a> App<'a> {
             grab: input.grab || pad.grab,
             revert: input.revert || pad.revert,
         };
-        skater.auto_kick = self.model.character.auto_kick;
+        // The run's over: no more input, braking to a stop (`EndOfRun`).
+        let ended = self.run.as_ref().is_some_and(|r| r.ending.is_some());
+        let input = if ended {
+            Input {
+                brake: true,
+                ..Input::default()
+            }
+        } else {
+            input
+        };
+        skater.auto_kick = self.model.character.auto_kick && !ended;
         skater.update(input, physics, world, dt);
         self.sparks.update(skater, dt);
         if let Some(gilrs) = self.gamepads.as_mut() {
@@ -1512,6 +1621,7 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.skate(dt);
+        self.update_run(dt);
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -1588,6 +1698,7 @@ impl<'a> App<'a> {
                 ui::Action::LoadCharacter(i) => self.load_character(i),
                 ui::Action::LookAtCharacter => self.camera = camera_facing(self.placement),
                 ui::Action::ToggleSkate => self.toggle_skate(),
+                ui::Action::StartRun => self.start_run(),
             }
         }
         // Load after the "Loading" message has been on screen for a frame.
@@ -1854,7 +1965,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             .geometry(!args.clean, !args.clean && args.character.is_none()),
     );
 
-    let mut settings = Settings::default();
+    let mut settings = Settings {
+        read_only: true,
+        ..Settings::default()
+    };
     let mut app = App::new(&mut settings);
     app.model.levels = levels;
     app.model.data_path = Some(data_path.display().to_string());
@@ -1938,6 +2052,13 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     * Mat4::from_rotation_y(v[3].to_radians());
             }
             app.toggle_skate();
+            if let Some(left) = args.run {
+                app.run = Some(Run {
+                    left,
+                    ending: None,
+                    over: false,
+                });
+            }
             let script = args
                 .skate_keys
                 .as_deref()
@@ -1959,6 +2080,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     }
                 }
                 app.skate(1.0 / 60.0);
+                app.update_run(1.0 / 60.0);
             }
             camera = app.camera;
             if let Some((skater, _, chase)) = &app.skating {

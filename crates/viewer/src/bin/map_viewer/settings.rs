@@ -1,6 +1,7 @@
 //! Remembered choices (`%APPDATA%\desa-map-viewer\settings.txt`) and
 //! finding the game data on first run.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,10 @@ pub struct Settings {
     /// The id of the character last shown.
     pub last_character: Option<String>,
     pub speed: Option<f32>,
+    /// The best two-minute run scores, by `level.character`.
+    pub best: BTreeMap<String, u32>,
+    /// Never saved (screenshots).
+    pub read_only: bool,
 }
 
 fn settings_file() -> Option<PathBuf> {
@@ -40,6 +45,13 @@ impl Settings {
                     settings.last_character = Some(value.to_string())
                 }
                 "speed" => settings.speed = value.parse().ok(),
+                key if key.starts_with("best.") => {
+                    if let Ok(score) = value.parse() {
+                        settings
+                            .best
+                            .insert(key["best.".len()..].to_string(), score);
+                    }
+                }
                 _ => {}
             }
         }
@@ -48,6 +60,9 @@ impl Settings {
 
     /// Saves the settings; failures are ignored (they only cost convenience).
     pub fn save(&self) {
+        if self.read_only {
+            return;
+        }
         let Some(file) = settings_file() else { return };
         if let Some(dir) = file.parent() {
             let _ = fs::create_dir_all(dir);
@@ -64,6 +79,9 @@ impl Settings {
         }
         if let Some(speed) = self.speed {
             text += &format!("speed={speed}\n");
+        }
+        for (key, score) in &self.best {
+            text += &format!("best.{key}={score}\n");
         }
         let _ = fs::write(file, text);
     }
