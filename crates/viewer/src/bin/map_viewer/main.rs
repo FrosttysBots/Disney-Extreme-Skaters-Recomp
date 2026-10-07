@@ -8,6 +8,7 @@
 //! remembered between runs. Any of the playable characters can stand on a
 //! spawn point and play their animations.
 
+mod audio;
 mod settings;
 mod ui;
 
@@ -204,6 +205,8 @@ fn main() -> Result<()> {
 }
 
 struct LoadedLevel {
+    /// The level's archive name (`HUB`, `beach`...).
+    id: String,
     renderer: Renderer,
     /// Collision triangles, for keeping spawn cameras out of walls.
     collision: Vec<desa_viewer::collision::ColorVertex>,
@@ -341,6 +344,7 @@ fn load_level(
     };
     Ok((
         LoadedLevel {
+            id: info.id.clone(),
             renderer,
             collision: collision.unwrap_or_default(),
             nodes,
@@ -534,6 +538,9 @@ struct App<'a> {
     placement: Mat4,
     /// Skating: the skater, its constants and the chase camera's eye.
     skating: Option<(Skater, Physics, ChaseCamera)>,
+    /// The skater's sounds (none in screenshots, or without a sound
+    /// device).
+    audio: Option<audio::Audio>,
     /// The animation the character's time belongs to.
     shown_animation: usize,
     /// Skating: the pose shown (blended), and the pose being blended from
@@ -609,6 +616,7 @@ impl<'a> App<'a> {
             character: None,
             placement: Mat4::IDENTITY,
             skating: None,
+            audio: None,
             shown_animation: 0,
             skate_pose: None,
             blend_from: None,
@@ -670,6 +678,9 @@ impl<'a> App<'a> {
                 // one can be skated.
                 if self.skating.take().is_some() {
                     self.model.character.skating = false;
+                    if let Some(audio) = &mut self.audio {
+                        audio.stop();
+                    }
                     self.model.character.playing = true;
                     self.model.character.balance = None;
                     self.model.character.combo = None;
@@ -735,6 +746,41 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Loads the level's sounds for skating (with a window and a sound
+    /// device).
+    fn start_audio(&mut self) {
+        if self.gpu.is_none() {
+            return;
+        }
+        if self.audio.is_none() {
+            self.audio = audio::Audio::new();
+        }
+        let (Some(audio), Some(data), Some(level)) = (&mut self.audio, &mut self.data, &self.level)
+        else {
+            return;
+        };
+        let mut files = data
+            .sounds(&format!("{}.prg", level.id))
+            .unwrap_or_default();
+        files.extend(data.sounds("skater_sounds.prg").unwrap_or_default());
+        let program = level.behaviour.program();
+        let terrain = desa_viewer::sounds::TerrainSounds::new(program);
+        // Each rail's terrain (metal where it doesn't say).
+        let rail_terrain = level
+            .nodes
+            .rails
+            .iter()
+            .map(|r| {
+                r.terrain
+                    .and_then(|t| program.value(t))
+                    .and_then(|v| v.as_int())
+                    .and_then(|v| u16::try_from(v).ok())
+                    .unwrap_or(3)
+            })
+            .collect();
+        audio.load(files, terrain, rail_terrain);
+    }
+
     fn go_to_spawn(&mut self, index: usize) {
         self.stop_camera_path();
         if let Some(spawn) = self.level.as_ref().and_then(|l| l.nodes.spawns.get(index)) {
@@ -750,6 +796,9 @@ impl<'a> App<'a> {
         self.blend_from = None;
         if self.skating.take().is_some() {
             self.model.character.skating = false;
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
             self.model.character.playing = true;
             return;
         }
@@ -813,6 +862,7 @@ impl<'a> App<'a> {
             })
             .collect();
         skater.gap_triggers = desa_viewer::triggers::gaps(&level.nodes, program);
+        self.start_audio();
         self.stop_camera_path();
         let chase = ChaseCamera::behind(&skater, &physics);
         self.skating = Some((skater, physics, chase));
@@ -907,6 +957,11 @@ impl<'a> App<'a> {
         };
         skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
+        if let Some(audio) = &mut self.audio {
+            audio.update(skater);
+        } else {
+            skater.sounds.clear();
+        }
         self.placement = skater.placement();
         self.model.character.balance = skater.balance_meter();
         self.model.character.score = skater.score;
@@ -1067,6 +1122,9 @@ impl<'a> App<'a> {
         // stats belong to it).
         if self.skating.take().is_some() {
             self.model.character.skating = false;
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
             self.model.character.playing = true;
             self.model.character.balance = None;
             self.model.character.combo = None;
@@ -1074,6 +1132,9 @@ impl<'a> App<'a> {
         self.character = None;
         self.skating = None;
         self.model.character.skating = false;
+        if let Some(audio) = &mut self.audio {
+            audio.stop();
+        }
         self.model.character.balance = None;
         self.model.character.combo = None;
         self.model.character.current = None;

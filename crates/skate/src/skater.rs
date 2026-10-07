@@ -70,6 +70,31 @@ pub struct Input {
     pub revert: bool,
 }
 
+/// A moment the game plays a sound for, for whoever plays them (drained
+/// from [`Skater::sounds`]). Ground ones are on the terrain under the
+/// skater ([`Skater::terrain`]), rail ones on the rail's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkateSound {
+    /// An ollie off the ground, or off a rail.
+    Jump {
+        from_rail: bool,
+    },
+    /// Down on the ground.
+    Land,
+    /// Onto a rail.
+    RailOn,
+    /// A bail (`GeneralBail`'s `sound = bail_knee1`), and smacking into a
+    /// wall in one (`bodysmackA`).
+    Bail,
+    Smack,
+    /// A revert or a 180 slide (`PlayCessSound`).
+    Cess,
+    /// A gap scored (`HUD_jumpgap`).
+    Gap,
+    /// Put back somewhere by a teleporter (water's splash).
+    Teleport,
+}
+
 /// What the skater is doing, for picking animations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -310,6 +335,10 @@ pub struct Skater {
     pub spawns: Vec<(Vec3, f32)>,
     /// Print why the ground was lost, for debugging (off by default).
     pub trace: bool,
+    /// Sound moments since they were last taken (see [`SkateSound`]).
+    pub sounds: Vec<SkateSound>,
+    /// The terrain of the ground last stood on (`TERRAIN_...`).
+    pub terrain: u16,
     /// Trigger faces that move the skater (teleporters, water and the
     /// like, as the level's `TriggerScript`s do): their collision object's
     /// checksum, and where to and facing which way.
@@ -438,6 +467,8 @@ impl Skater {
             last_ground: position,
             spawns: Vec::new(),
             trace: false,
+            sounds: Vec::new(),
+            terrain: 0,
             teleports: HashMap::new(),
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
@@ -695,6 +726,7 @@ impl Skater {
             if let Some(&(position, heading)) = touched.iter().find_map(|o| self.teleports.get(o)) {
                 self.gaps.clear();
                 self.place(position, heading, p, world);
+                self.sounds.push(SkateSound::Teleport);
                 return;
             }
         }
@@ -717,6 +749,7 @@ impl Skater {
                 // Into the combo like a trick; rolling along with no combo
                 // going, it banks straight away.
                 self.last_gap = Some((name.clone(), score));
+                self.sounds.push(SkateSound::Gap);
                 self.message = Some((name.clone(), MESSAGE_TIME));
                 self.credit(Some((name, score)), false);
                 if surface == Surface::Ground && !self.manual {
@@ -749,6 +782,7 @@ impl Skater {
     /// (`BailBackward`), as `DoingTrickBail` and `YawBail` pick.
     fn start_bail(&mut self, action: Action, backwards: bool) {
         self.smacked = false;
+        self.sounds.push(SkateSound::Bail);
         let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
         if flat.length() > 10.0 {
             self.heading = flat.x.atan2(flat.z);
@@ -1075,6 +1109,7 @@ impl Skater {
     /// face the way the skater's going (`FlipAfter`), frontside or
     /// backside by the last spin's way.
     fn revert(&mut self) {
+        self.sounds.push(SkateSound::Cess);
         // Then a manual can carry the combo on while the revert plays
         // (`DoNextManualTrick FromAir`, `WaitAnimWhilstChecking AndManuals`),
         // or it lands.
@@ -1310,6 +1345,7 @@ impl Skater {
         self.credit(named, true);
         self.balance_trick = grind;
         self.balance_time = 0.0;
+        self.sounds.push(SkateSound::RailOn);
         self.grind = Some(Grind {
             segment: hit.segment,
             forwards,
@@ -1364,6 +1400,7 @@ impl Skater {
             let mut velocity = Vec3::new(cos * v.x + sin * v.z, v.y, -sin * v.x + cos * v.z);
             velocity.y += self.jump_speed(p);
             self.leave_rail(velocity, p, world);
+            self.sounds.push(SkateSound::Jump { from_rail: true });
             // An ollie off the rail (its animation in the air).
             self.ollied = true;
             return;
@@ -1590,6 +1627,7 @@ impl Skater {
                 true
             };
             self.set_action(Action::CessSlide { frontside });
+            self.sounds.push(SkateSound::Cess);
         }
         // A manual: up then down (or down then up) within the window
         // (the game's `ManualTricks`), balanced with up and down
@@ -1797,6 +1835,7 @@ impl Skater {
             self.velocity = velocity;
             self.on_ground = false;
             self.ollied = true;
+            self.sounds.push(SkateSound::Jump { from_rail: false });
             self.air_time = 0.0;
             // Off the ground by a unit, as the game lands the skater a unit
             // above it: standing exactly on the surface, the first line of
@@ -1919,6 +1958,7 @@ impl Skater {
                 self.position = hit.point;
                 self.last_ground = hit.point;
                 self.ground_flags = hit.flags;
+                self.terrain = hit.terrain;
                 self.up = hit.normal;
                 self.velocity = forward * speed;
                 self.follow_slope(input.crouch);
@@ -1973,6 +2013,7 @@ impl Skater {
         );
         if bailing_now && flailed.is_some() && !self.smacked {
             self.smacked = true;
+            self.sounds.push(SkateSound::Smack);
             let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
             if flat.length() > 10.0 {
                 self.heading = flat.x.atan2(flat.z);
@@ -2262,6 +2303,7 @@ impl Skater {
                 }
                 self.on_ground = true;
                 self.landing_soon = false;
+                self.sounds.push(SkateSound::Land);
                 let from_vert = self.vert.is_some();
                 self.vert = None;
                 self.lip_out = None;

@@ -35,3 +35,5 @@ rfd = "0.17.2"
 wgpu = "27"
 winit = "0.30.13"
 gilrs = "0.11.2"
+ngc_sound = { version = "0.1.0", path = "../ngc_sound" }
+rodio = { version = "0.22", default-features = false, features = ["playback"] }

@@ -34,6 +34,8 @@ pub struct RailSegment {
     pub end: Vec3,
     /// The rail's `Type` (Metal, Wood, Concrete...), as a name.
     pub kind: String,
+    /// Its `TerrainType` (`TERRAIN_METALSMOOTH`...), as a name's checksum.
+    pub terrain: Option<u32>,
 }
 
 pub struct Spawn {
@@ -235,6 +237,7 @@ impl LevelNodes {
                                 start: pos,
                                 end: end.into(),
                                 kind: kind.clone(),
+                                terrain: node.get(key("TerrainType")).and_then(Value::as_name),
                             });
                         }
                     }

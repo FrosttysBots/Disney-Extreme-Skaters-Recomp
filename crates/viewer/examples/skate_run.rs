@@ -96,6 +96,18 @@ fn main() {
         return;
     }
     let mut skater = Skater::new(Vec3::ZERO, 0.0);
+    // SOUNDS=1: a few terrains' sounds.
+    if std::env::var("SOUNDS").is_ok() {
+        let sounds = desa_viewer::sounds::TerrainSounds::new(&program);
+        println!("{} terrain sounds", sounds.len());
+        use desa_viewer::sounds::Moment;
+        for terrain in [0u16, 1, 8, 16, 22, 24] {
+            for moment in [Moment::Roll, Moment::Jump, Moment::Land, Moment::Grind] {
+                println!("{terrain} {moment:?}: {:?}", sounds.get(terrain, moment));
+            }
+        }
+        return;
+    }
     // TRICKLIST=1: the character's tricks and how to do them.
     if std::env::var("TRICKLIST").is_ok() {
         for line in tricks.trick_list() {

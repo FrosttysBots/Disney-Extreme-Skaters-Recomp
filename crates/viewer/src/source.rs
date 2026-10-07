@@ -432,6 +432,25 @@ impl GameData {
         characters
     }
 
+    /// Every sound (`sounds/dsp/.../NAME.dsp`) in archive `name` (e.g.
+    /// `hub.prg`, `skater_sounds.prg`), by its lowercase file name without
+    /// `.dsp`. None if there's no such archive.
+    pub fn sounds(&mut self, name: &str) -> Result<HashMap<String, Vec<u8>>> {
+        let Some(data) = self.read_archive(name)? else {
+            return Ok(HashMap::new());
+        };
+        let archive = Archive::parse(&data).with_context(|| format!("could not read {name}"))?;
+        let mut out = HashMap::new();
+        for e in archive.entries() {
+            let path = e.path().to_ascii_lowercase();
+            let file = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+            if let Some(stem) = file.strip_suffix(".dsp") {
+                out.insert(stem.to_string(), e.contents()?.into_owned());
+            }
+        }
+        Ok(out)
+    }
+
     pub fn load_character(&mut self, id: &str) -> Result<CharacterFiles> {
         let name = id.to_ascii_lowercase();
         let data = self

@@ -9,5 +9,6 @@ pub mod level;
 pub mod nodes;
 pub mod objects;
 pub mod renderer;
+pub mod sounds;
 pub mod source;
 pub mod triggers;

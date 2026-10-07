@@ -1,0 +1,9 @@
+[package]
+name = "ngc_sound"
+description = "Nintendo DSP ADPCM sounds (.dsp) from the GameCube game"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
