@@ -21,8 +21,8 @@ to that engine family too.
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals and balance, on any level |
-| Tricks | Air flips and grabs, grinds and manuals from each character's trick table, with combos and bails |
+| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals, lips and balance, on any level |
+| Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
 | Gameplay, menus, audio | Not started yet |
 
 Every format is checked against every file on the US disc (`GEXE52`):
@@ -105,8 +105,12 @@ front of them, and **Blink** makes them blink every few seconds (see
 [Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
 frames.
 
-**Skate** puts the character on the level: W pushes, S brakes, A/D steer,
-holding Space crouches and letting go ollies, holding E grinds rails,
+**Skate** puts the character on the level (an alpha: see
+[docs/alpha-testing.md](docs/alpha-testing.md) for how to test it and the
+full controls): W pushes, S brakes, A/D steer,
+holding Space crouches and letting go ollies, E grinds (ollie at a rail and
+press E: like the game, grinds start in the air, within half a second of the
+press),
 tapping W then S starts a manual, Q flips and F grabs in the air (with a
 direction: W, S, A, D), and Esc stops. Manuals balance with W and S, grinds
 with A and D, on a meter at the bottom of the screen; the combo and the
@@ -128,9 +132,38 @@ around takes over from wherever it is.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
-| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind, stop |
+| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind (in the air), stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
+| F + W / S / A / D | On the ground or in a manual: manuals 2 to 5 (each character has five) |
+| W / S / A / D with E | Onto a rail: grinds 2 to 5 (none: grind 1) |
 | Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
+| Two directions, then Q (or E in a manual) | With the special meter full: the character's special grab (or manual) |
+| E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
+| R as you land from vert | Revert (keeps the combo going into a manual) |
+| Tab | While skating: to the next spawn point |
+
+A gamepad works too while skating, laid out like the GameCube game: the
+left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
+X flips, B grabs, Y grinds, and the shoulder buttons revert. It rumbles
+where the game's does (ollies, landings, grinds, reverts, flails, bails);
+the panel's Rumble box turns that off, and the `pad_check` example
+checks that a pad can rumble.
+
+The panel's **2 minute run** is the game's single session (Trick Attack):
+two minutes from the level's start, the last combo counting once it
+lands, and the best score for each level and character kept in the
+settings file; Replay plays the run back as it was shown. **S-K-A-T-E
+letters** plays the level's letters goal: its settings come from running
+the level's `<level>_AddGoal_SKATE` script and catching what it hands
+`GoalManager_AddGoal` (the time, the letters' objects, the restart node),
+the letters spin and bob with the goal's own scripts, and each is picked
+up within 8 feet, as `SkateLetter_InitLetter` sets. `--letters` with
+`--skate` screenshots it. The **High Score** and **Pro Score goals** read
+`AddGoal_HighScore` and `AddGoal_ProScore` the same way: the score (a
+global such as `pride_highscore_score`), the time and the goal's name;
+`--score-goal high|pro` screenshots one. `--run SECONDS`
+with `--skate` screenshots one with that much time left, and `--replay-at
+SECONDS` the replay of it that far in.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -309,6 +342,14 @@ Besides rails and spawns, a level's node array places objects:
   whose `LoadAnim` lines give each animation a role. The viewer plays the
   `Ped_Guide_Idle1` or `Ped_M_Idle1` one. Some sets borrow animations
   (birds use Zazu's; Tarzan's Buzz uses Buzz's from `anims_buzz.prg`).
+
+While skating, the objects' scripts see the skater: birds, bats and crows
+take off when it comes within their `Obj_SetInnerRadius` (the scripts'
+`SkaterInRadius` exceptions), flying to their next perch or away, with
+their wing-flap and squawk sounds; objects a script creates (the Hub's
+flying birds) appear and run their own scripts. Other pedestrians (Scar,
+hyenas, wildebeest) are solid: the skater bumps off them and flails, as
+off a wall.
 
 All 1,795 object nodes on the disc load. Objects are turned by `-heading`
 about Y, which is what mirroring Z does to a rotation; that's the opposite
@@ -554,11 +595,26 @@ of 425 a second, covers about 1,000 units in three seconds, ollies 57
 units high and grinds the Hub's long rails.
 
 [docs/physics-notes.md](docs/physics-notes.md) maps every function read,
-with addresses. Not yet: transfers, lips, spins and special tricks, and
-the game's own scoring (combos score points times tricks for now)
-and bails, moving objects, and a frame-by-frame check against Dolphin.
-Turning rates are read as radians a second and the camera distances as
-feet, both guesses for now.
+with addresses. Combos score as the game does: repeats degrade (100% down
+to 50%), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
+earn points every frame, and the total is the points times the number of
+tricks. The special meter fills with points; full, each character's
+special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
+manual right, left, grind for "Happy Trails") are on until it drains.
+The skater pushes by itself (the game's AutoKick option, on by default:
+untick it to push with W), turns, crouches, flies and lands with the
+game's own animation choices, and bails landing sideways at speed. The
+chase camera uses the game's camera settings, stays square to the ramp in
+vert air, and pulls in rather than ending up behind a wall.
+Lip tricks stall on the coping of quarter pipes with a rail along it:
+press E (with a direction for other lips) as you launch off the lip, then
+balance with A and D. Holding R going up a quarter pipe spine-transfers
+to the ramp behind. Gaps score from the levels' trigger scripts, and
+teleporters (like the Hub's harbour water) put the skater back. Not yet:
+moving objects, and a frame-by-frame check against Dolphin.
+Turning rates are radians a second (the steering code turns by the rate
+times the frame time), and the camera distances are feet (the camera
+code multiplies them by 12).
 
 ## Roadmap
 
@@ -574,9 +630,14 @@ feet, both guesses for now.
    skater.
 4. **Skater physics.** The game's constants, and its update code from
    `main.dol` for the ground, walls, air, landing, grinding, vert air,
-   manuals and balance (done; wall rides are unused in this game). Next: a
-   frame-by-frame check against Dolphin, then lips and transfers.
-5. **Gameplay.** Tricks, scoring, goals, game modes, UI and audio.
+   manuals, lips and balance (done; wall rides are unused in this game).
+   Spine transfers too. Next: a frame-by-frame check against Dolphin.
+5. **Tricks and scoring.** Each character's air tricks, grinds, manuals,
+   lips and specials from the trick tables, reverts, the game's combo
+   scoring and special meter, its animation choices, a chase camera and
+   gamepad controls: skating is at an alpha (done; see
+   [docs/alpha-testing.md](docs/alpha-testing.md)).
+6. **Gameplay.** Goals, game modes, the front end, UI and audio.
 
 ## Reverse-engineering setup
 

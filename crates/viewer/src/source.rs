@@ -432,6 +432,156 @@ impl GameData {
         characters
     }
 
+    /// A character's voice lines (`streams/streams.wad`, indexed by
+    /// `streams.hed`: `\Streams\pros\jessie\jessie_bail01`...): each line's
+    /// kind (`bail`, `trick`) and its `.dsp` sound.
+    pub fn voices(&mut self, character: &str) -> Result<Vec<(String, Vec<u8>)>> {
+        let prefix = format!("\\streams\\pros\\{}\\", character.to_ascii_lowercase());
+        let Some(index) = self.stream_file("streams.hed", None)? else {
+            return Ok(Vec::new());
+        };
+        // Entries: offset, size (little-endian), and a name padded to 4.
+        let mut lines = Vec::new();
+        let mut at = 0;
+        while at + 8 <= index.len() {
+            let offset = u32::from_le_bytes(index[at..at + 4].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(index[at + 4..at + 8].try_into().unwrap()) as u64;
+            at += 8;
+            let Some(end) = index[at..].iter().position(|&b| b == 0) else {
+                break;
+            };
+            let name = String::from_utf8_lossy(&index[at..at + end]).to_ascii_lowercase();
+            at = (at + end + 4) & !3;
+            if name.is_empty() {
+                break;
+            }
+            if let Some(rest) = name.strip_prefix(&prefix) {
+                let kind: String = rest
+                    .rsplit('_')
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .filter(|c| !c.is_ascii_digit())
+                    .collect();
+                lines.push((kind, offset, size));
+            }
+        }
+        // From a disc image the whole file is read once; from a folder, just
+        // each line.
+        let whole = if matches!(self, GameData::Disc { .. }) && !lines.is_empty() {
+            self.stream_file("streams.wad", None)?
+        } else {
+            None
+        };
+        let mut out = Vec::new();
+        for (kind, offset, size) in lines {
+            let data = match &whole {
+                Some(whole) => whole
+                    .get(offset as usize..(offset + size) as usize)
+                    .map(<[u8]>::to_vec),
+                None => self.stream_file("streams.wad", Some((offset, size)))?,
+            };
+            if let Some(data) = data {
+                out.push((kind, data));
+            }
+        }
+        Ok(out)
+    }
+
+    /// A file of the `streams` folder, or a range of it.
+    fn stream_file(&mut self, name: &str, range: Option<(u64, u64)>) -> Result<Option<Vec<u8>>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let data = match self {
+            GameData::Disc { disc, .. } => {
+                let path = disc
+                    .fst()
+                    .files()
+                    .find(|n| n.path.to_ascii_lowercase() == format!("streams/{name}"))
+                    .map(|n| n.path.clone());
+                let Some(path) = path else { return Ok(None) };
+                let whole = disc.read_file(&path)?;
+                match range {
+                    Some((offset, size)) => whole
+                        .get(offset as usize..(offset + size) as usize)
+                        .map(<[u8]>::to_vec),
+                    None => Some(whole),
+                }
+            }
+            GameData::Folder(dir) => {
+                let Some(path) = dir.parent().map(|d| d.join("streams").join(name)) else {
+                    return Ok(None);
+                };
+                let Ok(mut file) = File::open(&path) else {
+                    return Ok(None);
+                };
+                match range {
+                    Some((offset, size)) => {
+                        file.seek(SeekFrom::Start(offset))?;
+                        let mut buf = vec![0; size as usize];
+                        file.read_exact(&mut buf)?;
+                        Some(buf)
+                    }
+                    None => Some(fs::read(&path)?),
+                }
+            }
+        };
+        Ok(data)
+    }
+
+    /// A streamed music track (`music/dtk/NAME.dtk`, ignoring case), or
+    /// none if it isn't there.
+    pub fn music(&mut self, name: &str) -> Result<Option<Vec<u8>>> {
+        let file = format!("{}.dtk", name.to_ascii_lowercase());
+        match self {
+            GameData::Disc { disc, .. } => {
+                let found = disc
+                    .fst()
+                    .files()
+                    .find(|n| {
+                        let p = n.path.to_ascii_lowercase();
+                        p.starts_with("music/") && p.ends_with(&format!("/{file}"))
+                    })
+                    .map(|n| n.path.clone());
+                match found {
+                    Some(path) => Ok(Some(disc.read_file(&path)?)),
+                    None => Ok(None),
+                }
+            }
+            GameData::Folder(dir) => {
+                // The archives' folder is `.../files/pre`; music is beside it.
+                let Some(music) = dir.parent().map(|d| d.join("music").join("dtk")) else {
+                    return Ok(None);
+                };
+                let found = fs::read_dir(&music).ok().and_then(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(&file))
+                        .map(|e| e.path())
+                });
+                Ok(found.map(fs::read).transpose()?)
+            }
+        }
+    }
+
+    /// Every sound (`sounds/dsp/.../NAME.dsp`) in archive `name` (e.g.
+    /// `hub.prg`, `skater_sounds.prg`), by its lowercase file name without
+    /// `.dsp`. None if there's no such archive.
+    pub fn sounds(&mut self, name: &str) -> Result<HashMap<String, Vec<u8>>> {
+        let Some(data) = self.read_archive(name)? else {
+            return Ok(HashMap::new());
+        };
+        let archive = Archive::parse(&data).with_context(|| format!("could not read {name}"))?;
+        let mut out = HashMap::new();
+        for e in archive.entries() {
+            let path = e.path().to_ascii_lowercase();
+            let file = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+            if let Some(stem) = file.strip_suffix(".dsp") {
+                out.insert(stem.to_string(), e.contents()?.into_owned());
+            }
+        }
+        Ok(out)
+    }
+
     pub fn load_character(&mut self, id: &str) -> Result<CharacterFiles> {
         let name = id.to_ascii_lowercase();
         let data = self

@@ -39,6 +39,13 @@ struct Kind {
     character: Character,
     /// Animation index by role checksum.
     roles: HashMap<u32, usize>,
+    /// How far it reaches out from its feet (most of its vertices: not a
+    /// tail or an outstretched arm) and how tall it is.
+    radius: f32,
+    height: f32,
+    /// Something the skater bumps into: not a bird or a bat, which fly
+    /// off instead.
+    solid: bool,
 }
 
 struct Member {
@@ -65,6 +72,22 @@ impl Crowd {
 
     pub fn is_empty(&self) -> bool {
         self.members.is_empty()
+    }
+
+    /// Where each solid member stands now (not those gone), how far it
+    /// reaches and how tall it is.
+    pub fn footprints(&self) -> impl Iterator<Item = (Vec3, f32, f32)> + '_ {
+        self.members.iter().filter_map(|m| {
+            let (scale, _, position) = m.placement.to_scale_rotation_translation();
+            if scale.x < 0.01 {
+                return None;
+            }
+            let kind = &self.kinds[m.kind];
+            if !kind.solid {
+                return None;
+            }
+            Some((position, kind.radius * scale.x, kind.height * scale.y))
+        })
     }
 
     pub fn set_placement(&mut self, member: usize, placement: Mat4) {
@@ -359,7 +382,35 @@ fn pedestrian(node: &ObjectNode, files: &LevelFiles, sets: &AnimationSets) -> Re
         .enumerate()
         .map(|(i, (name, _))| (qb::checksum(name), i))
         .collect();
-    Ok(Kind { character, roles })
+    let mut reach: Vec<f32> = character
+        .mesh
+        .vertices
+        .iter()
+        .map(|v| glam::Vec2::new(v.position[0], v.position[2]).length())
+        .collect();
+    reach.sort_by(f32::total_cmp);
+    let radius = reach
+        .get(reach.len() * 8 / 10)
+        .copied()
+        .unwrap_or(15.0)
+        .clamp(8.0, 120.0);
+    let height = character
+        .mesh
+        .vertices
+        .iter()
+        .map(|v| v.position[1])
+        .fold(0.0, f32::max)
+        .max(20.0);
+    let solid = !["bird", "crow", "bat", "gull"]
+        .iter()
+        .any(|flier| skeleton_name.contains(flier));
+    Ok(Kind {
+        character,
+        roles,
+        radius,
+        height,
+        solid,
+    })
 }
 
 /// Where to look at an object from: in front of it and a little above.

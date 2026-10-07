@@ -23,7 +23,9 @@ fn main() {
     for file in data.global_scripts().unwrap() {
         program.add(&file).unwrap();
     }
-    let physics = Physics::new(&program, &Stats::of(&program, "jessie"));
+    let stats = Stats::of(&program, "jessie");
+    let physics = Physics::new(&program, &stats);
+    let tricks = skate::TrickBook::new(&program, "jessie", &stats);
     let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
     // Steep vert faces, near the top of quarter pipes, spread out.
     let mut ramps: Vec<(Vec3, Vec3)> = Vec::new();
@@ -70,16 +72,99 @@ fn main() {
         }
         let into = -out;
         let mut skater = Skater::new(ground.point, into.x.atan2(into.z));
+        if std::env::var("STARTS").is_ok() {
+            println!(
+                "start {:.0},{:.0},{:.0},{:.0}",
+                ground.point.x,
+                ground.point.y,
+                ground.point.z,
+                into.x.atan2(into.z).to_degrees()
+            );
+        }
         skater.velocity = into * 650.0;
+        skater.tricks = tricks.clone();
+        // Coasting up (holding up at the lip breaks out of vert; BREAK=1
+        // holds it).
         let push = Input {
-            push: true,
+            push: std::env::var("BREAK").is_ok(),
             ..Input::default()
         };
+        // With LIPS set, press grind at the lip: a lip trick on the coping.
+        let lips = std::env::var("LIPS").is_ok();
+        let mut lipped = None;
         let mut top = ground.point.y;
         let mut airborne = false;
         let mut landed_at = None;
         for _ in 0..300 {
-            skater.update(push, &physics, &world, 1.0 / 60.0);
+            // With REVERT set, revert pressed just before landing.
+            let reverting = std::env::var("REVERT").is_ok();
+            if reverting && airborne {
+                // Pressed as it's about to land (within the game's 200 ms).
+                let press = skater.landing_soon();
+                skater.update(
+                    Input {
+                        revert: press,
+                        ..Input::default()
+                    },
+                    &physics,
+                    &world,
+                    1.0 / 60.0,
+                );
+                if skater.on_ground {
+                    let names: Vec<_> = skater
+                        .combo_tricks
+                        .tricks
+                        .iter()
+                        .map(|t| t.name.clone())
+                        .collect();
+                    for _ in 0..60 {
+                        skater.update(Input::default(), &physics, &world, 1.0 / 60.0);
+                    }
+                    println!(
+                        "  landed: {:?}, combo {names:?}, a second later banked {} ({:?})",
+                        skater.action,
+                        skater.score,
+                        skater.last_combo.as_ref().map(|c| c.total)
+                    );
+                    break;
+                }
+                continue;
+            }
+            // With SPINE set, the spine button held all the way.
+            let spine = std::env::var("SPINE").is_ok();
+            let input = if lips && !skater.on_ground {
+                Input {
+                    grind: true,
+                    ..Input::default()
+                }
+            } else {
+                Input {
+                    revert: spine,
+                    ..push
+                }
+            };
+            skater.update(input, &physics, &world, 1.0 / 60.0);
+            if let Some(lip) = &skater.lip {
+                lipped.get_or_insert(lip.trick.name.clone());
+            }
+            if lips && !airborne && !skater.on_ground {
+                // At takeoff: the nearest rail to the lip.
+                let at = skater.position;
+                let nearest = world
+                    .rails
+                    .segments
+                    .iter()
+                    .map(|r| {
+                        let d = r.end - r.start;
+                        let t = ((at - r.start).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                        (r.start + d * t).distance(at)
+                    })
+                    .fold(f32::MAX, f32::min);
+                println!(
+                    "  took off at {at:.0}, vert {}, nearest rail {nearest:.0} away",
+                    skater.vert.is_some()
+                );
+            }
             top = top.max(skater.position.y);
             if !skater.on_ground {
                 airborne = true;
@@ -89,6 +174,18 @@ fn main() {
             if skater.action == Action::Landing && landed_at.is_some() {
                 break;
             }
+        }
+        if std::env::var("SPINE").is_ok() {
+            let transferred = skater
+                .combo_tricks
+                .tricks
+                .iter()
+                .chain(skater.last_combo.iter().flat_map(|c| c.combo.tricks.iter()))
+                .any(|t| t.name == "Spine Transfer");
+            println!(
+                "  spine transfer: {transferred}, landed at {:?}",
+                landed_at.map(|p| p.round())
+            );
         }
         // In front of the ramp's face, or behind it (the deck)?
         let side = landed_at.map(|p| (p - *centre).dot(out));
@@ -111,6 +208,28 @@ fn main() {
             skater.update(Input::default(), &physics, &world, 1.0 / 60.0);
         }
         let after = skater.position;
+        if lips {
+            // Then let it ride: off the lip and back down.
+            let mut held = 0;
+            let mut outcome = None;
+            for _ in 0..600 {
+                skater.update(Input::default(), &physics, &world, 1.0 / 60.0);
+                held += usize::from(skater.lip.is_some());
+                if skater.on_ground && skater.lip.is_none() && held > 0 {
+                    outcome = Some(skater.action);
+                    break;
+                }
+            }
+            println!(
+                "ramp at {:.0} {:.0} {:.0}: lip {lipped:?}, held {held} frames, then {outcome:?}, score {} / last combo {:?}",
+                centre.x,
+                centre.y,
+                centre.z,
+                skater.score,
+                skater.last_combo.as_ref().map(|c| (c.total, c.bailed))
+            );
+            continue;
+        }
         println!(
             "ramp at {:.0} {:.0} {:.0}: rose {:.0} above the ground, {verdict}; 2 s later {:.0} above the ground, {:.0} out, {}",
             centre.x,

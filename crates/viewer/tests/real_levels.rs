@@ -62,9 +62,27 @@ fn real_level_camera_paths() {
         let mut scripts = data.global_scripts().unwrap();
         scripts.extend(files.scripts.iter().cloned());
         let mut behaviour = Behaviour::new(&nodes, &scripts);
+        // The S-K-A-T-E letters goal, where the level has the letters.
+        let has_letters = nodes
+            .objects
+            .iter()
+            .any(|o| o.name == qb::checksum("TRG_Goal_Letter_S"));
+        let letters = desa_viewer::goals::skate_letters(behaviour.program(), &level.id);
+        println!("{}: letters {has_letters}, goal {letters:?}", level.id);
+        for pro in [false, true] {
+            let goal = desa_viewer::goals::score_goal(behaviour.program(), &level.id, pro);
+            println!("{}: score goal {goal:?}", level.id);
+            if level.id != "SkateShop" {
+                assert!(goal.is_some_and(|g| g.score >= 10_000), "{}", level.id);
+            }
+        }
+        if has_letters {
+            let goal = letters.expect("a letters goal");
+            assert!(goal.letters.iter().all(|l| behaviour.object(*l).is_some()));
+        }
         let mut objects = built;
         for step in 0..600 {
-            behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0);
+            behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false);
         }
         let movers = (0..nodes.objects.len())
             .filter(|&i| behaviour.position(i).distance(nodes.objects[i].position) > 10.0)

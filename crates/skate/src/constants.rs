@@ -175,11 +175,33 @@ pub struct Physics {
     /// (`GrindParams`, by the rail balance stat).
     pub manual_balance: BalanceParams,
     pub grind_balance: BalanceParams,
+    /// Balancing lip tricks (`LipParams`, by the lip balance stat).
+    pub lip_balance: BalanceParams,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
     pub camera_above: f32,
     pub camera_fov: f32,
+    /// How far it pitches down from level (`Tilt`, radians): it looks
+    /// along its heading tipped down, not at the skater, who sits a little
+    /// below the middle of the view.
+    pub camera_tilt: f32,
+    /// How fast it turns and follows, a frame: `slerp` (and in vert air
+    /// `vert_air_slerp`), `lerp_xz` and `lerp_y` (`vert_air_lerp_...`).
+    pub camera_slerp: f32,
+    pub camera_vert_air_slerp: f32,
+    pub camera_lerp_xz: f32,
+    pub camera_lerp_y: f32,
+    pub camera_vert_air_lerp_xz: f32,
+    pub camera_vert_air_lerp_y: f32,
+    /// Turning just after landing from vert air (for a sixth of a second).
+    pub camera_vert_air_landed_slerp: f32,
+    /// Zooming: how fast, and how far in or out during a trick in vert
+    /// air, on a rail and on a lip (times `behind`).
+    pub camera_zoom_lerp: f32,
+    pub camera_big_air_trick_zoom: f32,
+    pub camera_grind_zoom: f32,
+    pub camera_lip_trick_zoom: f32,
 }
 
 impl Physics {
@@ -244,9 +266,22 @@ impl Physics {
             regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
             manual_balance: BalanceParams::new(program, "ManualParams", stats),
             grind_balance: BalanceParams::new(program, "GrindParams", stats),
+            lip_balance: BalanceParams::new(program, "LipParams", stats),
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),
+            camera_tilt: camera_value("Tilt", 0.18),
+            camera_slerp: camera_value("slerp", 0.04),
+            camera_vert_air_slerp: camera_value("vert_air_slerp", 0.04),
+            camera_lerp_xz: camera_value("lerp_xz", 0.25),
+            camera_lerp_y: camera_value("lerp_y", 0.75),
+            camera_vert_air_lerp_xz: camera_value("vert_air_lerp_xz", 1.0),
+            camera_vert_air_lerp_y: camera_value("vert_air_lerp_y", 1.0),
+            camera_vert_air_landed_slerp: camera_value("vert_air_landed_slerp", 0.375),
+            camera_zoom_lerp: camera_value("zoom_lerp", 0.0625),
+            camera_big_air_trick_zoom: camera_value("big_air_trick_zoom", 0.7),
+            camera_grind_zoom: camera_value("grind_zoom", 1.0),
+            camera_lip_trick_zoom: camera_value("lip_trick_zoom", 1.25),
         }
     }
 }

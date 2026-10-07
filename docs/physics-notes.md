@@ -263,7 +263,23 @@ on-ground update switches on.
   ramp is turned up and along it keeping its length, the skater starts
   3 out from the lip and stays in the ramp's vertical plane, and the
   ramp is left to landing; it comes back down fakie, as without a spin.
-  Not ported: transfers, the spin axis, `skater_autoturn_vert_angle`,
+  Spine transfers (0x800F1CD8, with the spine button held, `Held R2`
+  in `Airborne`): a line 4000 down half a unit in front finds the ramp
+  being left (vert faces only); lines down from 10 to 500 behind, in
+  steps of 6, find a vert face facing the other way; the target is that
+  point, no lower than the skater. Unless the two face the same way and
+  lie within 24, the velocity turns straight up (0x80009C70). Simulating
+  the rise and fall frame by frame back to this height gives the time
+  (less two frames, at least 0.1 s); the transfer fails if crossing in
+  that time needs more than the skater's speed (beyond 24) or a line
+  across at its height hits anything. Otherwise the horizontal speed is
+  the distance over the time (`+0xC4`), the target goes in `+0x3420`
+  and `SkaterAwardTransfer` scores "Spine Transfer", 250 with no
+  degrade, and plays `SpineTransfer`. Ported: all of this; the skater
+  then comes down in the far ramp's plane. Our own: the ramp being left
+  is also looked for 3 and 6 out (a skater can leave a hair past the
+  face).
+  Not ported: the spin axis, `skater_autoturn_vert_angle`,
   `Physics_Vert_hang_Stat`. On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).
@@ -305,8 +321,8 @@ on-ground update switches on.
   30 degrees) and bailing otherwise (`FiftyFiftyFall`). Manuals start
   with up then down (or down then up) within 400 ms (`ManualTricks`).
   Ported: all of that, the combo carrying the lean over until a landing
-  without a manual; `SkateInAble` approximated, and bails as a 1.5 s
-  stop. Not ported: lips, the other control scheme, special manuals.
+  without a manual; `SkateInAble` approximated, and bails lasting their
+  fall and get-up animations. Not ported: lips, the other control scheme, special manuals.
 - **Tricks** are scripts. `AirTricks` (`airtricks.q`) maps a button and a
   direction (`AirTrickLogic`, within 400 ms) to a slot (`Air_SquareD`);
   the profile's `default_trick_mapping` (`JessieTricks`) puts a trick in
@@ -318,8 +334,123 @@ on-ground update switches on.
   way in, names it halfway, comes out if the button is let go after 60%,
   and otherwise holds `idle` (tweaking) until it is, then plays `anim`
   backwards. Ported for the default controls, without spins, specials,
-  extras, tweak points or sounds. Scoring is the game's own code (not
-  read yet); combos score the sum times the count for now.
+  extras, tweak points or sounds.
+- **Scoring.** The scripts' `SetTrickName`, `SetTrickScore` and `Display`
+  are skater commands (the dispatcher around 0x80112C04): `Display` hands
+  the trick to the score object (0x800B05BC) with flags (`BlockSpin` 2,
+  `NoDegrade` 0x40...), and the spin so far (skater `+0x3544`, degrees)
+  to 0x800B0A00, which counts 180s as `(degrees + spin_count_slop) / 180`
+  (slop 60) on the latest trick, never down. Each trick records how many
+  times the same trick came before it in the combo. 0x800B124C totals
+  them: `score * degrade[repeats] * spin / 200`, with degrade 100, 90, 80,
+  70, 60, 50 (percent, 0x800B1658) and spin 2, 3, 4, 6, 8, 10 (halves,
+  0x800B1630); the spin factor is set by the combo's first trick or the
+  first after a `BlockSpin` one (grinds and manuals) and carries on to
+  the tricks after it. The multiplier (`+0x58`) goes up one per trick;
+  the combo scores the sum times it, and the same difference feeds the
+  special meter (`+0x64`, capped at 3000). Tweaks (0x800B0BA0) add points
+  straight to the latest trick each frame: the grind update adds the
+  grind's `SetGrindTweak` (7, 36 for specials; stored at `+0x3AC4`), the
+  balance update the trick's `DoBalanceTrick Tweak` (1 in a manual, 5 for
+  specials), and a held grab its `GrabTweak` (`GRABTWEAK_MEDIUM`, 20).
+  The special meter (score object `+0x64`, full flag `+0x68`): with
+  `NewSpecial = 1` (PHYSICS.q) it gains whatever the combo's total gains
+  as it's recomputed, fills at 3000 (`0xBB8`) and then allows specials;
+  each frame (0x800AFCF0) it drains 50 a second, or 200 while full; a bail
+  empties it. Specials are `TripleInOrder` combinations (two directions
+  then a button within 400 ms): each character's slots come from the goal
+  that unlocks them (`goal_get_special_trick_display_text`: Jessie's grab
+  is `SpAir_D_R_Square`, her manual `SpMan_R_L_Triangle`, her lip
+  `SpLip_L_D_Triangle`), filled by `Trick_<name>SpGrab`, `...SpManual`,
+  `...SpLip`. Special grabs tweak 30 a frame (`GRABTWEAK_SPECIAL`),
+  special manuals 5. Ported, with every special unlocked (the special lip
+  too), without `NoDegrade`.
+- **Lips.** State 3 (0x80103418) is the lip, not a wall ride. Grind start
+  (0x80108470) turns a rail into a lip when the skater is rising, flat
+  against the ramp (matrix up Y under `sin(LipPlayerHorizontalAngle)`,
+  47 degrees), facing up, on a steep ramp (ground normal Y under
+  `cos(LipRampVertAngle)`, 68.5) and not twisted (side Y under
+  `sin(LipAllowAngle)`, 35, or `LipAllowAngle_Override`, 60, for flagged
+  rail nodes): velocity zeroed, state 3, at the rail point, and the
+  `LipTrick` script with the `Lip_Triangle` slot's params. `LipTrick`
+  waits five frames for `SpecialLipTricks` (two directions then Triangle
+  within 1000 ms) or `LipTricks` (`{ Press, Left, 500 }` and so on, slots
+  `Lip_TriangleL`...), else goes on to `LipMacro2`: way-in animation,
+  then balancing (`LipParams`, Right and Left, the range animation played
+  backwards along the meter) with `TweakTrick 10` a frame. Ollying ends
+  it with `LipOut` (`NoOllie` tricks) or `OllieLipOut`; off the meter one
+  way `LipOut`, the other a spine transfer if the deck's skateable or
+  `LipBail`. `LipOut` plays the way out and puts the skater back in the
+  air a unit up and out, turned to drop back in. Ported: lips from vert
+  air at coping rails (the angle tests approximated by vert air rising
+  at a level rail), the trick choice, balance, tweaks and the ways off,
+  without spine transfers (the unsafe side bails) and lip combos. On the
+  Hub, every quarter pipe with a coping rail lips
+  (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`).
+- **Animations and landing rules** (`TRICKS.q`). `OnGroundAI` plays
+  `StandTurnLeft`/`Right` then their `...Idle` loops while steering
+  (`CrouchTurn...` crouched), `CrouchIdle` crouched, and otherwise
+  `StandIdle`, with `PushCycle1`/`2` while pushing (`just_coasting`).
+  `GroundGone` plays `Stand2InAir`; `Airborne` holds `AirTurnLeft`/`Right`
+  while steering, loops `AirIdle`, and stretches the legs
+  (`StretchLegsInit`) with under 0.2 s of air left. `Land` bails a
+  landing faster than 500 that's 60 to 120 degrees off the way the skater
+  was going (`YawBail`), and pitch and roll bails; `Land2` plays
+  `LandBackward1`/`2` landing backwards (fakie), `LandSketchy` with a
+  "Sketchy" message 45 to 60 degrees off after 0.5 s in the air (0.75
+  crouched), `LandSmall` or `CrouchBumpDown` after under 0.2 s, and
+  `CrouchBumpDown` or `Land1`/`2` otherwise. Pushing needs the
+  controller's AutoKick option (`+0x3A38`, set by `AutoKickOn`): on, the
+  can-push test (0x800F43F0) passes under the kick speed with no button.
+  A push, a landing, an ollie and a bail play through before anything
+  less important takes over (the scripts wait on `AnimFinished`), and
+  `DoAPush` runs a whole `PushCycle` before coasting. `GeneralBail` turns
+  the skater to face its velocity (`TurnToFaceVelocity`) and
+  `DoingTrickBail` falls forwards (`Bail1` or `Bail2`, at random) or,
+  landing backwards, backwards (`BailBackward`), the bail lasting the
+  fall and the get-up. Crouching runs `DoCrouch_slope`: `CrouchIdle`,
+  or `CrouchBumpUp`/`Down` when the slope changes by more than 5 degrees
+  in a frame (never the `Crouch` animation, which some characters have
+  for another skeleton). Landing backwards, `Land2`'s `FlipAndRotate`
+  turns the skater round to face the way it's going and flips its stance
+  (`Flipped`), so it rides switch: the ground turn animations swap, and
+  the game draws the skeleton mirrored through each bone's mirror
+  partner (`.ske`). Every `PlayAnim` blends from the last pose over its
+  `BlendPeriod`: 0.3 seconds usually, 0.1 into landings, 0.03 into
+  flails, none into an ollie, a backwards landing or a bail's get-up.
+  Ported: all of these (the skate crate's `anims` module picks them,
+  with priorities, play-through and blend periods; the viewer blends and
+  mirrors), AutoKick on by default, and the yaw bail; not the pitch and
+  roll bails.
+- **Trigger faces** (flag `0x40`) belong to level geometry whose node has
+  a `TriggerScript`, run when the skater touches them. Teleporters end a
+  few calls down in a restart named as `node =` (the Hub harbour's water
+  runs `Object03c_DOIT`, `Teleporter_water node = TRG_WaterStart`); gaps
+  run `StartGap GapID = X flags = [ CANCEL_GROUND ]` and `EndGap GapID = X
+  text = "Chain Link Gap" score = 100`, and the gap scores as a trick in
+  the combo if nothing its flags rule out happened in between
+  (`CANCEL_GROUND`, `CANCEL_AIR`, `PURE_AIR`, `REQUIRE_RAIL`,
+  `REQUIRE_LIP`). Ported: teleporters and gaps, the scripts read without
+  running them (`desa_viewer::triggers`). Our own rules: gaps fire on
+  crossing a trigger, ends before starts, and only after 50 units across
+  (start and end pads lie together for gaps that go both ways). Not yet:
+  the other trigger scripts (breakables, goals, sounds).
+- **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
+  the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
+  none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left
+  `Grind5` (`Grind1_180`... when turning 180 onto the rail, not ported).
+  `ManualTricks` and `GroundManualTrickBranches` (`manualtricks.q`) start
+  or branch to `Manual2` to `5` with Circle and a direction (400 ms);
+  up-down is `Manual1`. Each trick names its in and range animations
+  (`InitAnim`, `anim` or `BalanceAnim`), played along the balance meter.
+  Ported.
+- **Reverts.** Landing from vert, `Land2` sets the `Reverts` extra
+  tricks (`{ Press, R2, 200 }` and `L2`, slots `ExtraSlot1`/`2`, both
+  `Trick_Revert`) for `RevertTime = 5`. `Revert` scores 100 (`FS Revert`
+  or `BS Revert` by the flags or the last spin's way), flips the skater
+  round (`FlipAfter`), and lets a manual carry the combo on while its
+  animation plays. Ported: R within 200 ms before landing or 5 frames
+  after; the combo lands about 0.6 s later without a manual.
 - **The main update** (0x8010B120) runs the speed limits (0x800F4834)
   every frame before handing over to the state's update: ground (state
   0, 0x800FB3E4), air (1, 0x800FC7F8), vert (2, 0x800FE664), 3
@@ -329,6 +460,21 @@ on-ground update switches on.
   building speed without end. Then it tries a grind (0x801078A8, with 0:
   only from the air). `Skater_default_head_height` isn't read by the
   physics: the knee-height line is the only check ahead.
+- **Falling through the ground (fixed).** Two ways the port let the
+  skater through: an ollie from flat ground started exactly on the floor,
+  so the first air step's line could catch the floor from below and the
+  wall response pushed the skater 9 units through it (the skater now
+  takes off a unit up, as the game lands it a unit up); and rolling
+  backwards into the foot of a slope, the facing-based stick test read the
+  flat as ground falling away and launched the skater from just under it
+  (ground above where the skater is going now always sticks).
+  `cargo run --release -p desa_viewer --example skate_check` skates a
+  level at random and reports any frame through the ground, and how often
+  rail approaches grind. The grind button now looks for a rail for half a
+  second after it's pressed (`{ Press, Triangle, 500 }`), as well as while
+  held; falling out of the level puts the skater on the ground at the
+  nearest spawn, as soon as it's 1000 below where it last stood with
+  nothing underneath.
 - **Rails inside ledges.** Many rails run a few units below the top edge
   of the ledge or kerb they follow, so a skater leaving one starts just
   inside it, where the port's two-sided ray casts find the ledge's
