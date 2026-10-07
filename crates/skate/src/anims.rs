@@ -105,7 +105,7 @@ pub struct Landing {
 /// The animation for what the skater is doing.
 pub fn choose(skater: &Skater) -> Anim {
     let turn = skater.turn_input();
-    // Riding switch, the ground's turn animations swap (`OnGroundAI`:
+    // Riding switch, the turn animations swap (`OnGroundAI`, `Airborne`:
     // `if Flipped` plays the other side's).
     let ground_turn = if skater.flipped { -turn } else { turn };
     let crouched = skater.is_crouched();
@@ -174,9 +174,10 @@ pub fn choose(skater: &Skater) -> Anim {
         Action::Air => {
             if skater.landing_soon() {
                 Anim::once("StretchLegsInit", AIR)
-            } else if turn < 0.0 {
+            } else if ground_turn < 0.0 {
+                // (`Airborne` swaps them riding switch too.)
                 Anim::once("AirTurnLeft", AIR)
-            } else if turn > 0.0 {
+            } else if ground_turn > 0.0 {
                 Anim::once("AirTurnRight", AIR)
             } else if skater.spine_held() {
                 // `Held R2` (or `L2`): `SpineTransfer`, as
