@@ -381,7 +381,10 @@ impl LoadedLevel {
     /// Runs objects' scripts for `dt` seconds, shows or hides the object
     /// layers, poses the pedestrians shown and animates vertex colors.
     fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32, dt: f32) {
-        for (goal, copy, placement) in self.behaviour.update(&mut self.objects, seconds, dt) {
+        for (goal, copy, placement) in
+            self.behaviour
+                .update(&mut self.objects, seconds, dt, goal_objects)
+        {
             let (props, layer) = if goal {
                 (&self.objects.goal_props, self.layers.goal_props)
             } else {
@@ -406,15 +409,17 @@ impl LoadedLevel {
             (l.props, objects),
             (l.crowd, objects),
             (l.goal_geometry, goal_objects),
-            (l.goal_props, goal_objects),
-            (l.goal_crowd, goal_objects),
+            // Goals' objects that scripts have made show with the rest
+            // (the others are shrunk away unless previewing goals).
+            (l.goal_props, objects || goal_objects),
+            (l.goal_crowd, objects || goal_objects),
         ] {
             r.show_layer(id, shown);
         }
         if objects && !self.objects.crowd.is_empty() {
             r.update_layer(l.crowd, 0, &self.objects.crowd.pose(seconds));
         }
-        if goal_objects && !self.objects.goal_crowd.is_empty() {
+        if (objects || goal_objects) && !self.objects.goal_crowd.is_empty() {
             r.update_layer(l.goal_crowd, 0, &self.objects.goal_crowd.pose(seconds));
         }
     }
@@ -475,6 +480,9 @@ struct Run {
     /// Stopped, with the result up.
     over: bool,
 }
+
+/// How far away objects' sounds fade out (units).
+const OBJECT_SOUND_RANGE: f32 = 2000.0;
 
 /// How long a run lasts (`StartGoal_TrickAttack time = 120`).
 const RUN_TIME: f32 = 120.0;
@@ -1123,6 +1131,28 @@ impl<'a> App<'a> {
 
     fn skate(&mut self, dt: f32) {
         let pad = self.pad_input();
+        // The pedestrians shown are solid: the skater bumps off them.
+        let objects = self.model.show_objects;
+        let goal_objects = self.model.show_goal_objects;
+        if let Some(level) = &mut self.level {
+            let crowd = &level.objects.crowd;
+            let goal_crowd = &level.objects.goal_crowd;
+            let obstacles = crowd
+                .footprints()
+                .filter(|_| objects)
+                .chain(goal_crowd.footprints().filter(|_| goal_objects))
+                // From a little below their feet, which don't always meet
+                // the ground (the skater's knee-high line would pass under).
+                .map(|(base, radius, height)| skate::world::Obstacle {
+                    base: base - Vec3::Y * 24.0,
+                    radius,
+                    height: height + 24.0,
+                })
+                .collect();
+            if let Some(world) = &mut level.world {
+                world.set_obstacles(obstacles);
+            }
+        }
         let (Some((skater, physics, chase)), Some(level), Some(character)) =
             (&mut self.skating, &self.level, &self.character)
         else {
@@ -1628,12 +1658,28 @@ impl<'a> App<'a> {
         let clock = self.started.elapsed().as_secs_f32();
         self.animate(dt, clock);
         if let Some(level) = &mut self.level {
+            // The scripts see the skater (birds fly off as it comes near).
+            let skater = self.skating.as_ref().map(|(s, ..)| s.position);
+            level.behaviour.set_skater(skater);
             level.update_objects(
                 self.model.show_objects,
                 self.model.show_goal_objects,
                 clock,
                 dt,
             );
+            // The sounds they played, quieter further from the skater.
+            let sounds = std::mem::take(&mut level.behaviour.sounds);
+            if let (Some(audio), Some(skater)) = (
+                self.audio.as_mut().filter(|_| self.model.character.sound),
+                skater,
+            ) {
+                for (sound, at, volume) in sounds {
+                    let near = (1.0 - at.distance(skater) / OBJECT_SOUND_RANGE).clamp(0.0, 1.0);
+                    if near > 0.0 {
+                        audio.play_named(sound, volume.min(1.5) * near);
+                    }
+                }
+            }
         }
         let p = self.camera.position;
         self.model.camera_text = format!(
@@ -2081,6 +2127,13 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 }
                 app.skate(1.0 / 60.0);
                 app.update_run(1.0 / 60.0);
+                // The level's scripts see the skater too.
+                let skater = app.skating.as_ref().map(|(s, ..)| s.position);
+                if let Some(level) = &mut app.level {
+                    level.behaviour.set_skater(skater);
+                    level.update_objects(true, args.goal_objects, args.time + now, 1.0 / 60.0);
+                    level.behaviour.sounds.clear();
+                }
             }
             camera = app.camera;
             if let Some((skater, _, chase)) = &app.skating {

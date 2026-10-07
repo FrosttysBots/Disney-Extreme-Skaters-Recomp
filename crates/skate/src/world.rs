@@ -22,10 +22,25 @@ pub struct Hit {
     pub object: u32,
 }
 
+/// Something solid that moves about, like a pedestrian: an upright
+/// cylinder standing on `base`. Only lines from the side meet it (the
+/// skater bumps into it but can't stand on it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Obstacle {
+    pub base: Vec3,
+    pub radius: f32,
+    pub height: f32,
+}
+
+/// [`Hit::object`] for an [`Obstacle`].
+pub const OBSTACLE: u32 = u32::MAX;
+
 pub struct World {
     collision: Collision,
     /// The rails to grind.
     pub rails: Rails,
+    /// What moves about (pedestrians), where it is now.
+    obstacles: Vec<Obstacle>,
 }
 
 impl World {
@@ -33,6 +48,7 @@ impl World {
         World {
             collision,
             rails: Rails::default(),
+            obstacles: Vec::new(),
         }
     }
 
@@ -45,6 +61,53 @@ impl World {
             .map(|o| o.bbox[1])
             .reduce(f32::min)
             .unwrap_or(f32::NEG_INFINITY)
+    }
+
+    /// Where the obstacles are now.
+    pub fn set_obstacles(&mut self, obstacles: Vec<Obstacle>) {
+        self.obstacles = obstacles;
+    }
+
+    /// The first obstacle the line from `from` along `direction` meets
+    /// from outside it, as a fraction of `direction`.
+    fn obstacle_hit(&self, from: Vec3, direction: Vec3) -> Option<Hit> {
+        let mut best: Option<Hit> = None;
+        let d = glam::Vec2::new(direction.x, direction.z);
+        let a = d.length_squared();
+        if a < 1e-6 {
+            return None;
+        }
+        for o in &self.obstacles {
+            let f = glam::Vec2::new(from.x - o.base.x, from.z - o.base.z);
+            let c = f.length_squared() - o.radius * o.radius;
+            if c <= 0.0 {
+                // Already inside: let it go rather than trap anything.
+                continue;
+            }
+            let b = 2.0 * f.dot(d);
+            let disc = b * b - 4.0 * a * c;
+            if disc < 0.0 {
+                continue;
+            }
+            let t = (-b - disc.sqrt()) / (2.0 * a);
+            if !(0.0..=1.0).contains(&t) || best.is_some_and(|h| h.fraction <= t) {
+                continue;
+            }
+            let point = from + direction * t;
+            if point.y < o.base.y || point.y > o.base.y + o.height {
+                continue;
+            }
+            let out = f + d * t;
+            best = Some(Hit {
+                point,
+                normal: Vec3::new(out.x, 0.0, out.y).normalize_or(Vec3::X),
+                fraction: t,
+                flags: face_flags::NOT_SKATABLE,
+                terrain: 0,
+                object: OBSTACLE,
+            });
+        }
+        best
     }
 
     pub fn with_rails(mut self, rails: Rails) -> Self {
@@ -139,6 +202,14 @@ impl World {
                     }
                 }
             });
+        }
+        // Obstacles are solid to everything but the camera.
+        if flags == 0 {
+            if let Some(hit) = self.obstacle_hit(from, direction) {
+                if best.is_none_or(|h| hit.fraction < h.fraction) {
+                    best = Some(hit);
+                }
+            }
         }
         best
     }

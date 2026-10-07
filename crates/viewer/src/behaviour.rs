@@ -14,17 +14,29 @@
 //!   become 17.6 units a second, taking a unit as an inch.
 //! - `Obj_MoveToNode Name = node`, `Obj_PlayAnim Anim = role [Cycle]`,
 //!   `Obj_WaitAnimFinished`, `Obj_WaitMove`.
-//! - `create` / `kill Name = object`, `Die`, and `IsAlive Name = object`.
+//! - `create` / `kill Name = object` (a created object starts its
+//!   `TriggerScript`), `Die`, and `IsAlive Name = object`.
+//! - The skater coming near: `Obj_SetInnerRadius` / `Obj_SetOuterRadius`
+//!   (feet) and `Obj_SetException ex = SkaterInRadius | SkaterOutOfRadius
+//!   scr = script [params = {...}]`, which, when the skater crosses the
+//!   radius, runs that script in place of the object's own (until
+//!   `Obj_ClearException(s)`). Birds take off this way.
+//! - Moving straight to a spot: `Obj_MoveToNode Name = node [speed = mph]
+//!   [orient]` (at once without a speed), `Obj_MoveToRelPos (x, y, z) time
+//!   = seconds` (relative to the object's facing), `Obj_LookAtNode`,
+//!   `Obj_WaitMove` and `Obj_IsMoving`.
+//! - `playsound` / `obj_playsound name [Vol = percent]`: collected in
+//!   [`Behaviour::sounds`] for the viewer to play.
 //!
 //! Everything else does nothing yet, and conditions about the game
-//! (`IsCareerMode`, goals, the skater) are false: the viewer has no skater
-//! or career. Units and turning are this module's best reading of the
-//! command names, not checked against the running game.
+//! (`IsCareerMode`, goals) are false: the viewer has no career. Units and
+//! turning are this module's best reading of the command names, not
+//! checked against the running game.
 
 use std::collections::HashMap;
 
 use glam::{Mat4, Quat, Vec3};
-use qb::vm::{Host, Outcome, Program, Thread};
+use qb::vm::{Host, Outcome, Params, Program, Thread};
 use qb::{Value, checksum};
 
 use crate::nodes::{LevelNodes, PathNode};
@@ -34,6 +46,8 @@ use crate::objects::{LevelObjects, Placed};
 const MPH: f32 = 17.6;
 /// Units a second per foot a second.
 const FPS: f32 = 12.0;
+/// Units per foot (radii are in feet).
+const FOOT: f32 = 12.0;
 
 /// One object's state.
 struct State {
@@ -43,6 +57,17 @@ struct State {
     /// Whether its model needs re-placing.
     dirty: bool,
     path: Path,
+    /// Moving straight to a spot: where, how fast, and whether to pitch to
+    /// face it.
+    moving: Option<(Vec3, f32, bool)>,
+    /// Radii for the skater exceptions (units), and where the skater was
+    /// last frame: inside the inner one, outside the outer one.
+    inner: f32,
+    outer: f32,
+    was_inside: bool,
+    was_outside: bool,
+    /// Exceptions set: (exception, script, params).
+    exceptions: Vec<(u32, u32, Params)>,
 }
 
 #[derive(Default)]
@@ -72,6 +97,21 @@ pub struct Behaviour {
     random: u32,
     /// Commands scripts used that aren't understood, by name, with counts.
     pub unknown: HashMap<u32, usize>,
+    /// Each object's `TriggerScript`, run when it's created.
+    scripts: Vec<Option<u32>>,
+    /// Whether each object is one goals add (not there at the start).
+    goal: Vec<bool>,
+    /// Whether goals' objects are being shown whether made or not, as last
+    /// placed.
+    goal_shown: Option<bool>,
+    /// Where the skater is (none when not skating).
+    skater: Option<Vec3>,
+    /// Scripts to start once the running ones have had their turn: an
+    /// object's script on `create`.
+    starting: Vec<(usize, Thread)>,
+    /// Sounds the scripts played since the viewer last took them: the
+    /// sound's name (checksum), where, and the volume (1 is full).
+    pub sounds: Vec<(u32, Vec3, f32)>,
 }
 
 impl Behaviour {
@@ -96,6 +136,12 @@ impl Behaviour {
                     turn: true,
                     ..Path::default()
                 },
+                moving: None,
+                inner: 0.0,
+                outer: 0.0,
+                was_inside: false,
+                was_outside: true,
+                exceptions: Vec::new(),
             })
             .collect();
         let threads = nodes
@@ -125,7 +171,90 @@ impl Behaviour {
             object_node: nodes.objects.iter().map(|o| o.node).collect(),
             random: 0x2545_F491,
             unknown: HashMap::new(),
+            scripts: nodes.objects.iter().map(|o| o.script).collect(),
+            goal: nodes.objects.iter().map(|o| !o.created_at_start).collect(),
+            goal_shown: None,
+            skater: None,
+            starting: Vec::new(),
+            sounds: Vec::new(),
         }
+    }
+
+    /// Where the skater is now, for the scripts' radii (`None` when not
+    /// skating).
+    pub fn set_skater(&mut self, position: Option<Vec3>) {
+        self.skater = position;
+    }
+
+    /// Runs the exception scripts of objects the skater just came inside
+    /// the inner radius of, or went outside the outer radius of.
+    fn check_radii(&mut self) {
+        let Some(skater) = self.skater else {
+            return;
+        };
+        let inside_key = checksum("SkaterInRadius");
+        let outside_key = checksum("SkaterOutOfRadius");
+        for i in 0..self.states.len() {
+            let state = &mut self.states[i];
+            if !state.alive || state.exceptions.is_empty() {
+                continue;
+            }
+            let distance = state.position.distance(skater);
+            let inside = state.inner > 0.0 && distance < state.inner;
+            let outside = state.outer > 0.0 && distance > state.outer;
+            let mut fire = None;
+            if inside && !state.was_inside {
+                fire = Some(inside_key);
+            } else if outside && !state.was_outside {
+                fire = Some(outside_key);
+            }
+            state.was_inside = inside;
+            state.was_outside = outside;
+            let Some(key) = fire else { continue };
+            let Some((_, script, params)) =
+                state.exceptions.iter().find(|(ex, ..)| *ex == key).cloned()
+            else {
+                continue;
+            };
+            self.start(i, Thread::new(script, params));
+        }
+    }
+
+    /// Runs `thread` as object `i`'s script, in place of what it was
+    /// running.
+    fn start(&mut self, i: usize, thread: Thread) {
+        match self.threads.iter_mut().find(|(o, _)| *o == i) {
+            Some((_, t)) => *t = thread,
+            None => self.threads.push((i, thread)),
+        }
+    }
+
+    /// Moves objects heading straight for a spot.
+    fn move_straight(&mut self, i: usize, dt: f32) {
+        let state = &mut self.states[i];
+        let Some((to, speed, orient)) = state.moving else {
+            return;
+        };
+        let along = to - state.position;
+        let distance = along.length();
+        let step = speed * dt;
+        if distance > 1e-3 {
+            let direction = if orient {
+                along / distance
+            } else {
+                Vec3::new(along.x, 0.0, along.z).normalize_or_zero()
+            };
+            if direction != Vec3::ZERO {
+                state.rotation = Quat::from_rotation_arc(Vec3::Z, direction);
+            }
+        }
+        if step >= distance {
+            state.position = to;
+            state.moving = None;
+        } else {
+            state.position += along / distance * step;
+        }
+        state.dirty = true;
     }
 
     /// Where an object is now (in mesh space).
@@ -159,7 +288,16 @@ impl Behaviour {
         objects: &mut LevelObjects,
         now: f32,
         dt: f32,
+        show_goal: bool,
     ) -> Vec<(bool, usize, Mat4)> {
+        // Goals' objects show when made (or all of them, previewing).
+        if self.goal_shown != Some(show_goal) {
+            self.goal_shown = Some(show_goal);
+            for (state, goal) in self.states.iter_mut().zip(&self.goal) {
+                state.dirty |= *goal;
+            }
+        }
+        self.check_radii();
         let program = std::mem::take(&mut self.program);
         let mut threads = std::mem::take(&mut self.threads);
         for (object, thread) in &mut threads {
@@ -174,11 +312,18 @@ impl Behaviour {
             };
             thread.run(&program, &mut host, dt);
         }
+        // Scripts started meanwhile (by `create`) join in, and those of
+        // objects gone stop.
+        threads.retain(|(o, _)| self.states[*o].alive);
         self.threads = threads;
+        for (i, thread) in std::mem::take(&mut self.starting) {
+            self.start(i, thread);
+        }
         self.program = program;
 
         for i in 0..self.states.len() {
             self.follow_path(i, dt);
+            self.move_straight(i, dt);
         }
 
         // Push changes to the models.
@@ -187,7 +332,8 @@ impl Behaviour {
             if !std::mem::take(&mut state.dirty) {
                 continue;
             }
-            let placement = if state.alive {
+            let shown = state.alive || (self.goal[i] && show_goal);
+            let placement = if shown {
                 Mat4::from_rotation_translation(state.rotation, state.position)
             } else {
                 // Gone: shrink it to nothing.
@@ -362,9 +508,93 @@ impl Host for Commands<'_> {
             let node = named("Name").and_then(|n| b.node_by_name.get(&n).copied());
             if let Some(p) = node.and_then(|n| b.nodes[n].position) {
                 let state = &mut b.states[object];
-                state.position = p;
-                state.dirty = true;
+                match args.get(c("speed")).and_then(Value::as_f32) {
+                    Some(speed) if speed > 0.0 => {
+                        state.moving = Some((p, speed * MPH, args.has_flag(c("orient"))));
+                    }
+                    _ => {
+                        state.position = p;
+                        state.moving = None;
+                        state.dirty = true;
+                    }
+                }
             }
+        } else if name == c("Obj_MoveToRelPos") {
+            let offset = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Vector(v)) => Some(Vec3::from(*v)),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(offset) = offset {
+                let state = &mut b.states[object];
+                let to = state.position + state.rotation * offset;
+                let time = args
+                    .get(c("time"))
+                    .and_then(Value::as_f32)
+                    .filter(|t| *t > 0.0)
+                    .unwrap_or(10.0);
+                state.moving = Some((to, offset.length() / time, true));
+            }
+        } else if name == c("Obj_LookAtNode") {
+            let node = named("Name").and_then(|n| b.node_by_name.get(&n).copied());
+            if let Some(p) = node.and_then(|n| b.nodes[n].position) {
+                let state = &mut b.states[object];
+                let along = p - state.position;
+                let flat = Vec3::new(along.x, 0.0, along.z).normalize_or_zero();
+                if flat != Vec3::ZERO {
+                    state.rotation = Quat::from_rotation_arc(Vec3::Z, flat);
+                    state.dirty = true;
+                }
+            }
+        } else if name == c("Obj_IsMoving") {
+            let state = &b.states[object];
+            return Outcome::Done(state.moving.is_some() || state.path.target.is_some());
+        } else if name == c("Obj_SetInnerRadius") || name == c("Obj_SetOuterRadius") {
+            if let Some(r) = Self::number(args) {
+                let state = &mut b.states[object];
+                if name == c("Obj_SetInnerRadius") {
+                    state.inner = r * FOOT;
+                    state.was_inside = false;
+                } else {
+                    state.outer = r * FOOT;
+                    state.was_outside = true;
+                }
+            }
+        } else if name == c("Obj_SetException") {
+            if let (Some(ex), Some(scr)) = (named("ex"), named("scr")) {
+                let params = match args.get(c("params")) {
+                    Some(Value::Struct(items)) => items.clone(),
+                    _ => Vec::new(),
+                };
+                let state = &mut b.states[object];
+                state.exceptions.retain(|(e, ..)| *e != ex);
+                state.exceptions.push((ex, scr, params));
+            }
+        } else if name == c("Obj_ClearException") {
+            if let Some(ex) = named("ex") {
+                b.states[object].exceptions.retain(|(e, ..)| *e != ex);
+            }
+        } else if name == c("Obj_ClearExceptions") {
+            b.states[object].exceptions.clear();
+        } else if name == c("playsound") || name == c("obj_playsound") {
+            let sound = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(sound) = sound {
+                let volume = args
+                    .get(c("Vol"))
+                    .and_then(Value::as_f32)
+                    .map_or(1.0, |v| v / 100.0);
+                b.sounds.push((sound, b.states[object].position, volume));
+            }
+        } else if name == c("Obj_ShadowOff") || name == c("Obj_ShadowOn") {
+            // Pedestrians cast no shadows here anyway.
         } else if name == c("Obj_PlayAnim") {
             let role = named("Anim");
             let cycle = args.has_flag(c("Cycle"));
@@ -379,6 +609,11 @@ impl Host for Commands<'_> {
             }
         } else if name == c("Obj_WaitMove") {
             let state = &b.states[object];
+            if let Some((to, speed, _)) = state.moving {
+                if speed > 0.0 {
+                    return Outcome::Wait((to - state.position).length() / speed + 1.0 / 60.0);
+                }
+            }
             if let (Some(t), true) = (state.path.target, state.path.speed > 0.0) {
                 if let Some(p) = b.nodes[t].position {
                     return Outcome::Wait((p - state.position).length() / state.path.speed);
@@ -386,7 +621,14 @@ impl Host for Commands<'_> {
             }
         } else if name == c("create") || name == c("kill") {
             if let Some(o) = named("Name").and_then(|n| b.object_named(n)) {
-                b.states[o].alive = name == c("create");
+                let create = name == c("create");
+                // A new object runs its own script.
+                if create && !b.states[o].alive {
+                    if let Some(script) = b.scripts[o] {
+                        b.starting.push((o, Thread::new(script, Vec::new())));
+                    }
+                }
+                b.states[o].alive = create;
                 b.states[o].dirty = true;
             }
         } else if name == c("Die") {

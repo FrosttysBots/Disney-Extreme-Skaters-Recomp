@@ -333,6 +333,14 @@ Besides rails and spawns, a level's node array places objects:
   `Ped_Guide_Idle1` or `Ped_M_Idle1` one. Some sets borrow animations
   (birds use Zazu's; Tarzan's Buzz uses Buzz's from `anims_buzz.prg`).
 
+While skating, the objects' scripts see the skater: birds, bats and crows
+take off when it comes within their `Obj_SetInnerRadius` (the scripts'
+`SkaterInRadius` exceptions), flying to their next perch or away, with
+their wing-flap and squawk sounds; objects a script creates (the Hub's
+flying birds) appear and run their own scripts. Other pedestrians (Scar,
+hyenas, wildebeest) are solid: the skater bumps off them and flails, as
+off a wall.
+
 All 1,795 object nodes on the disc load. Objects are turned by `-heading`
 about Y, which is what mirroring Z does to a rotation; that's the opposite
 way round from the spawn convention above, and goal intro cameras don't say

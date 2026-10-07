@@ -85,6 +85,8 @@ struct Loop {
 pub struct Audio {
     sink: MixerDeviceSink,
     clips: HashMap<String, Clip>,
+    /// The clips' names by checksum.
+    by_checksum: HashMap<u32, String>,
     terrain: TerrainSounds,
     /// Each rail's terrain, by segment (as the world's rails are ordered).
     rail_terrain: Vec<u16>,
@@ -109,6 +111,7 @@ impl Audio {
         Some(Audio {
             sink,
             clips: HashMap::new(),
+            by_checksum: HashMap::new(),
             terrain: TerrainSounds::default(),
             rail_terrain: Vec::new(),
             roll: None,
@@ -143,6 +146,11 @@ impl Audio {
                     },
                 ))
             })
+            .collect();
+        self.by_checksum = self
+            .clips
+            .keys()
+            .map(|name| (qb::checksum(name), name.clone()))
             .collect();
         self.terrain = terrain;
         self.rail_terrain = rail_terrain;
@@ -235,6 +243,14 @@ impl Audio {
             if player.empty() {
                 player.append(Stream(Dtk::new(track.clone())));
             }
+        }
+    }
+
+    /// A sound by its name's checksum (as scripts name them), if the
+    /// level has it.
+    pub fn play_named(&self, name: u32, volume: f32) {
+        if let Some(file) = self.by_checksum.get(&name) {
+            self.play(file, volume, 1.0);
         }
     }
 

@@ -54,6 +54,9 @@ skater is and what it's doing.
 - Filling the special meter and doing your character's specials.
 - Gaps: jumps, grinds and lines the levels name and score (shown in the
   combo), like the Hub's Chain Link Gap or Camp's Tent Gap.
+- Birds: skate up to a perched seagull (Beach's ship deck), crow
+  (Graveyard) or bird and it takes off. Bumping into an animal (Scar on
+  Pride Rock, the hyenas) knocks the skater into a flail.
 - Teleporters and water: falling in the Hub's harbour puts you back on
   the dock, as in the game.
 - Coming down a quarter pipe or landing a 180: you turn round and ride
