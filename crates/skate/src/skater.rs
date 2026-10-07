@@ -105,6 +105,12 @@ pub enum Action {
     /// stepping back on.
     OffBoard,
     OnBoard,
+    /// A 180 slide on the ground (`ToggleSwitchRegular`, tapping the
+    /// revert button), frontside or backside; it ends riding the other way
+    /// round.
+    CessSlide {
+        frontside: bool,
+    },
 }
 
 /// A lip trick being held: the trick, the ramp's way out, and how long.
@@ -205,6 +211,9 @@ const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0,
 
 /// Slower than this into a wall the skater just stops against it.
 const CREEP_SPEED: f32 = 50.0;
+
+/// A cess slide without its animation lasts this long.
+const CESS_TIME: f32 = 0.6;
 
 /// Braking this long steps off the board (`Handbrake`).
 const HANDBRAKE_TIME: f32 = 1.4;
@@ -1467,6 +1476,40 @@ impl Skater {
                 }
             }
         }
+        // `GroundTricks`: the revert button tapped on the ground (outside a
+        // vert landing's revert window) slides round 180, frontside or
+        // backside by the steering (swapped riding switch); at the end
+        // `FlipAfter` turns the skater round and its stance over.
+        if let Action::CessSlide { frontside } = self.action {
+            let name = if frontside {
+                "CessSlide180_FS"
+            } else {
+                "CessSlide180_BS"
+            };
+            if self.action_time >= self.anim_length(name).max(CESS_TIME) {
+                self.heading += PI;
+                self.flipped = !self.flipped;
+                self.set_action(Action::Rolling);
+            }
+        } else if self.revert_window <= 0.0
+            && !self.manual
+            && self.pressed_within(Press::Revert, 0.0)
+            && matches!(
+                self.action,
+                Action::Rolling | Action::Pushing | Action::Standing | Action::Crouching
+            )
+        {
+            let right = input.turn > 0.0;
+            let left = input.turn < 0.0;
+            let frontside = if left {
+                self.flipped
+            } else if right {
+                !self.flipped
+            } else {
+                true
+            };
+            self.set_action(Action::CessSlide { frontside });
+        }
         // A manual: up then down (or down then up) within the window
         // (the game's `ManualTricks`), balanced with up and down
         // (`DoBalanceTrick ButtonA = Up ButtonB = Down`).
@@ -1579,7 +1622,8 @@ impl Skater {
             && !input.brake
             && !self.manual
             && !bailing
-            && !off_board;
+            && !off_board
+            && !matches!(self.action, Action::CessSlide { .. });
         let top = if input.crouch {
             p.max_crouched_kick_speed
         } else {
@@ -1830,7 +1874,7 @@ impl Skater {
 
         let action = if matches!(
             self.action,
-            Action::BailManual | Action::BailGrind | Action::Bail
+            Action::BailManual | Action::BailGrind | Action::Bail | Action::CessSlide { .. }
         ) || (matches!(self.action, Action::Revert { .. })
             && self.action_time < 0.6)
         {
