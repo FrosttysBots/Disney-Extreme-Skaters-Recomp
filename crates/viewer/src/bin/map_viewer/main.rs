@@ -603,6 +603,7 @@ impl<'a> App<'a> {
                     message: None,
                     special: (0.0, false),
                     auto_kick: true,
+                    sound: true,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                 },
@@ -957,9 +958,12 @@ impl<'a> App<'a> {
         };
         skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
-        if let Some(audio) = &mut self.audio {
+        if let Some(audio) = self.audio.as_mut().filter(|_| self.model.character.sound) {
             audio.update(skater);
         } else {
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
             skater.sounds.clear();
         }
         self.placement = skater.placement();

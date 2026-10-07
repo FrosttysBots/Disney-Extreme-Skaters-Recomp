@@ -52,6 +52,8 @@ pub struct CharacterModel {
     pub special: (f32, bool),
     /// The AutoKick option.
     pub auto_kick: bool,
+    /// The skater's sounds on.
+    pub sound: bool,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
@@ -429,6 +431,8 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             actions.push(Action::ToggleSkate);
         }
     });
+    ui.checkbox(&mut model.sound, "Sound")
+        .on_hover_text("The skater's sounds: rolling, ollies, landings, grinds, bails.");
     ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
         "The game's controller option: the skater pushes by itself while under          its kick speed. Off, hold W to push.",
     );
