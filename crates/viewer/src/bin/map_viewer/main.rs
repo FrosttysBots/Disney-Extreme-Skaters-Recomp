@@ -1253,7 +1253,7 @@ impl<'a> App<'a> {
     /// the run ends (`EndOfRun`): the skater brakes to a stop and the
     /// score goes against the best.
     fn update_run(&mut self, dt: f32) {
-        let (Some(run), Some((skater, ..))) = (&mut self.run, &self.skating) else {
+        let (Some(run), Some((skater, ..))) = (&mut self.run, &mut self.skating) else {
             return;
         };
         if self.replay.is_some() {
@@ -1274,7 +1274,8 @@ impl<'a> App<'a> {
                 if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
                     audio.play_named(qb::checksum("GoalDone"), 1.0);
                 }
-                let _ = win;
+                // `win_message_text`, a little longer than a trick's.
+                skater.message = Some((win.clone(), 3.0));
             }
         }
         let bailing = matches!(
