@@ -55,6 +55,8 @@ pub struct CharacterModel {
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     pub combo: Option<String>,
+    /// A message flashed up while skating ("Sketchy", a gap's name).
+    pub message: Option<String>,
 }
 
 /// Everything the panel shows or edits.
@@ -110,7 +112,9 @@ Skating: W push, S brake, A/D steer,
   tap W then S to manual
   (balance: W/S in a manual, A/D on a rail),
   in the air Q flip, F grab (+ W/S/A/D),
-  R revert, Tab next spawn; or a gamepad
+  R revert (tap on the ground: 180 slide;
+  hold going up a quarter pipe: spine transfer),
+  S held: step off the board, Tab next spawn; or a gamepad
   (stick, A ollie, X flip, B grab, Y grind),
   Esc stop";
 
@@ -218,6 +222,20 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     }
     if model.character.skating {
         trick_text(ctx, model.character.score, model.character.combo.as_deref());
+        if let Some(message) = &model.character.message {
+            egui::Area::new(egui::Id::new("message"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(message)
+                            .size(24.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(255, 220, 60))
+                            .background_color(egui::Color32::from_black_alpha(140)),
+                    );
+                });
+        }
         special_meter(ctx, model.character.special);
     }
     if !model.panel_open {

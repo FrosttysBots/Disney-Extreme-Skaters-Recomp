@@ -549,6 +549,7 @@ impl<'a> App<'a> {
                     balance: None,
                     score: 0,
                     combo: None,
+                    message: None,
                     special: (0.0, false),
                     auto_kick: true,
                     skate_status: String::new(),
@@ -885,6 +886,7 @@ impl<'a> App<'a> {
         );
         self.model.character.special = (skater.special_meter / 3000.0, skater.special);
         self.model.character.combo = combo_text(skater);
+        self.model.character.message = skater.message.as_ref().map(|(m, _)| m.clone());
 
         // Animation: the one the skater picked (the game's scripts' choice),
         // its first part once and then the next looping, or looping, or held

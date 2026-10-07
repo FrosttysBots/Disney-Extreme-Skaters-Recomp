@@ -212,6 +212,9 @@ const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0,
 /// Slower than this into a wall the skater just stops against it.
 const CREEP_SPEED: f32 = 50.0;
 
+/// How long a message stays on screen.
+const MESSAGE_TIME: f32 = 1.5;
+
 /// A cess slide without its animation lasts this long.
 const CESS_TIME: f32 = 0.6;
 
@@ -305,6 +308,9 @@ pub struct Skater {
     gaps: Gaps,
     /// The last gap scored, its name and points (for whoever shows it).
     pub last_gap: Option<(String, u32)>,
+    /// A message for the screen (`LaunchPanelMessage`: "Sketchy", a gap's
+    /// name, a spine transfer) and seconds left to show it.
+    pub message: Option<(String, f32)>,
     /// Pushing by itself while under the kick speed (the controller's
     /// AutoKick option, on by default; the game's can-push test at
     /// 0x800F43F0 reads it from `+0x3A38`). Off, it pushes while the up
@@ -422,6 +428,7 @@ impl Skater {
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
             last_gap: None,
+            message: None,
             auto_kick: true,
             pushing: false,
             push_left: 0.0,
@@ -695,6 +702,7 @@ impl Skater {
                 // Into the combo like a trick; rolling along with no combo
                 // going, it banks straight away.
                 self.last_gap = Some((name.clone(), score));
+                self.message = Some((name.clone(), MESSAGE_TIME));
                 self.credit(Some((name, score)), false);
                 if surface == Surface::Ground && !self.manual {
                     self.end_combo(true);
@@ -858,6 +866,12 @@ impl Skater {
             self.since_down + STEP
         };
         self.clock += STEP;
+        if let Some((_, left)) = &mut self.message {
+            *left -= STEP;
+            if *left <= 0.0 {
+                self.message = None;
+            }
+        }
         self.balance_time += STEP;
         if !self.manual {
             self.special_manual = false;
@@ -2036,6 +2050,7 @@ impl Skater {
         self.combo = true;
         self.combo_tricks
             .add_no_degrade("Spine Transfer", TRANSFER_POINTS);
+        self.message = Some(("Spine Transfer".into(), MESSAGE_TIME));
         true
     }
 
@@ -2172,6 +2187,10 @@ impl Skater {
                     second: (self.clock * 60.0) as u32 % 2 == 1,
                 };
                 self.air_time = 0.0;
+                if self.landing.sketchy {
+                    // `LaunchPanelMessage "&C1Sketchy"`.
+                    self.message = Some(("Sketchy".into(), MESSAGE_TIME));
+                }
                 // Landing sideways at speed: `YawBail` (faster than 500,
                 // 60 to 120 degrees off).
                 let yaw_bail = flat.length() > 500.0 && yaw >= 60.0;
