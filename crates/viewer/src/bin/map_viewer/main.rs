@@ -543,7 +543,9 @@ struct App<'a> {
     audio: Option<audio::Audio>,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
-    playlist: Vec<String>,
+    playlist: Vec<(String, String)>,
+    /// The song that started last (its title) and when, shown a moment.
+    now_playing: Option<(String, Instant)>,
     next_track: usize,
     ambience: Option<String>,
     /// The animation the character's time belongs to.
@@ -625,6 +627,7 @@ impl<'a> App<'a> {
             skating: None,
             audio: None,
             playlist: Vec::new(),
+            now_playing: None,
             next_track: 0,
             ambience: None,
             shown_animation: 0,
@@ -791,10 +794,17 @@ impl<'a> App<'a> {
         audio.load(files, terrain, rail_terrain);
         // The songs, shuffled, and this level's ambience.
         let track = |v: &qb::Value| match v.get(qb::checksum("on_disk")) {
-            Some(qb::Value::String(s)) => s.rsplit(['\\', '/']).next().map(str::to_string),
+            Some(qb::Value::String(s)) => {
+                let file = s.rsplit(['\\', '/']).next()?.to_string();
+                let title = match v.get(qb::checksum("track_title")) {
+                    Some(qb::Value::String(t)) => t.clone(),
+                    _ => file.clone(),
+                };
+                Some((file, title))
+            }
             _ => None,
         };
-        let mut playlist: Vec<String> = program
+        let mut playlist: Vec<(String, String)> = program
             .value(qb::checksum("playlist_tracks"))
             .and_then(|v| v.as_array())
             .unwrap_or_default()
@@ -836,10 +846,11 @@ impl<'a> App<'a> {
         if skating && self.model.character.music && !self.playlist.is_empty() {
             if audio.music_finished() {
                 for _ in 0..self.playlist.len() {
-                    let name = &self.playlist[self.next_track % self.playlist.len()];
+                    let (name, title) = &self.playlist[self.next_track % self.playlist.len()];
                     self.next_track += 1;
                     if let Ok(Some(track)) = data.music(name) {
                         audio.play_music(track);
+                        self.now_playing = Some((title.clone(), Instant::now()));
                         break;
                     }
                 }
@@ -1070,7 +1081,13 @@ impl<'a> App<'a> {
         );
         self.model.character.special = (skater.special_meter / 3000.0, skater.special);
         self.model.character.combo = combo_text(skater);
-        self.model.character.message = skater.message.as_ref().map(|(m, _)| m.clone());
+        // The skater's message, or for a few seconds the song that began.
+        let song = self
+            .now_playing
+            .as_ref()
+            .filter(|(_, at)| at.elapsed().as_secs_f32() < 4.0)
+            .map(|(title, _)| format!("Now playing: {title}"));
+        self.model.character.message = skater.message.as_ref().map(|(m, _)| m.clone()).or(song);
 
         // Animation: the one the skater picked (the game's scripts' choice),
         // its first part once and then the next looping, or looping, or held
