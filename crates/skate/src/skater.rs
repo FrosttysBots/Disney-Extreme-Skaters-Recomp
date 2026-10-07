@@ -99,6 +99,8 @@ pub enum SkateSound {
     Trick {
         special: bool,
     },
+    /// The board knocking the coping going into a lip (`Copinghit`).
+    CopingHit,
 }
 
 /// What the skater is doing, for picking animations.
@@ -617,9 +619,7 @@ impl Skater {
                 })
                 .map(|(_, _, i)| i);
             if let Some(index) = special.or_else(|| self.tricks.air_trick(button, dir)) {
-                self.sounds.push(SkateSound::Trick {
-                    special: special.is_some(),
-                });
+                self.trick_started(special.is_some());
                 self.trick = Some(Playing {
                     trick: index,
                     time: 0.0,
@@ -679,6 +679,15 @@ impl Skater {
             }
         };
         self.trick = (!done).then_some(playing);
+    }
+
+    /// A trick started: the character may say something, and a special
+    /// shows "Special Trick" with its sound (`LaunchSpecialMessage`).
+    fn trick_started(&mut self, special: bool) {
+        self.sounds.push(SkateSound::Trick { special });
+        if special {
+            self.message = Some(("Special Trick".into(), MESSAGE_TIME));
+        }
     }
 
     /// `GetSlope` and `DoCrouch_slope`: the slope along the board, and a
@@ -1167,7 +1176,6 @@ impl Skater {
     /// for the direction pressed in the last half second, else the plain
     /// one; held still on the coping, standing on the ramp's face.
     fn start_lip(&mut self, at: Vec3, out: Vec3, p: &Physics) {
-        self.sounds.push(SkateSound::Trick { special: false });
         let special = self
             .tricks
             .special_lip
@@ -1185,6 +1193,13 @@ impl Skater {
         let Some(trick) = trick else {
             return;
         };
+        let is_special = self
+            .tricks
+            .special_lip
+            .as_ref()
+            .is_some_and(|(_, _, s)| s.name == trick.name);
+        self.trick_started(is_special);
+        self.sounds.push(SkateSound::CopingHit);
         self.vert = None;
         self.trick = None;
         self.manual = false;
@@ -1678,6 +1693,7 @@ impl Skater {
             if let Some((a, b, trick)) = self.tricks.special_manual.clone() {
                 if self.pressed_in_order(a, b, Press::Grind) {
                     self.special_manual = true;
+                    self.trick_started(true);
                     self.balance.start(&p.manual_balance, false);
                     self.credit(Some(trick), true);
                     self.balance_trick = self.tricks.special_manual_trick.clone();

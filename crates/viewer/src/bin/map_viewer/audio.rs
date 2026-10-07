@@ -291,7 +291,16 @@ impl Audio {
                 }
                 // `genericTrickStreamChance` (5), every time for a special.
                 SkateSound::Trick { special } => {
-                    self.say("trick", if special { 100.0 } else { 5.0 })
+                    if special {
+                        // `LaunchSpecialMessage`.
+                        self.play("hud_specialtrickaa", 1.0, 1.0);
+                    }
+                    self.say("trick", if special { 100.0 } else { 5.0 });
+                }
+                // `Copinghit`: pitched 90, 100 or 110 at random, volume 80.
+                SkateSound::CopingHit => {
+                    let pitch = [0.9, 1.0, 1.1][((self.random() * 3.0) as usize).min(2)];
+                    self.play("copinghit3_11", 0.8, pitch);
                 }
                 SkateSound::Smack => self.play("bodysmacka", 1.0, 1.0),
                 SkateSound::Gap => self.play("hud_jumpgap", 1.0, 1.0),
