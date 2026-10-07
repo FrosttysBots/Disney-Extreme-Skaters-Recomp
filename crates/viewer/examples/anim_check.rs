@@ -188,10 +188,11 @@ fn lengths(files: &desa_viewer::source::CharacterFiles, tables: &KeyTables) {
         let off: f32 = pose
             .iter()
             .zip(&rest)
-            .skip(1)
+            // Not the root or the board (bones 1 to 3), which move freely.
+            .skip(4)
             .map(|(a, b)| (a.1.length() - b.1.length()).abs())
             .sum::<f32>()
-            / (pose.len().max(2) - 1) as f32;
+            / (pose.len().max(5) - 4) as f32;
         rows.push((name.clone(), off));
     }
     rows.sort_by(|a, b| b.1.total_cmp(&a.1));

@@ -701,13 +701,13 @@ impl Skater {
     /// `Bail2`), or, coming down backwards, falling backwards
     /// (`BailBackward`), as `DoingTrickBail` and `YawBail` pick.
     fn start_bail(&mut self, action: Action, backwards: bool) {
+        let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
+        if flat.length() > 10.0 {
+            self.heading = flat.x.atan2(flat.z);
+        }
         if backwards && action == Action::Bail {
             self.bail_anims = ("BailBackward", "BailBackwardGetUp");
         } else {
-            let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
-            if flat.length() > 10.0 {
-                self.heading = flat.x.atan2(flat.z);
-            }
             // `GotoRandomScript [ TFBBail1 TFBBail2 ]`.
             self.bail_anims = if (self.clock * 60.0) as u32 % 2 == 0 {
                 ("Bail1", "BailGetUp1")
