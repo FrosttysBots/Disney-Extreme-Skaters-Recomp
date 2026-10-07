@@ -152,8 +152,9 @@ checks that a pad can rumble.
 The panel's **2 minute run** is the game's single session (Trick Attack):
 two minutes from the level's start, the last combo counting once it
 lands, and the best score for each level and character kept in the
-settings file. `--run SECONDS` with `--skate` screenshots one with that
-much time left.
+settings file; Replay plays the run back as it was shown. `--run SECONDS`
+with `--skate` screenshots one with that much time left, and `--replay-at
+SECONDS` the replay of it that far in.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |

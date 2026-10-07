@@ -17,6 +17,9 @@ pub enum Action {
     ToggleSkate,
     /// A two-minute run from the level's start (again).
     StartRun,
+    /// Watch the run just skated again, or stop watching.
+    Replay,
+    StopReplay,
     PlayCameraPath(usize),
     StopCameraPath,
 }
@@ -63,6 +66,8 @@ pub struct CharacterModel {
     /// score, the best before it, and whether it beat it.
     pub run_clock: Option<f32>,
     pub run_result: Option<(u32, u32, bool)>,
+    /// Watching the run again.
+    pub replaying: bool,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
@@ -240,6 +245,9 @@ fn run_result(
                         ui.label(format!("Best {best}"));
                     }
                     ui.horizontal(|ui| {
+                        if ui.button("Replay").clicked() {
+                            actions.push(Action::Replay);
+                        }
                         if ui.button("Again").clicked() {
                             actions.push(Action::StartRun);
                         }
@@ -248,6 +256,26 @@ fn run_result(
                         }
                     });
                 });
+            });
+        });
+}
+
+/// While a replay plays: a label saying so, and a button to stop it.
+fn replay_banner(ctx: &egui::Context, actions: &mut Vec<Action>) {
+    egui::Area::new(egui::Id::new("replay"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("REPLAY")
+                        .size(22.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(255, 80, 60))
+                        .background_color(egui::Color32::from_black_alpha(140)),
+                );
+                if ui.button("Stop").clicked() {
+                    actions.push(Action::StopReplay);
+                }
             });
         });
 }
@@ -314,7 +342,9 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if let Some(left) = model.character.run_clock {
             run_clock(ctx, left);
         }
-        if let Some(result) = model.character.run_result {
+        if model.character.replaying {
+            replay_banner(ctx, &mut actions);
+        } else if let Some(result) = model.character.run_result {
             run_result(ctx, result, &mut actions);
         }
     }

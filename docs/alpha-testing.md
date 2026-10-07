@@ -70,7 +70,8 @@ skater is and what it's doing.
   minutes from the level's start to score what you can. When the clock
   runs out, the combo you're in still counts once it lands, then the
   skater brakes to a stop and the score goes against your best for that
-  level and character (kept between runs).
+  level and character (kept between runs). Replay watches the run again,
+  through the same camera, with the score and combos as they were.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game

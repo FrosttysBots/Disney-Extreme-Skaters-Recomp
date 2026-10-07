@@ -125,6 +125,9 @@ struct Args {
     /// its clock
     #[arg(long, requires = "skate")]
     run: Option<f32>,
+    /// For --run: once skated, show the run's replay this many seconds in
+    #[arg(long, requires = "run")]
+    replay_at: Option<f32>,
     /// For --screenshot: also show what goals add later (pickups, goal
     /// pedestrians, warp portals)
     #[arg(long, requires = "screenshot")]
@@ -484,6 +487,25 @@ struct Run {
 /// How far away objects' sounds fade out (units).
 const OBJECT_SOUND_RANGE: f32 = 2000.0;
 
+/// One frame of a run as it was shown, for the replay.
+struct ReplayFrame {
+    /// Seconds into the run.
+    time: f32,
+    placement: Mat4,
+    pose: Pose,
+    flipped: bool,
+    position: Vec3,
+    camera: FlyCamera,
+    /// What the screen showed: score, combo, message, balance and special
+    /// meters, and the clock.
+    score: u32,
+    combo: Option<String>,
+    message: Option<String>,
+    balance: Option<f32>,
+    special: (f32, bool),
+    clock: f32,
+}
+
 /// How long a run lasts (`StartGoal_TrickAttack time = 120`).
 const RUN_TIME: f32 = 120.0;
 
@@ -574,6 +596,10 @@ struct App<'a> {
     rumble: rumble::Rumble,
     /// A two-minute run under way.
     run: Option<Run>,
+    /// The run's frames as they were shown, and how far into watching
+    /// them again (seconds) while a replay plays.
+    recording: Vec<ReplayFrame>,
+    replay: Option<f32>,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -648,6 +674,7 @@ impl<'a> App<'a> {
                     rumble: true,
                     run_clock: None,
                     run_result: None,
+                    replaying: false,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                 },
@@ -665,6 +692,8 @@ impl<'a> App<'a> {
             sparks: sparks::Sparks::new(),
             rumble: rumble::Rumble::new(),
             run: None,
+            recording: Vec::new(),
+            replay: None,
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -928,6 +957,9 @@ impl<'a> App<'a> {
     fn toggle_skate(&mut self) {
         self.skate_pose = None;
         self.run = None;
+        self.recording.clear();
+        self.replay = None;
+        self.model.character.replaying = false;
         self.model.character.run_clock = None;
         self.model.character.run_result = None;
         self.blend_from = None;
@@ -1020,6 +1052,7 @@ impl<'a> App<'a> {
         self.placement = level.home;
         self.toggle_skate();
         if self.skating.is_some() {
+            self.recording.clear();
             self.run = Some(Run {
                 left: RUN_TIME,
                 ending: None,
@@ -1036,6 +1069,9 @@ impl<'a> App<'a> {
         let (Some(run), Some((skater, ..))) = (&mut self.run, &self.skating) else {
             return;
         };
+        if self.replay.is_some() {
+            return;
+        }
         self.model.character.run_clock = Some(run.left);
         if run.over {
             return;
@@ -1129,7 +1165,42 @@ impl<'a> App<'a> {
         input
     }
 
+    /// Shows the next frame of the replay, and at its end goes back to
+    /// how the run finished.
+    fn play_replay(&mut self, dt: f32) {
+        let (Some(t), Some((skater, ..))) = (&mut self.replay, &mut self.skating) else {
+            return;
+        };
+        *t += dt;
+        let at = self.recording.partition_point(|f| f.time <= *t);
+        let frame = if at >= self.recording.len() {
+            self.replay = None;
+            self.model.character.replaying = false;
+            self.recording.last()
+        } else {
+            self.recording.get(at)
+        };
+        let Some(frame) = frame else { return };
+        self.placement = frame.placement;
+        self.skate_pose = Some(frame.pose.clone());
+        self.blend_from = None;
+        self.camera = frame.camera;
+        skater.position = frame.position;
+        skater.flipped = frame.flipped;
+        let model = &mut self.model.character;
+        model.score = frame.score;
+        model.combo = frame.combo.clone();
+        model.message = frame.message.clone();
+        model.balance = frame.balance;
+        model.special = frame.special;
+        model.run_clock = Some(frame.clock);
+    }
+
     fn skate(&mut self, dt: f32) {
+        if self.replay.is_some() {
+            self.play_replay(dt);
+            return;
+        }
         let pad = self.pad_input();
         // The pedestrians shown are solid: the skater bumps off them.
         let objects = self.model.show_objects;
@@ -1368,6 +1439,26 @@ impl<'a> App<'a> {
         // Chase camera, on the game's medium camera settings.
         chase.update(skater, physics, world, dt);
         self.camera = FlyCamera::looking_at(chase.eye, chase.target);
+
+        // A run is recorded as it's shown, to watch again.
+        if let Some(run) = self.run.as_ref().filter(|r| !r.over) {
+            let time = self.recording.last().map_or(0.0, |f| f.time + dt);
+            let model = &self.model.character;
+            self.recording.push(ReplayFrame {
+                time,
+                placement: self.placement,
+                pose: self.skate_pose.clone().unwrap_or_default(),
+                flipped: skater.flipped,
+                position: skater.position,
+                camera: self.camera,
+                score: model.score,
+                combo: model.combo.clone(),
+                message: model.message.clone(),
+                balance: model.balance,
+                special: model.special,
+                clock: run.left,
+            });
+        }
     }
 
     fn character_index(&self, id: &str) -> Option<usize> {
@@ -1745,6 +1836,16 @@ impl<'a> App<'a> {
                 ui::Action::LookAtCharacter => self.camera = camera_facing(self.placement),
                 ui::Action::ToggleSkate => self.toggle_skate(),
                 ui::Action::StartRun => self.start_run(),
+                ui::Action::Replay => {
+                    if !self.recording.is_empty() {
+                        self.replay = Some(0.0);
+                        self.model.character.replaying = true;
+                        if let Some(audio) = &mut self.audio {
+                            audio.stop();
+                        }
+                    }
+                }
+                ui::Action::StopReplay => self.replay = Some(f32::INFINITY),
             }
         }
         // Load after the "Loading" message has been on screen for a frame.
@@ -2134,6 +2235,11 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     level.update_objects(true, args.goal_objects, args.time + now, 1.0 / 60.0);
                     level.behaviour.sounds.clear();
                 }
+            }
+            if let Some(at) = args.replay_at {
+                app.replay = Some(0.0);
+                app.model.character.replaying = true;
+                app.play_replay(at);
             }
             camera = app.camera;
             if let Some((skater, _, chase)) = &app.skating {
