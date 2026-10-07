@@ -29,6 +29,9 @@ use crate::world::World;
 
 /// Feet to the game's units (inches).
 const FOOT: f32 = 12.0;
+/// The faces the camera's line meets (the game's camera feeler requires
+/// flag 0x80: camera-collidable; poles and the like let it through).
+const CAMERA: u16 = ngc_collision::face_flags::CAMERA_COLLIDABLE;
 /// How close to a wall the camera may come.
 const WALL_MARGIN: f32 = 10.0;
 /// How long after vert air it turns at `vert_air_landed_slerp`.
@@ -185,7 +188,9 @@ impl ChaseCamera {
         // view it has is clearer, and turns on as the skater gets clear.
         let clear = |dir: Vec3| {
             let eye = target - dir * back * FOOT + Vec3::Y * above * FOOT;
-            world.ray(target, eye).map_or(1.0, |hit| hit.fraction)
+            world
+                .ray_requiring(target, eye, CAMERA)
+                .map_or(1.0, |hit| hit.fraction)
         };
         let (now, then) = (clear(self.dir), clear(turned));
         // (Only just after vert air: anywhere else holding back makes it
@@ -209,7 +214,11 @@ impl ChaseCamera {
         let lift = LIFTS
             .iter()
             .copied()
-            .find(|&h| world.ray(target, eye + Vec3::Y * h).is_none())
+            .find(|&h| {
+                world
+                    .ray_requiring(target, eye + Vec3::Y * h, CAMERA)
+                    .is_none()
+            })
             .unwrap_or(0.0);
         self.lift = if lift > self.lift {
             self.lift + (lift - self.lift) * rate(0.25)
@@ -220,7 +229,7 @@ impl ChaseCamera {
         // Still behind a wall: pulled in along the line from the focus,
         // short of the wall by the margin (never past the focus).
         let full = eye.distance(target);
-        let allowed = match world.ray(target, eye) {
+        let allowed = match world.ray_requiring(target, eye, CAMERA) {
             Some(hit) => (hit.point.distance(target) - WALL_MARGIN).max(0.0),
             None => full,
         };

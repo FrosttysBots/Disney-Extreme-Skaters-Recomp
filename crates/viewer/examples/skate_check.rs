@@ -160,6 +160,7 @@ fn main() {
     };
     let (mut throughs, mut resets, mut hidden, mut stuck, mut shakes) = (0, 0, 0, 0, 0);
     let mut gaps: std::collections::BTreeMap<String, u32> = Default::default();
+    let mut past = 0;
     for run in 0..runs {
         let mut skater = Skater::new(start.position, facing.x.atan2(facing.z));
         skater.tricks = tricks.clone();
@@ -217,8 +218,20 @@ fn main() {
             }
             // The camera must always see the skater.
             chase.update(&skater, &physics, &world, dt);
-            if world.ray(chase.target, chase.eye).is_some() {
+            if world
+                .ray_requiring(
+                    chase.target,
+                    chase.eye,
+                    ngc_collision::face_flags::CAMERA_COLLIDABLE,
+                )
+                .is_some()
+            {
                 hidden += 1;
+            }
+            // And behind faces the camera's line lets through (poles,
+            // fences): seen past, as the game does.
+            if world.ray(chase.target, chase.eye).is_some() {
+                past += 1;
             }
             // Shaking: the camera jerking one way then straight back (its
             // movement's change large and opposite, frame after frame).
@@ -316,6 +329,6 @@ fn main() {
     }
     println!("gaps scored: {:?}", gaps);
     println!(
-        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames, camera shaking {shakes} frames, stuck {stuck} times"
+        "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames (past others {past}), camera shaking {shakes} frames, stuck {stuck} times"
     );
 }

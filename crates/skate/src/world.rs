@@ -99,6 +99,12 @@ impl World {
     /// The first solid face between `from` and `to`. Faces flagged
     /// non-collidable (triggers, decals) are passed through.
     pub fn ray(&self, from: Vec3, to: Vec3) -> Option<Hit> {
+        self.ray_requiring(from, to, 0)
+    }
+
+    /// Like [`World::ray`], hitting only faces with all of `flags` (the
+    /// camera's line only meets camera-collidable faces, 0x80).
+    pub fn ray_requiring(&self, from: Vec3, to: Vec3, flags: u16) -> Option<Hit> {
         let min = from.min(to) - Vec3::splat(0.5);
         let max = from.max(to) + Vec3::splat(0.5);
         let direction = to - from;
@@ -110,7 +116,7 @@ impl World {
             }
             object.bsp.faces_near(min.to_array(), max.to_array(), |f| {
                 let face = &object.faces[usize::from(f)];
-                if face.flags & face_flags::NON_COLLIDABLE != 0 {
+                if face.flags & face_flags::NON_COLLIDABLE != 0 || face.flags & flags != flags {
                     return;
                 }
                 let [a, b, c] = face
