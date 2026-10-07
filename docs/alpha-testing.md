@@ -27,6 +27,7 @@ character. This page is for anyone trying it out.
 | F + direction | B + direction | Manuals 2 to 5, on the ground or from a manual |
 | E as you launch off a quarter pipe's lip | Y | Lip trick on the coping (balance with A / D) |
 | R as you land from vert | Shoulder buttons | Revert (keeps the combo going into a manual) |
+| R held going up a quarter pipe | Shoulder buttons held | Spine transfer over to the ramp behind |
 | Two directions, then Q (or E in a manual) | Two directions, then X (or Y) | Special trick, when the special meter is full |
 | Tab | | Jump to the next spawn point |
 | Esc | | Stop skating |
@@ -40,7 +41,8 @@ skater is and what it's doing.
 - Pushing, steering, ollies and flips/grabs around a level.
 - Grinding rails (each direction is a different grind), and balancing.
 - Manuals and branching between them, chaining grind → manual → grind.
-- Quarter pipes: vert air, lips on copings that have a rail, reverts.
+- Quarter pipes: vert air, lips on copings that have a rail, reverts,
+  and spine transfers (hold R going up; Camp's half pipes have spines).
 - Filling the special meter and doing your character's specials.
 - Gaps: jumps, grinds and lines the levels name and score (shown in the
   combo), like the Hub's Chain Link Gap or Camp's Tent Gap.
@@ -52,8 +54,7 @@ skater is and what it's doing.
 
 ## Known differences from the game
 
-- Not yet: spine transfers and transfers between ramps (some gaps need
-  them), wall rides (the game barely uses them), skitching, the
+- Not yet: wall rides (the game barely uses them), skitching, the
   Simplified controls, sounds, goals and gameplay modes, and the level's
   other triggers (breakables, goal pickups).
 - Approximations of our own: how far the camera follows (the game's

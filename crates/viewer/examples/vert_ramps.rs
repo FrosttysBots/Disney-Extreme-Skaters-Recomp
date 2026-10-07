@@ -128,13 +128,18 @@ fn main() {
                 }
                 continue;
             }
+            // With SPINE set, the spine button held all the way.
+            let spine = std::env::var("SPINE").is_ok();
             let input = if lips && !skater.on_ground {
                 Input {
                     grind: true,
                     ..Input::default()
                 }
             } else {
-                push
+                Input {
+                    revert: spine,
+                    ..push
+                }
             };
             skater.update(input, &physics, &world, 1.0 / 60.0);
             if let Some(lip) = &skater.lip {
@@ -167,6 +172,18 @@ fn main() {
             if skater.action == Action::Landing && landed_at.is_some() {
                 break;
             }
+        }
+        if std::env::var("SPINE").is_ok() {
+            let transferred = skater
+                .combo_tricks
+                .tricks
+                .iter()
+                .chain(skater.last_combo.iter().flat_map(|c| c.combo.tricks.iter()))
+                .any(|t| t.name == "Spine Transfer");
+            println!(
+                "  spine transfer: {transferred}, landed at {:?}",
+                landed_at.map(|p| p.round())
+            );
         }
         // In front of the ramp's face, or behind it (the deck)?
         let side = landed_at.map(|p| (p - *centre).dot(out));

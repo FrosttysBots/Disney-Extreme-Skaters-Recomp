@@ -49,6 +49,15 @@ impl Combo {
         });
     }
 
+    /// A trick that doesn't lose points for repeating (`Display
+    /// NoDegrade`, as the spine transfer's `SkaterAwardTransfer`).
+    pub fn add_no_degrade(&mut self, name: &str, score: u32) {
+        self.add(name, score, false);
+        if let Some(last) = self.tricks.last_mut() {
+            last.repeats = 0;
+        }
+    }
+
     /// Points added to the latest trick (the score object's `TweakTrick`,
     /// 0x800B0BA0): each frame of a grind (`SetGrindTweak`, 7), a manual
     /// (`DoBalanceTrick Tweak`, 1) or a held grab (`GrabTweak`, 20).

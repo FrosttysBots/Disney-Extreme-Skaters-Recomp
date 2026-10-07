@@ -202,6 +202,17 @@ const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0,
 /// Slower than this into a wall the skater just stops against it.
 const CREEP_SPEED: f32 = 50.0;
 
+/// A spine transfer's points (`TRANSFER_POINTS`).
+const TRANSFER_POINTS: u32 = 250;
+
+/// A spine transfer under way: the far ramp's way out (flat), and seconds
+/// until it's over that ramp.
+#[derive(Clone, Copy, Debug)]
+struct Transfer {
+    out: Vec3,
+    left: f32,
+}
+
 /// A push without its animation lasts this long, and the next starts under
 /// this fraction of the kick speed.
 const PUSH_TIME: f32 = 0.8;
@@ -249,6 +260,8 @@ pub struct Skater {
     /// landing backwards (`FlipAndRotate`) or a revert. Swaps which turn
     /// animations play.
     pub flipped: bool,
+    /// A spine transfer in flight: over to the ramp on the other side.
+    transfer: Option<Transfer>,
     /// How long a turn has been held, in seconds.
     turn_time: f32,
     /// How long the skater has been crouched (tensing for an ollie).
@@ -374,6 +387,7 @@ impl Skater {
             slope: 0.0,
             bump: None,
             flipped: false,
+            transfer: None,
             turn_time: 0.0,
             crouch_time: 0.0,
             grind: None,
@@ -719,6 +733,11 @@ impl Skater {
     }
 
     /// About to land.
+    /// Holding the spine button in the air, or over a spine transfer.
+    pub fn spine_held(&self) -> bool {
+        self.transfer.is_some() || (self.last_input.revert && !self.on_ground)
+    }
+
     pub fn landing_soon(&self) -> bool {
         // Only in the air: the last landing's stretch doesn't carry over
         // into the next takeoff.
@@ -1661,6 +1680,7 @@ impl Skater {
 
         // Ground following (main.dol 0x800F52AC): down the skater's up from
         // `ground_snap_up` above the new spot.
+        let flat_ground = up.y > 0.7;
         let from = target + up * p.ground_snap_up;
         let to = target - up * 200.0;
         // A wall above the new spot (an overhang the skater has ducked
@@ -1674,8 +1694,13 @@ impl Skater {
             // This crate's safeguard: a wall bounce can leave the new spot
             // just inside a block whose top the tilted line misses (it
             // goes in through the side); ground straight above the feet,
-            // within the snap distances, holds the skater.
+            // within the snap distances, holds the skater. (Not on steep
+            // ramps, where it would hold a skater riding up a quarter
+            // pipe onto the deck above the lip instead of launching it.)
             .or_else(|| {
+                if !flat_ground {
+                    return None;
+                }
                 world
                     .ray_past(
                         target + Vec3::Y * p.ground_snap_up,
@@ -1688,6 +1713,9 @@ impl Skater {
             // between faces, which a line straight down can fall through;
             // ground a step to the side, at the same height, holds it.
             .or_else(|| {
+                if !flat_ground {
+                    return None;
+                }
                 SEAM_PROBES.iter().find_map(|&(x, z)| {
                     let at = target + Vec3::new(x, 0.0, z);
                     world
@@ -1735,7 +1763,7 @@ impl Skater {
                 self.ollied = false;
                 self.air_time = 0.0;
                 self.manual = false;
-                self.take_off_vert(p);
+                self.take_off_vert(p, world);
                 self.up = Vec3::Y;
                 self.set_action(Action::Air);
                 return;
@@ -1775,14 +1803,18 @@ impl Skater {
     /// the ground it left was a vert face): the speed away from the ramp
     /// is turned up or along it, keeping its length, and the skater is put
     /// `vert_push_out` out from the lip, to come back down onto the ramp.
-    /// The game also aims transfers to other ramps here; not ported.
-    fn take_off_vert(&mut self, p: &Physics) {
+    /// Holding the spine button (`Held R2`/`L2`, the revert button here),
+    /// it aims a spine transfer to the ramp on the other side instead.
+    fn take_off_vert(&mut self, p: &Physics, world: &World) {
         use ngc_collision::face_flags::VERT;
         let out = Vec3::new(self.up.x, 0.0, self.up.z);
         if self.ground_flags & VERT == 0 || self.velocity.y <= 0.0 || out.length() < 0.5 {
             return;
         }
         let out = out.normalize();
+        if self.last_input.revert && self.spine_transfer(out, p, world) {
+            return;
+        }
         let speed = self.velocity.length();
         let kept = self.velocity - out * self.velocity.dot(out);
         self.velocity = kept.normalize_or(Vec3::Y) * speed;
@@ -1793,9 +1825,130 @@ impl Skater {
         });
     }
 
+    /// A spine transfer (main.dol 0x800F1CD8, in the vert takeoff): the
+    /// ramp it's leaving, just in front (`out`), then 10 to 500 back over
+    /// the lip in steps of 6, a vert face facing the other way (lines 4000
+    /// down). The jump goes straight up (unless the ramps face the same way
+    /// within 24) and across to that face, no lower than the skater, in
+    /// the time it takes to come back to this height less two frames; it
+    /// fails if that needs more than the skater's speed or a line across
+    /// at its height hits anything. Then `SkaterAwardTransfer`: "Spine
+    /// Transfer", 250 points.
+    fn spine_transfer(&mut self, out: Vec3, p: &Physics, world: &World) -> bool {
+        use ngc_collision::face_flags::VERT;
+        let pos = self.position;
+        let down = Vec3::Y * 4000.0;
+        // (Half a unit out in the game; a little further too here, where a
+        // skater that just left the lip can be a hair past the face.)
+        let own = [0.5, 3.0, 6.0].iter().find_map(|&ahead| {
+            let front = pos + out * ahead;
+            world.ray_past(front, front - down, |h| h.flags & VERT != 0)
+        });
+        let Some(own) = own else {
+            if self.trace {
+                eprintln!("spine: no ramp in front of {pos:?} (out {out:?})");
+            }
+            return false;
+        };
+        let mut far = None;
+        let mut back = 10.0;
+        while back < 500.0 {
+            let from = pos - out * back;
+            if let Some(hit) = world.ray(from, from - down) {
+                if hit.flags & VERT != 0 && hit.normal.dot(own.normal) < 0.0 {
+                    far = Some(hit);
+                    break;
+                }
+            }
+            back += 6.0;
+        }
+        let Some(far) = far else {
+            if self.trace {
+                eprintln!(
+                    "spine: no ramp the other way behind {pos:?}, own {:?}",
+                    own.normal
+                );
+            }
+            return false;
+        };
+        let target = Vec3::new(far.point.x, far.point.y.max(pos.y), far.point.z);
+        let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+        let width = flat(target - own.point).length();
+        let facing = flat(far.normal).normalize_or_zero();
+        let speed = self.velocity.length();
+        let velocity = if facing.dot(out).abs() < 0.9 || width > 24.0 {
+            Vec3::Y * speed
+        } else {
+            self.velocity
+        };
+        // Up and back to this height, frame by frame.
+        let gravity = p.air_gravity / p.air_hang.max(0.01);
+        let (mut height, mut rise, mut time) = (1e-6f32, velocity.y, 0.0f32);
+        loop {
+            height += rise * STEP + 0.5 * gravity * STEP * STEP;
+            rise += gravity * STEP;
+            time += STEP;
+            if height <= 0.0 {
+                break;
+            }
+        }
+        let time = (time - 2.0 * STEP).max(0.1);
+        if width > 24.0 && (width + 1.0) / time > speed {
+            if self.trace {
+                eprintln!("spine: {width} across in {time} s is too fast for {speed}");
+            }
+            return false;
+        }
+        if world
+            .ray(pos, Vec3::new(target.x, pos.y, target.z))
+            .is_some()
+        {
+            if self.trace {
+                eprintln!("spine: blocked across to {target:?}");
+            }
+            return false;
+        }
+        let across = flat(target - pos) / time;
+        if self.trace {
+            eprintln!(
+                "spine: from {pos:?} to {target:?} ({width} wide) in {time} s, across {across:?}, own {:?}",
+                own.point
+            );
+        }
+        self.velocity = velocity + across;
+        self.vert = None;
+        self.transfer = Some(Transfer {
+            out: facing,
+            left: time,
+        });
+        self.combo = true;
+        self.combo_tricks
+            .add_no_degrade("Spine Transfer", TRANSFER_POINTS);
+        true
+    }
+
     fn air_step(&mut self, input: Input, p: &Physics, world: &World) {
         // A push stops when the skater leaves the ground.
         self.push_left = 0.0;
+        // A spine transfer arrives over the far ramp: down onto it, in
+        // its plane, as off any vert lip.
+        if let Some(transfer) = &mut self.transfer {
+            transfer.left -= STEP;
+            if transfer.left <= 0.0 {
+                let out = transfer.out;
+                self.transfer = None;
+                self.velocity = Vec3::Y * self.velocity.y;
+                // In the far ramp's plane where it is now (the leftover
+                // speed along the ramp can carry it a little past the
+                // target).
+                if out != Vec3::ZERO {
+                    self.vert = Some(VertAir {
+                        out,
+                        offset: self.position.dot(out),
+                    });
+                }
+            }
+        }
         if let Some((_, time)) = self.lip_out.as_mut() {
             *time += STEP;
         }

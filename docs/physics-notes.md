@@ -263,7 +263,23 @@ on-ground update switches on.
   ramp is turned up and along it keeping its length, the skater starts
   3 out from the lip and stays in the ramp's vertical plane, and the
   ramp is left to landing; it comes back down fakie, as without a spin.
-  Not ported: transfers, the spin axis, `skater_autoturn_vert_angle`,
+  Spine transfers (0x800F1CD8, with the spine button held, `Held R2`
+  in `Airborne`): a line 4000 down half a unit in front finds the ramp
+  being left (vert faces only); lines down from 10 to 500 behind, in
+  steps of 6, find a vert face facing the other way; the target is that
+  point, no lower than the skater. Unless the two face the same way and
+  lie within 24, the velocity turns straight up (0x80009C70). Simulating
+  the rise and fall frame by frame back to this height gives the time
+  (less two frames, at least 0.1 s); the transfer fails if crossing in
+  that time needs more than the skater's speed (beyond 24) or a line
+  across at its height hits anything. Otherwise the horizontal speed is
+  the distance over the time (`+0xC4`), the target goes in `+0x3420`
+  and `SkaterAwardTransfer` scores "Spine Transfer", 250 with no
+  degrade, and plays `SpineTransfer`. Ported: all of this; the skater
+  then comes down in the far ramp's plane. Our own: the ramp being left
+  is also looked for 3 and 6 out (a skater can leave a hair past the
+  face).
+  Not ported: the spin axis, `skater_autoturn_vert_angle`,
   `Physics_Vert_hang_Stat`. On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).

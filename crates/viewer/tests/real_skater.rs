@@ -627,3 +627,55 @@ fn real_skater_on_the_hub() {
         "through the ground: {fell_through:?}"
     );
 }
+
+/// A spine transfer on Camp: Jessie rides up one side of a spine holding
+/// the spine button (crouched, for the speed), goes over and comes down
+/// the far side riding forwards, with "Spine Transfer" in the combo.
+#[test]
+#[ignore = "needs the game data"]
+fn spine_transfer_on_camp() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let files = data.load_level("camp").unwrap();
+    let mut program = Program::new();
+    for file in data.global_scripts().unwrap() {
+        program.add(&file).unwrap();
+    }
+    let physics = Physics::new(&program, &Stats::of(&program, "jessie"));
+    let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
+    let world = World::new(collision);
+    let mut skater = Skater::new(Vec3::ZERO, 0.0);
+    skater.place(
+        Vec3::new(-8816.0, -1.0, 2440.0),
+        90f32.to_radians(),
+        &physics,
+        &world,
+    );
+    let spine = Input {
+        push: true,
+        crouch: true,
+        revert: true,
+        ..Input::default()
+    };
+    let mut transferred = false;
+    let mut landed = None;
+    for frame in 0..180 {
+        skater.update(spine, &physics, &world, 1.0 / 60.0);
+        transferred |= skater
+            .combo_tricks
+            .tricks
+            .iter()
+            .any(|t| t.name == "Spine Transfer");
+        if frame > 30 && skater.on_ground && transferred {
+            landed = Some(skater.position);
+            break;
+        }
+    }
+    println!("spine transfer: {transferred}, landed at {landed:?}");
+    assert!(transferred, "a spine transfer");
+    let landed = landed.expect("down the other side");
+    // The spine's apex is at x -8560: over it, riding on along +X.
+    assert!(landed.x > -8560.0, "{landed}");
+    assert!(skater.velocity.x > 0.0 && !skater.landing.backwards);
+}

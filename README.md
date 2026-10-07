@@ -581,8 +581,10 @@ chase camera uses the game's camera settings, stays square to the ramp in
 vert air, and pulls in rather than ending up behind a wall.
 Lip tricks stall on the coping of quarter pipes with a rail along it:
 press E (with a direction for other lips) as you launch off the lip, then
-balance with A and D. Not yet: transfers, spine transfers, moving objects,
-and a frame-by-frame check against Dolphin.
+balance with A and D. Holding R going up a quarter pipe spine-transfers
+to the ramp behind. Gaps score from the levels' trigger scripts, and
+teleporters (like the Hub's harbour water) put the skater back. Not yet:
+moving objects, and a frame-by-frame check against Dolphin.
 Turning rates are read as radians a second and the camera distances as
 feet, both guesses for now.
 
@@ -601,7 +603,7 @@ feet, both guesses for now.
 4. **Skater physics.** The game's constants, and its update code from
    `main.dol` for the ground, walls, air, landing, grinding, vert air,
    manuals, lips and balance (done; wall rides are unused in this game).
-   Next: a frame-by-frame check against Dolphin, and transfers.
+   Spine transfers too. Next: a frame-by-frame check against Dolphin.
 5. **Tricks and scoring.** Each character's air tricks, grinds, manuals,
    lips and specials from the trick tables, reverts, the game's combo
    scoring and special meter, its animation choices, a chase camera and

@@ -154,6 +154,10 @@ pub fn choose(skater: &Skater) -> Anim {
                 Anim::once("AirTurnLeft", AIR)
             } else if turn > 0.0 {
                 Anim::once("AirTurnRight", AIR)
+            } else if skater.spine_held() {
+                // `Held R2` (or `L2`): `SpineTransfer`, as
+                // `SkaterAwardTransfer` plays over a transfer.
+                Anim::once("SpineTransfer", AIR)
             } else if skater.ollied() {
                 Anim::into("Ollie", "AirIdle", AIR).committed()
             } else {
