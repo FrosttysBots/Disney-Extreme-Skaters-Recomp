@@ -392,9 +392,33 @@ on-ground update switches on.
   the skater to face its velocity (`TurnToFaceVelocity`) and
   `DoingTrickBail` falls forwards (`Bail1` or `Bail2`, at random) or,
   landing backwards, backwards (`BailBackward`), the bail lasting the
-  fall and the get-up. Ported: all of these (the skate crate's `anims`
-  module picks them, with priorities and play-through), AutoKick on by
-  default, and the yaw bail; not the pitch and roll bails.
+  fall and the get-up. Crouching runs `DoCrouch_slope`: `CrouchIdle`,
+  or `CrouchBumpUp`/`Down` when the slope changes by more than 5 degrees
+  in a frame (never the `Crouch` animation, which some characters have
+  for another skeleton). Landing backwards, `Land2`'s `FlipAndRotate`
+  turns the skater round to face the way it's going and flips its stance
+  (`Flipped`), so it rides switch: the ground turn animations swap, and
+  the game draws the skeleton mirrored through each bone's mirror
+  partner (`.ske`). Every `PlayAnim` blends from the last pose over its
+  `BlendPeriod`: 0.3 seconds usually, 0.1 into landings, 0.03 into
+  flails, none into an ollie, a backwards landing or a bail's get-up.
+  Ported: all of these (the skate crate's `anims` module picks them,
+  with priorities, play-through and blend periods; the viewer blends and
+  mirrors), AutoKick on by default, and the yaw bail; not the pitch and
+  roll bails.
+- **Trigger faces** (flag `0x40`) belong to level geometry whose node has
+  a `TriggerScript`, run when the skater touches them. Teleporters end a
+  few calls down in a restart named as `node =` (the Hub harbour's water
+  runs `Object03c_DOIT`, `Teleporter_water node = TRG_WaterStart`); gaps
+  run `StartGap GapID = X flags = [ CANCEL_GROUND ]` and `EndGap GapID = X
+  text = "Chain Link Gap" score = 100`, and the gap scores as a trick in
+  the combo if nothing its flags rule out happened in between
+  (`CANCEL_GROUND`, `CANCEL_AIR`, `PURE_AIR`, `REQUIRE_RAIL`,
+  `REQUIRE_LIP`). Ported: teleporters and gaps, the scripts read without
+  running them (`desa_viewer::triggers`). Our own rules: gaps fire on
+  crossing a trigger, ends before starts, and only after 50 units across
+  (start and end pads lie together for gaps that go both ways). Not yet:
+  the other trigger scripts (breakables, goals, sounds).
 - **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
   the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
   none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left

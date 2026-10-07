@@ -30,6 +30,9 @@ fn main() {
     for file in data.global_scripts().unwrap() {
         program.add(&file).unwrap();
     }
+    for file in &files.scripts {
+        program.add(file).unwrap();
+    }
     let stats = Stats::of(&program, "jessie");
     let physics = Physics::new(&program, &stats);
     let mut tricks = TrickBook::new(&program, "jessie", &stats);
@@ -156,9 +159,11 @@ fn main() {
         (seed >> 8) as f32 / (1u32 << 24) as f32
     };
     let (mut throughs, mut resets, mut hidden, mut stuck, mut shakes) = (0, 0, 0, 0, 0);
+    let mut gaps: std::collections::BTreeMap<String, u32> = Default::default();
     for run in 0..runs {
         let mut skater = Skater::new(start.position, facing.x.atan2(facing.z));
         skater.tricks = tricks.clone();
+        skater.gap_triggers = desa_viewer::triggers::gaps(&nodes, &program);
         skater.spawns = nodes
             .spawns
             .iter()
@@ -188,6 +193,9 @@ fn main() {
             }
             let before = skater.position;
             skater.update(input, &physics, &world, dt);
+            if let Some((name, _)) = skater.last_gap.take() {
+                *gaps.entry(name).or_default() += 1;
+            }
             let after = skater.position;
             // Stuck: on the ground, out of a manual, and hardly travelled in
             // 5 s (the path, not just how far it ended up: circles move).
@@ -306,6 +314,7 @@ fn main() {
             }
         }
     }
+    println!("gaps scored: {:?}", gaps);
     println!(
         "{runs} runs of 60 s: {throughs} frames through ground, {resets} resets, camera behind a wall {hidden} frames, camera shaking {shakes} frames, stuck {stuck} times"
     );

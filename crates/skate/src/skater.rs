@@ -46,6 +46,7 @@ use glam::{Mat4, Quat, Vec3};
 use crate::anims::{self, Anim, Landing};
 use crate::balance::{Balance, Lean, METER};
 use crate::constants::Physics;
+use crate::gaps::{GapTrigger, Gaps, Surface};
 use crate::rails::RailHit;
 use crate::score::Combo;
 use crate::tricks::{BalanceTrick, Button, Dir, Kind, LipTrick, TrickBook};
@@ -266,6 +267,12 @@ pub struct Skater {
     /// like, as the level's `TriggerScript`s do): their collision object's
     /// checksum, and where to and facing which way.
     pub teleports: HashMap<u32, (Vec3, f32)>,
+    /// Trigger faces that start or end gaps, by collision object, and the
+    /// gaps under way.
+    pub gap_triggers: HashMap<u32, GapTrigger>,
+    gaps: Gaps,
+    /// The last gap scored, its name and points (for whoever shows it).
+    pub last_gap: Option<(String, u32)>,
     /// Pushing by itself while under the kick speed (the controller's
     /// AutoKick option, on by default; the game's can-push test at
     /// 0x800F43F0 reads it from `+0x3A38`). Off, it pushes while the up
@@ -375,6 +382,9 @@ impl Skater {
             spawns: Vec::new(),
             trace: false,
             teleports: HashMap::new(),
+            gap_triggers: HashMap::new(),
+            gaps: Gaps::default(),
+            last_gap: None,
             auto_kick: true,
             pushing: false,
             push_left: 0.0,
@@ -470,6 +480,9 @@ impl Skater {
     /// `score`), lost in a bail.
     fn end_combo(&mut self, landed: bool) {
         self.combo = false;
+        if !landed {
+            self.gaps.clear();
+        }
         self.air_spin = 0.0;
         self.last_total = 0;
         // A bail empties the special meter.
@@ -596,17 +609,59 @@ impl Skater {
     /// Touching a trigger face of a teleporter (the level's `TriggerScript`
     /// sends the skater to a restart: `Teleporter`, `Teleporter_water` and
     /// the like): there, standing, the combo lost.
-    fn check_teleports(&mut self, before: Vec3, world: &World, p: &Physics) {
-        if self.teleports.is_empty() {
+    ///
+    /// And gaps: their start and end triggers, scored into the combo.
+    fn check_triggers(&mut self, before: Vec3, world: &World, p: &Physics) {
+        let surface = if self.lip.is_some() {
+            Surface::Lip
+        } else if self.grind.is_some() {
+            Surface::Rail
+        } else if self.on_ground {
+            Surface::Ground
+        } else {
+            Surface::Air
+        };
+        let across = (self.position - before) * Vec3::new(1.0, 0.0, 1.0);
+        self.gaps.update(surface, across.length());
+        if self.teleports.is_empty() && self.gap_triggers.is_empty() {
             return;
         }
-        // Along the way at knee height (planes stood up across a passage),
-        // and through the feet (water and floors).
+        // Teleporters: crossed along the way at knee height (planes stood
+        // up across a passage), or touched at the feet (water and floors).
         let knee = Vec3::Y * 10.0;
-        let mut touched = world.triggers(before + knee, self.position + knee);
-        touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
-        if let Some(&(position, heading)) = touched.iter().find_map(|o| self.teleports.get(o)) {
-            self.place(position, heading, p, world);
+        if !self.teleports.is_empty() {
+            let mut touched = world.triggers(before + knee, self.position + knee);
+            touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
+            if let Some(&(position, heading)) = touched.iter().find_map(|o| self.teleports.get(o)) {
+                self.gaps.clear();
+                self.place(position, heading, p, world);
+                return;
+            }
+        }
+        // Gaps: only crossing a trigger counts, once (just above the feet:
+        // pads lying flat are crossed going up or down).
+        let feet = Vec3::Y * 2.0;
+        let mut crossed: Vec<GapTrigger> = world
+            .triggers(before + feet, self.position + feet)
+            .iter()
+            .filter_map(|o| self.gap_triggers.get(o).cloned())
+            .collect();
+        // Ends first: where a gap's end and the way-back gap's start lie
+        // together, crossing them ends the one before starting the other.
+        crossed.sort_by_key(|t| matches!(t, GapTrigger::Start { .. }));
+        for trigger in &crossed {
+            if self.trace {
+                eprintln!("crossed {trigger:?} on {surface:?} at {:?}", self.position);
+            }
+            if let Some((name, score)) = self.gaps.touch(trigger, surface) {
+                // Into the combo like a trick; rolling along with no combo
+                // going, it banks straight away.
+                self.last_gap = Some((name.clone(), score));
+                self.credit(Some((name, score)), false);
+                if surface == Surface::Ground && !self.manual {
+                    self.end_combo(true);
+                }
+            }
         }
     }
 
@@ -854,7 +909,7 @@ impl Skater {
                 }
             }
         }
-        self.check_teleports(before, world, p);
+        self.check_triggers(before, world, p);
         self.update_special();
         let anim = anims::choose(self);
         // A committed animation plays its first part through unless

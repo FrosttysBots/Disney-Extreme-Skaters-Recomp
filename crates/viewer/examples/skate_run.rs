@@ -67,8 +67,34 @@ fn main() {
             })
             .collect(),
     );
+    // GAPS=1: every gap trigger and where its collision object is.
+    if std::env::var("GAPS").is_ok() {
+        let triggers = desa_viewer::triggers::gaps(&nodes, &program);
+        for object in &collision.objects {
+            if let Some(trigger) = triggers.get(&object.checksum) {
+                let b = object.bbox;
+                println!(
+                    "{:?} at {:.0},{:.0},{:.0} to {:.0},{:.0},{:.0}",
+                    trigger, b[0], b[1], b[2], b[3], b[4], b[5]
+                );
+            }
+        }
+        return;
+    }
     let world = World::new(collision).with_rails(rails);
 
+    // TRIGAT=x,z: the trigger objects on the vertical line there.
+    if let Ok(at) = std::env::var("TRIGAT") {
+        let v: Vec<f32> = at.split(',').map(|x| x.parse().unwrap()).collect();
+        let (top, bottom) = (
+            Vec3::new(v[0], 5000.0, v[1]),
+            Vec3::new(v[0], -5000.0, v[1]),
+        );
+        for object in world.triggers(top, bottom) {
+            println!("trigger object {object:#010x}");
+        }
+        return;
+    }
     let mut skater = Skater::new(Vec3::ZERO, 0.0);
     skater.tricks = tricks;
     skater.teleports = desa_viewer::triggers::teleports(&nodes, &program)
@@ -79,7 +105,12 @@ fn main() {
             (object, (spawn.position, facing.x.atan2(facing.z)))
         })
         .collect();
-    println!("{} teleporter objects", skater.teleports.len());
+    skater.gap_triggers = desa_viewer::triggers::gaps(&nodes, &program);
+    println!(
+        "{} teleporter objects, {} gap triggers",
+        skater.teleports.len(),
+        skater.gap_triggers.len()
+    );
     skater.anim_lengths = lengths.into_iter().collect();
     skater.place(
         Vec3::new(from[0], from[1], from[2]),

@@ -42,13 +42,20 @@ skater is and what it's doing.
 - Manuals and branching between them, chaining grind → manual → grind.
 - Quarter pipes: vert air, lips on copings that have a rail, reverts.
 - Filling the special meter and doing your character's specials.
+- Gaps: jumps, grinds and lines the levels name and score (shown in the
+  combo), like the Hub's Chain Link Gap or Camp's Tent Gap.
+- Teleporters and water: falling in the Hub's harbour puts you back on
+  the dock, as in the game.
+- Coming down a quarter pipe or landing a 180: you turn round and ride
+  switch (the character mirrored, as the game shows it).
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game
 
-- Not yet: spine transfers and transfers between ramps, wall rides (the
-  game barely uses them), skitching, the Simplified controls, sounds,
-  goals and gameplay modes.
+- Not yet: spine transfers and transfers between ramps (some gaps need
+  them), wall rides (the game barely uses them), skitching, the
+  Simplified controls, sounds, goals and gameplay modes, and the level's
+  other triggers (breakables, goal pickups).
 - Approximations of our own: how far the camera follows (the game's
   settings, not its code), lips start at coping rails in vert air (the
   game checks four angles), a skater barely rolling into a wall just stops

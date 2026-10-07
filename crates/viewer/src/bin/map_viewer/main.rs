@@ -765,6 +765,7 @@ impl<'a> App<'a> {
                 (object, (spawn.position, facing.x.atan2(facing.z)))
             })
             .collect();
+        skater.gap_triggers = desa_viewer::triggers::gaps(&level.nodes, program);
         self.stop_camera_path();
         let chase = ChaseCamera::behind(&skater, &physics);
         self.skating = Some((skater, physics, chase));
