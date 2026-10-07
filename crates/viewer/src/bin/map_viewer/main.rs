@@ -412,6 +412,46 @@ impl LoadedLevel {
 
 /// Where a character stands at a spawn point, facing its way. Character
 /// models face +Z.
+/// The skater's shadow, as the game draws one under it: a dark disc laid on
+/// the ground straight below, smaller and fainter the higher it is.
+fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision::ColorVertex> {
+    const RADIUS: f32 = 16.0;
+    const FADE: f32 = 400.0;
+    const SIDES: usize = 20;
+    let from = skater.position + Vec3::Y * 10.0;
+    let Some(hit) = world.ray(from, from - Vec3::Y * FADE) else {
+        return Vec::new();
+    };
+    let height = (skater.position.y - hit.point.y).max(0.0);
+    let fade = (1.0 - height / FADE).clamp(0.0, 1.0);
+    let alpha = (150.0 * fade) as u8;
+    if alpha == 0 {
+        return Vec::new();
+    }
+    let normal = hit.normal.normalize_or(Vec3::Y);
+    let side = normal.any_orthonormal_vector();
+    let along = normal.cross(side);
+    let radius = RADIUS * (0.6 + 0.4 * fade);
+    let centre = hit.point + normal * 0.5;
+    let point = |i: usize| {
+        let a = i as f32 / SIDES as f32 * std::f32::consts::TAU;
+        centre + (side * a.cos() + along * a.sin()) * radius
+    };
+    let vertex = |p: Vec3, a: u8| collision::ColorVertex {
+        position: p.to_array(),
+        color: [0, 0, 0, a],
+    };
+    (0..SIDES)
+        .flat_map(|i| {
+            [
+                vertex(centre, alpha),
+                vertex(point(i), alpha / 3),
+                vertex(point(i + 1), alpha / 3),
+            ]
+        })
+        .collect()
+}
+
 /// A character's bones, each relative to its parent.
 type Pose = Vec<(Quat, Vec3)>;
 
@@ -1109,6 +1149,12 @@ impl<'a> App<'a> {
                     self.placement,
                     skater.flipped,
                 ));
+            let shadow = level
+                .world
+                .as_ref()
+                .map(|world| skater_shadow(skater, world))
+                .unwrap_or_default();
+            level.renderer.set_shadow(&shadow);
             if let Some(blink) = character.blink {
                 let eyes = if model.blink {
                     blink.texture_at(clock)
@@ -1119,6 +1165,7 @@ impl<'a> App<'a> {
             }
             return;
         }
+        level.renderer.set_shadow(&[]);
         if model.playing && model.duration > 0.0 {
             // Everything loops here, even one-off moves like an ollie.
             model.time = (model.time + dt * model.speed) % model.duration;

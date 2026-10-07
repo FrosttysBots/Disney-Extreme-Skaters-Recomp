@@ -192,6 +192,8 @@ pub struct Renderer {
     collision: Option<(wgpu::Buffer, u32)>,
     /// Rails and spawn markers.
     markers: Option<(wgpu::Buffer, u32)>,
+    /// The skater's shadow: translucent triangles laid on the ground.
+    shadow: Option<(wgpu::Buffer, u32)>,
     color_overlay: wgpu::RenderPipeline,
     color_solid: wgpu::RenderPipeline,
     pub collision_view: CollisionView,
@@ -291,6 +293,7 @@ impl Renderer {
             sampler,
             collision,
             markers: None,
+            shadow: None,
             color_overlay,
             color_solid,
             collision_view: CollisionView::Hidden,
@@ -308,6 +311,12 @@ impl Renderer {
     /// Replaces the rail and spawn geometry (empty hides it).
     pub fn set_markers(&mut self, vertices: &[ColorVertex]) {
         self.markers = color_buffer(&self.device, "markers", vertices);
+    }
+
+    /// The character's shadow (translucent, drawn over the level), or
+    /// none.
+    pub fn set_shadow(&mut self, vertices: &[ColorVertex]) {
+        self.shadow = color_buffer(&self.device, "shadow", vertices);
     }
 
     /// Uploads a character's mesh (`None` removes it). Its vertices are
@@ -527,6 +536,11 @@ impl Renderer {
                 draw(&mut pass, character, &self.world_pipelines);
             }
             pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+            if let Some((buffer, count)) = self.shadow.as_ref().filter(|_| !only_collision) {
+                pass.set_pipeline(&self.color_overlay);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
+            }
             if let Some((buffer, count)) = &self.markers {
                 pass.set_pipeline(&self.color_solid);
                 pass.set_vertex_buffer(0, buffer.slice(..));
