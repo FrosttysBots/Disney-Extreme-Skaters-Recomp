@@ -212,6 +212,13 @@ const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0,
 /// Slower than this into a wall the skater just stops against it.
 const CREEP_SPEED: f32 = 50.0;
 
+/// Breaking out of vert air: up held this long at the lip, and how much of
+/// the speed goes over the lip and up (`Skater_vert_push_time`,
+/// `physics_break_air_speed_scale`, `physics_break_air_up_scale`).
+const VERT_PUSH_TIME: f32 = 0.13;
+const BREAK_AIR_SPEED_SCALE: f32 = 0.75;
+const BREAK_AIR_UP_SCALE: f32 = 0.75;
+
 /// How long a message stays on screen.
 const MESSAGE_TIME: f32 = 1.5;
 
@@ -1983,6 +1990,17 @@ impl Skater {
         }
         let out = out.normalize();
         if self.last_input.revert && self.spine_transfer(out, p, world) {
+            return;
+        }
+        // Breaking out of vert (0x800F156C): up held longer than
+        // `Skater_vert_push_time` (130 ms), and not steering, launches out
+        // over the lip instead of straight up: a `break_air_speed_scale`
+        // of the speed over towards the deck, the rise times
+        // `break_air_up_scale`.
+        if self.last_input.push && self.since_up >= VERT_PUSH_TIME && self.last_input.turn == 0.0 {
+            let speed = self.velocity.length();
+            self.velocity -= out * speed * BREAK_AIR_SPEED_SCALE;
+            self.velocity.y *= BREAK_AIR_UP_SCALE;
             return;
         }
         let speed = self.velocity.length();

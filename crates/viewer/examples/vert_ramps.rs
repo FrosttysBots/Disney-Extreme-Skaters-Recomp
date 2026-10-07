@@ -83,8 +83,10 @@ fn main() {
         }
         skater.velocity = into * 650.0;
         skater.tricks = tricks.clone();
+        // Coasting up (holding up at the lip breaks out of vert; BREAK=1
+        // holds it).
         let push = Input {
-            push: true,
+            push: std::env::var("BREAK").is_ok(),
             ..Input::default()
         };
         // With LIPS set, press grind at the lip: a lip trick on the coping.

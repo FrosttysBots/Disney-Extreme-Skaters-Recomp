@@ -29,6 +29,7 @@ character. This page is for anyone trying it out.
 | E as you launch off a quarter pipe's lip | Y | Lip trick on the coping (balance with A / D) |
 | R as you land from vert | Shoulder buttons | Revert (keeps the combo going into a manual) |
 | R held going up a quarter pipe | Shoulder buttons held | Spine transfer over to the ramp behind |
+| W held going up a quarter pipe | Stick up held | Launch out over the lip instead of straight up |
 | R tapped on the ground | Shoulder button tapped | 180 slide (A or D for backside/frontside), riding on the other way round |
 | Two directions, then Q (or E in a manual) | Two directions, then X (or Y) | Special trick, when the special meter is full |
 | Tab | | Jump to the next spawn point |
