@@ -193,7 +193,11 @@ fn main() {
                 };
             }
             let before = skater.position;
+            let smacked = skater.bail_anims.0 == "BailSmackWall";
             skater.update(input, &physics, &world, dt);
+            if !smacked && skater.bail_anims.0 == "BailSmackWall" {
+                *gaps.entry("(bail smacks)".into()).or_default() += 1;
+            }
             if let Some((name, _)) = skater.last_gap.take() {
                 *gaps.entry(name).or_default() += 1;
             }

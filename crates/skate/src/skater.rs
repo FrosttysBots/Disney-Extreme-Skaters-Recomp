@@ -350,6 +350,8 @@ pub struct Skater {
     pub anim_lengths: HashMap<String, f32>,
     /// The fall and get-up of the current bail.
     pub bail_anims: (&'static str, &'static str),
+    /// Smacked into a wall in this bail already (`BailSmack`).
+    smacked: bool,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -456,6 +458,7 @@ impl Skater {
             anim_time: 0.0,
             anim_lengths: HashMap::new(),
             bail_anims: ("Bail1", "BailGetUp1"),
+            smacked: false,
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -740,6 +743,7 @@ impl Skater {
     /// `Bail2`), or, coming down backwards, falling backwards
     /// (`BailBackward`), as `DoingTrickBail` and `YawBail` pick.
     fn start_bail(&mut self, action: Action, backwards: bool) {
+        self.smacked = false;
         let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
         if flat.length() > 10.0 {
             self.heading = flat.x.atan2(flat.z);
@@ -1941,6 +1945,23 @@ impl Skater {
             }
         }
 
+        // `GeneralBail`'s `FlailHitWall`: sliding into a wall in a bail,
+        // `BailSmack` plays `BailSmackWall` and gets up with
+        // `BailFallGetUp` (once a bail).
+        let bailing_now = matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        );
+        if bailing_now && flailed.is_some() && !self.smacked {
+            self.smacked = true;
+            let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
+            if flat.length() > 10.0 {
+                self.heading = flat.x.atan2(flat.z);
+            }
+            self.bail_anims = ("BailSmackWall", "BailFallGetUp");
+            self.action = Action::Bail;
+            self.action_time = 0.0;
+        }
         let action = if matches!(
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail | Action::CessSlide { .. }
