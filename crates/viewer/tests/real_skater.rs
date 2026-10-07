@@ -661,7 +661,13 @@ fn spine_transfer_on_camp() {
     let mut transferred = false;
     let mut landed = None;
     for frame in 0..180 {
-        skater.update(spine, &physics, &world, 1.0 / 60.0);
+        // The spine button from partway up the ramp (on the flat it slides
+        // round 180).
+        let input = Input {
+            revert: frame >= 40,
+            ..spine
+        };
+        skater.update(input, &physics, &world, 1.0 / 60.0);
         transferred |= skater
             .combo_tricks
             .tricks

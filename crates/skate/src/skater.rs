@@ -1493,6 +1493,10 @@ impl Skater {
             }
         } else if self.revert_window <= 0.0
             && !self.manual
+            // Not riding up a ramp, where the button is held for a spine
+            // transfer.
+            && self.ground_flags & ngc_collision::face_flags::VERT == 0
+            && self.up.y > 0.9
             && self.pressed_within(Press::Revert, 0.0)
             && matches!(
                 self.action,
