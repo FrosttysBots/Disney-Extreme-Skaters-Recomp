@@ -144,7 +144,10 @@ around takes over from wherever it is.
 
 A gamepad works too while skating, laid out like the GameCube game: the
 left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
-X flips, B grabs, Y grinds, and the shoulder buttons revert.
+X flips, B grabs, Y grinds, and the shoulder buttons revert. It rumbles
+where the game's does (ollies, landings, grinds, reverts, flails, bails);
+the panel's Rumble box turns that off, and the `pad_check` example
+checks that a pad can rumble.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |

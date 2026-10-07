@@ -35,6 +35,10 @@ character. This page is for anyone trying it out.
 | Tab | | Jump to the next spawn point |
 | Esc | | Stop skating |
 
+A gamepad rumbles where the game's does: ollies, landings, grinds (a
+buzz while on the rail), reverts, flails and bails (the Rumble box turns
+it off).
+
 On screen: the score and the special meter (top right), the combo and the
 balance meter (bottom), and in the panel a status line with where the
 skater is and what it's doing.

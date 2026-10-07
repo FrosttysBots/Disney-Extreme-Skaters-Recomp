@@ -9,6 +9,7 @@
 //! spawn point and play their animations.
 
 mod audio;
+mod rumble;
 mod settings;
 mod sparks;
 mod ui;
@@ -544,6 +545,8 @@ struct App<'a> {
     audio: Option<audio::Audio>,
     /// The sparks off a grinding board.
     sparks: sparks::Sparks,
+    /// The gamepad's rumble.
+    rumble: rumble::Rumble,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -615,6 +618,7 @@ impl<'a> App<'a> {
                     auto_kick: true,
                     sound: true,
                     music: true,
+                    rumble: true,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                 },
@@ -630,6 +634,7 @@ impl<'a> App<'a> {
             skating: None,
             audio: None,
             sparks: sparks::Sparks::new(),
+            rumble: rumble::Rumble::new(),
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -896,6 +901,7 @@ impl<'a> App<'a> {
         if self.skating.take().is_some() {
             self.model.character.skating = false;
             self.sparks.clear();
+            self.rumble.stop();
             if let Some(audio) = &mut self.audio {
                 audio.stop();
             }
@@ -1058,6 +1064,13 @@ impl<'a> App<'a> {
         skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
         self.sparks.update(skater, dt);
+        if let Some(gilrs) = self.gamepads.as_mut() {
+            if self.model.character.rumble {
+                self.rumble.update(gilrs, skater);
+            } else {
+                self.rumble.stop();
+            }
+        }
         if let Some(audio) = self.audio.as_mut().filter(|_| self.model.character.sound) {
             audio.update(skater);
         } else {
@@ -1233,6 +1246,7 @@ impl<'a> App<'a> {
         if self.skating.take().is_some() {
             self.model.character.skating = false;
             self.sparks.clear();
+            self.rumble.stop();
             if let Some(audio) = &mut self.audio {
                 audio.stop();
             }

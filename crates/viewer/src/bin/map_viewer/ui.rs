@@ -55,6 +55,8 @@ pub struct CharacterModel {
     /// The skater's sounds (and the level's ambience) on, and the songs.
     pub sound: bool,
     pub music: bool,
+    /// The gamepad rumbles where the game's does.
+    pub rumble: bool,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
@@ -438,9 +440,11 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         );
         ui.checkbox(&mut model.music, "Music")
             .on_hover_text("The game's soundtrack, one song after another.");
+        ui.checkbox(&mut model.rumble, "Rumble")
+            .on_hover_text("The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.");
     });
     ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
-        "The game's controller option: the skater pushes by itself while under          its kick speed. Off, hold W to push.",
+        "The game's controller option: the skater pushes by itself while under its kick speed. Off, hold W to push.",
     );
     if model.skating {
         if !model.trick_list.is_empty() {
