@@ -19,6 +19,10 @@
 //! `(nibble * scale << 11) + 1024 + coef1 * hist1 + coef2 * hist2 >> 11`,
 //! clamped to 16 bits.
 
+pub mod dtk;
+
+pub use dtk::Dtk;
+
 /// What went wrong reading a sound.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

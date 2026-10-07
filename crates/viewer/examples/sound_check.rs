@@ -53,6 +53,31 @@ fn main() {
             files.len()
         );
     }
+    // The songs and the levels' ambiences.
+    let name = |v: &qb::Value, key: &str| match v.get(qb::checksum(key)) {
+        Some(qb::Value::String(s)) => s.rsplit(['\\', '/']).next().map(str::to_string),
+        _ => None,
+    };
+    let songs: Vec<String> = program
+        .value(qb::checksum("playlist_tracks"))
+        .and_then(|v| v.as_array())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| name(v, "on_disk"))
+        .collect();
+    let ambiences: Vec<String> = program
+        .values()
+        .filter_map(|(_, v)| name(v, "ambient_track"))
+        .collect();
+    for track in songs.iter().chain(&ambiences) {
+        match data.music(track).unwrap() {
+            Some(bytes) => {
+                let dtk = ngc_sound::Dtk::new(bytes);
+                println!("music {track}: {:.0} s", dtk.seconds());
+            }
+            None => println!("music {track}: MISSING"),
+        }
+    }
     if play {
         let files = data.sounds("hub.prg").unwrap();
         let sound = ngc_sound::Sound::parse(&files["ollieconc"]).unwrap();

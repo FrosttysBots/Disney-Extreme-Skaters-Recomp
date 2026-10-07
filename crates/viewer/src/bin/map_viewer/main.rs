@@ -541,6 +541,11 @@ struct App<'a> {
     /// The skater's sounds (none in screenshots, or without a sound
     /// device).
     audio: Option<audio::Audio>,
+    /// The songs (`playlist_tracks`, shuffled) and the next to play, and
+    /// the level's ambience (`ambient_track`), by name.
+    playlist: Vec<String>,
+    next_track: usize,
+    ambience: Option<String>,
     /// The animation the character's time belongs to.
     shown_animation: usize,
     /// Skating: the pose shown (blended), and the pose being blended from
@@ -604,6 +609,7 @@ impl<'a> App<'a> {
                     special: (0.0, false),
                     auto_kick: true,
                     sound: true,
+                    music: true,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                 },
@@ -618,6 +624,9 @@ impl<'a> App<'a> {
             placement: Mat4::IDENTITY,
             skating: None,
             audio: None,
+            playlist: Vec::new(),
+            next_track: 0,
+            ambience: None,
             shown_animation: 0,
             skate_pose: None,
             blend_from: None,
@@ -780,6 +789,76 @@ impl<'a> App<'a> {
             })
             .collect();
         audio.load(files, terrain, rail_terrain);
+        // The songs, shuffled, and this level's ambience.
+        let track = |v: &qb::Value| match v.get(qb::checksum("on_disk")) {
+            Some(qb::Value::String(s)) => s.rsplit(['\\', '/']).next().map(str::to_string),
+            _ => None,
+        };
+        let mut playlist: Vec<String> = program
+            .value(qb::checksum("playlist_tracks"))
+            .and_then(|v| v.as_array())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(track)
+            .collect();
+        let seed = self.started.elapsed().as_nanos() as usize;
+        for i in (1..playlist.len()).rev() {
+            playlist.swap(
+                i,
+                seed.wrapping_mul(2_654_435_761).wrapping_add(i * 40_503) % (i + 1),
+            );
+        }
+        self.playlist = playlist;
+        self.next_track = 0;
+        let level_key = qb::checksum("level");
+        let ambient_key = qb::checksum("ambient_track");
+        self.ambience =
+            program
+                .values()
+                .find_map(|(_, v)| match (v.get(level_key), v.get(ambient_key)) {
+                    (Some(qb::Value::String(l)), Some(qb::Value::String(a)))
+                        if l.eq_ignore_ascii_case(&level.id) =>
+                    {
+                        a.rsplit(['\\', '/']).next().map(str::to_string)
+                    }
+                    _ => None,
+                });
+        audio.set_ambience(None);
+    }
+
+    /// Keeps the music going while skating: the next song when one ends
+    /// (with Music on), and the level's ambience (with Sound on).
+    fn update_music(&mut self) {
+        let skating = self.skating.is_some();
+        let (Some(audio), Some(data)) = (&mut self.audio, &mut self.data) else {
+            return;
+        };
+        if skating && self.model.character.music && !self.playlist.is_empty() {
+            if audio.music_finished() {
+                for _ in 0..self.playlist.len() {
+                    let name = &self.playlist[self.next_track % self.playlist.len()];
+                    self.next_track += 1;
+                    if let Ok(Some(track)) = data.music(name) {
+                        audio.play_music(track);
+                        break;
+                    }
+                }
+            }
+        } else {
+            audio.stop_music();
+        }
+        if skating && self.model.character.sound {
+            if !audio.has_ambience() {
+                let track = self
+                    .ambience
+                    .as_deref()
+                    .and_then(|name| data.music(name).ok().flatten());
+                audio.set_ambience(track);
+            }
+            audio.keep_ambience();
+        } else if audio.has_ambience() {
+            audio.set_ambience(None);
+        }
     }
 
     fn go_to_spawn(&mut self, index: usize) {
@@ -1390,6 +1469,7 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.skate(dt);
+        self.update_music();
         self.play(dt);
         self.sync_view();
         let clock = self.started.elapsed().as_secs_f32();

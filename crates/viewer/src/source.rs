@@ -432,6 +432,41 @@ impl GameData {
         characters
     }
 
+    /// A streamed music track (`music/dtk/NAME.dtk`, ignoring case), or
+    /// none if it isn't there.
+    pub fn music(&mut self, name: &str) -> Result<Option<Vec<u8>>> {
+        let file = format!("{}.dtk", name.to_ascii_lowercase());
+        match self {
+            GameData::Disc { disc, .. } => {
+                let found = disc
+                    .fst()
+                    .files()
+                    .find(|n| {
+                        let p = n.path.to_ascii_lowercase();
+                        p.starts_with("music/") && p.ends_with(&format!("/{file}"))
+                    })
+                    .map(|n| n.path.clone());
+                match found {
+                    Some(path) => Ok(Some(disc.read_file(&path)?)),
+                    None => Ok(None),
+                }
+            }
+            GameData::Folder(dir) => {
+                // The archives' folder is `.../files/pre`; music is beside it.
+                let Some(music) = dir.parent().map(|d| d.join("music").join("dtk")) else {
+                    return Ok(None);
+                };
+                let found = fs::read_dir(&music).ok().and_then(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(&file))
+                        .map(|e| e.path())
+                });
+                Ok(found.map(fs::read).transpose()?)
+            }
+        }
+    }
+
     /// Every sound (`sounds/dsp/.../NAME.dsp`) in archive `name` (e.g.
     /// `hub.prg`, `skater_sounds.prg`), by its lowercase file name without
     /// `.dsp`. None if there's no such archive.
