@@ -190,6 +190,14 @@ pub struct Physics {
     pub camera_lerp_y: f32,
     pub camera_vert_air_lerp_xz: f32,
     pub camera_vert_air_lerp_y: f32,
+    /// Turning just after landing from vert air (for a sixth of a second).
+    pub camera_vert_air_landed_slerp: f32,
+    /// Zooming: how fast, and how far in or out during a trick in vert
+    /// air, on a rail and on a lip (times `behind`).
+    pub camera_zoom_lerp: f32,
+    pub camera_big_air_trick_zoom: f32,
+    pub camera_grind_zoom: f32,
+    pub camera_lip_trick_zoom: f32,
 }
 
 impl Physics {
@@ -264,6 +272,11 @@ impl Physics {
             camera_lerp_y: camera_value("lerp_y", 0.75),
             camera_vert_air_lerp_xz: camera_value("vert_air_lerp_xz", 1.0),
             camera_vert_air_lerp_y: camera_value("vert_air_lerp_y", 1.0),
+            camera_vert_air_landed_slerp: camera_value("vert_air_landed_slerp", 0.375),
+            camera_zoom_lerp: camera_value("zoom_lerp", 0.0625),
+            camera_big_air_trick_zoom: camera_value("big_air_trick_zoom", 0.7),
+            camera_grind_zoom: camera_value("grind_zoom", 1.0),
+            camera_lip_trick_zoom: camera_value("lip_trick_zoom", 1.25),
         }
     }
 }

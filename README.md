@@ -585,8 +585,9 @@ balance with A and D. Holding R going up a quarter pipe spine-transfers
 to the ramp behind. Gaps score from the levels' trigger scripts, and
 teleporters (like the Hub's harbour water) put the skater back. Not yet:
 moving objects, and a frame-by-frame check against Dolphin.
-Turning rates are read as radians a second and the camera distances as
-feet, both guesses for now.
+Turning rates are radians a second (the steering code turns by the rate
+times the frame time); the camera distances are read as feet, a guess
+for now.
 
 ## Roadmap
 

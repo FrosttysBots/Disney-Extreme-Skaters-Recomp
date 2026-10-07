@@ -57,8 +57,11 @@ skater is and what it's doing.
 - Not yet: wall rides (the game barely uses them), skitching, the
   Simplified controls, sounds, goals and gameplay modes, and the level's
   other triggers (breakables, goal pickups).
-- Approximations of our own: how far the camera follows (the game's
-  settings, not its code), lips start at coping rails in vert air (the
+- Approximations of our own: the camera follows the game's camera
+  update (a lagging focus, turning, the quick swing after vert, zooming
+  for big air tricks, grinds and lips) but sees past walls its own way
+  (rising over them, holding back from swinging into a ramp, pulling
+  in), lips start at coping rails in vert air (the
   game checks four angles), a skater barely rolling into a wall just stops
   against it, ground is found across hairline cracks in the levels'
   collision, and the skater is put back at the nearest spawn when it
