@@ -1150,6 +1150,23 @@ impl Skater {
             return;
         };
         lip.time += STEP;
+        // `ExtraLipTricks`: the grind button again on the coping, with a
+        // direction within 400 ms (or none), changes to that lip trick, a
+        // new trick in the combo.
+        if self.pressed_within(Press::Grind, 0.0) {
+            let dir = self.last_dir_within(0.4);
+            let lips = &self.tricks.lips;
+            let next = lips
+                .iter()
+                .find(|(d, _)| dir.is_some() && *d == dir)
+                .or_else(|| lips.iter().find(|(d, _)| d.is_none()))
+                .map(|(_, lip)| lip.clone());
+            if let Some(next) = next.filter(|next| next.name != lip.trick.name) {
+                self.credit(Some((next.name.clone(), next.score)), true);
+                lip.trick = next;
+                lip.time = 0.0;
+            }
+        }
         self.combo_tricks.tweak(LIP_TWEAK);
         let lean = self
             .balance
