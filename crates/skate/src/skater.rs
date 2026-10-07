@@ -1296,6 +1296,8 @@ impl Skater {
             let mut velocity = Vec3::new(cos * v.x + sin * v.z, v.y, -sin * v.x + cos * v.z);
             velocity.y += self.jump_speed(p);
             self.leave_rail(velocity, p, world);
+            // An ollie off the rail (its animation in the air).
+            self.ollied = true;
             return;
         }
         self.crouched = input.crouch;
@@ -1420,6 +1422,8 @@ impl Skater {
         self.since_rail = 0.0;
         self.velocity = velocity;
         self.on_ground = false;
+        // Off the rail any other way, no ollie (`Stand2InAir`).
+        self.ollied = false;
         self.up = Vec3::Y;
         self.set_action(Action::Air);
     }
