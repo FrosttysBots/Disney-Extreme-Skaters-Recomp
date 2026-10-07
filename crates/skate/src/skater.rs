@@ -306,6 +306,9 @@ pub struct Skater {
     /// Seconds left of the push under way (`DoAPush` plays a whole
     /// `PushCycle` before coasting again).
     push_left: f32,
+    /// The push's animation (`DoAPush`: `PushCycle1` or `PushCycle2` at
+    /// random).
+    pub push_anim: &'static str,
     /// Seconds in the air so far, and how it came down last.
     pub air_time: f32,
     pub landing: Landing,
@@ -413,6 +416,7 @@ impl Skater {
             auto_kick: true,
             pushing: false,
             push_left: 0.0,
+            push_anim: "PushCycle1",
             air_time: 0.0,
             landing: Landing::default(),
             ollied: false,
@@ -948,6 +952,11 @@ impl Skater {
             && anim.priority <= self.anim.priority
             && self.anim_time < self.anim_length(self.anim.first);
         if anim == self.anim || hold {
+            self.anim_time += STEP;
+        } else if anim.first == self.anim.first && self.anim_time < self.anim_length(anim.first) {
+            // The same animation going on (the air's leg stretch into a
+            // landing): it carries on where it was.
+            self.anim = anim;
             self.anim_time += STEP;
         } else {
             self.anim = anim;
@@ -1578,7 +1587,13 @@ impl Skater {
         if !push {
             self.push_left = 0.0;
         } else if self.push_left <= 0.0 && velocity.length() < top * PUSH_AGAIN {
-            self.push_left = self.anim_length("PushCycle1").max(PUSH_TIME);
+            self.push_anim =
+                if (self.clock * 60.0) as u32 % 2 == 0 || self.anim_length("PushCycle2") <= 0.0 {
+                    "PushCycle1"
+                } else {
+                    "PushCycle2"
+                };
+            self.push_left = self.anim_length(self.push_anim).max(PUSH_TIME);
         }
         self.pushing = self.push_left > 0.0;
         self.push_left = (self.push_left - STEP).max(0.0);
@@ -2101,6 +2116,8 @@ impl Skater {
                     sketchy: (45.0..60.0).contains(&yaw)
                         && air_time > if input.crouch { 0.75 } else { 0.5 },
                     short: air_time < 0.5,
+                    medium: air_time < 0.75,
+                    second: (self.clock * 60.0) as u32 % 2 == 1,
                 };
                 self.air_time = 0.0;
                 // Landing sideways at speed: `YawBail` (faster than 500,

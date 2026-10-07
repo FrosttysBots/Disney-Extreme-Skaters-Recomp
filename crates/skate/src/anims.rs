@@ -20,11 +20,12 @@ pub struct Anim {
 }
 
 /// What can cut in on what: coasting and pushing, then steering and
-/// crouching, landing and the like, the air, and balancing and bails.
+/// crouching, the air, landing and the like (a landing cuts the air's
+/// animations short), and balancing and bails.
 const GROUND: u8 = 0;
 const STEER: u8 = 1;
-const LAND: u8 = 2;
-const AIR: u8 = 3;
+const AIR: u8 = 2;
+const LAND: u8 = 3;
 const TRICK: u8 = 4;
 
 impl Anim {
@@ -94,6 +95,11 @@ pub struct Landing {
     pub sketchy: bool,
     /// Under half a second in the air (`PlayLandAnim` bumps).
     pub short: bool,
+    /// Under 0.75 seconds (`PlayLandAnim` plays `Land1` or `Land2`; longer,
+    /// the stretched legs carry on into the landing).
+    pub medium: bool,
+    /// Which of the random pairs (`Land1`/`Land2`, `LandBackward1`/`2`).
+    pub second: bool,
 }
 
 /// The animation for what the skater is doing.
@@ -131,7 +137,12 @@ pub fn choose(skater: &Skater) -> Anim {
         Action::Landing => {
             let l = skater.landing;
             let anim = if l.backwards {
-                Anim::into("LandBackward1", "StandIdle", LAND)
+                // `Random(@anim = LandBackward1 @anim = LandBackward2)`.
+                if l.second && skater.anim_length("LandBackward2") > 0.0 {
+                    Anim::into("LandBackward2", "StandIdle", LAND)
+                } else {
+                    Anim::into("LandBackward1", "StandIdle", LAND)
+                }
             } else if l.sketchy {
                 Anim::into("LandSketchy", "StandIdle", LAND)
             } else if l.little_air {
@@ -142,8 +153,16 @@ pub fn choose(skater: &Skater) -> Anim {
                 }
             } else if l.short {
                 Anim::into("CrouchBumpDown", "StandIdle", LAND)
+            } else if l.medium {
+                if l.second && skater.anim_length("Land2") > 0.0 {
+                    Anim::into("Land2", "StandIdle", LAND)
+                } else {
+                    Anim::into("Land1", "StandIdle", LAND)
+                }
             } else {
-                Anim::into("Land1", "StandIdle", LAND)
+                // A long air: no landing animation, the legs' stretch for
+                // the landing plays on.
+                Anim::into("StretchLegsInit", "StandIdle", LAND)
             };
             anim.committed()
         }
@@ -194,7 +213,7 @@ pub fn choose(skater: &Skater) -> Anim {
                     None => Anim::cycle("CrouchIdle", STEER),
                 }
             } else if skater.pushing {
-                Anim::cycle("PushCycle1", GROUND).committed()
+                Anim::cycle(skater.push_anim, GROUND).committed()
             } else {
                 Anim::cycle("StandIdle", GROUND)
             }
