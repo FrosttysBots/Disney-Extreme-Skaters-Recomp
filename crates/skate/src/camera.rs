@@ -19,7 +19,14 @@
 //!
 //! Our own: it never ends up behind a wall (it rises up to 120 to see over
 //! what's in the way, or else a line from the focus pulls it in at once,
-//! and it eases back), and it turns faster the further it has to go. The game's own collision and look-at tilt aren't ported.
+//! - It looks along its heading pitched down by `Tilt` (0x80120FC8), so
+//!   the skater sits below the middle of the view; and its line meets
+//!   only camera-collidable faces (flag 0x80, 0x80122A04).
+//!
+//! Our own: it never ends up behind a wall (it rises up to 120 to see over
+//! what's in the way, or else a line from the focus pulls it in at once,
+//! and it eases back), and it turns faster the further it has to go. The
+//! game's own handling of walls isn't ported.
 
 use glam::Vec3;
 
