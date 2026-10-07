@@ -18,7 +18,7 @@ character. This page is for anyone trying it out.
 | Keyboard | Gamepad | What it does |
 |---|---|---|
 | A / D | Stick or D-pad left / right | Steer; in the air, spin |
-| W / S | Stick or D-pad up / down | Push / brake (and pick tricks' directions) |
+| W / S | Stick or D-pad up / down | Push / brake (and pick tricks' directions); brake 1.4 s to step off the board |
 | Space (hold, let go) | A | Crouch, then ollie |
 | Q (+ direction) | X | Flip trick in the air |
 | F (+ direction) | B | Grab in the air (hold to keep grabbing) |

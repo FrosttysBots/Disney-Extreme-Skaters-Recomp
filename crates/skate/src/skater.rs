@@ -101,6 +101,10 @@ pub enum Action {
     Revert {
         frontside: bool,
     },
+    /// Stepped off the board after braking a while (`Handbrake`), and
+    /// stepping back on.
+    OffBoard,
+    OnBoard,
 }
 
 /// A lip trick being held: the trick, the ramp's way out, and how long.
@@ -202,6 +206,9 @@ const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0,
 /// Slower than this into a wall the skater just stops against it.
 const CREEP_SPEED: f32 = 50.0;
 
+/// Braking this long steps off the board (`Handbrake`).
+const HANDBRAKE_TIME: f32 = 1.4;
+
 /// A spine transfer's points (`TRANSFER_POINTS`).
 const TRANSFER_POINTS: u32 = 250;
 
@@ -260,6 +267,9 @@ pub struct Skater {
     /// landing backwards (`FlipAndRotate`) or a revert. Swaps which turn
     /// animations play.
     pub flipped: bool,
+    /// Seconds the brake has been held on the ground (`HeldLongerThan
+    /// Button = Down 1.4 second` steps off the board).
+    brake_time: f32,
     /// A spine transfer in flight: over to the ramp on the other side.
     transfer: Option<Transfer>,
     /// How long a turn has been held, in seconds.
@@ -387,6 +397,7 @@ impl Skater {
             slope: 0.0,
             bump: None,
             flipped: false,
+            brake_time: 0.0,
             transfer: None,
             turn_time: 0.0,
             crouch_time: 0.0,
@@ -1405,6 +1416,30 @@ impl Skater {
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // `Handbrake`: braking for 1.4 seconds steps off the board (rolling
+        // friction 100: it stops); up or crouch steps back on.
+        self.brake_time = if input.brake && !self.manual {
+            self.brake_time + STEP
+        } else {
+            0.0
+        };
+        if self.action == Action::OffBoard && (input.push || input.crouch) {
+            self.set_action(Action::OnBoard);
+        }
+        let off_board = self.brake_time >= HANDBRAKE_TIME
+            || self.action == Action::OffBoard
+            || (self.action == Action::OnBoard
+                && self.action_time < self.anim_length("OffBoard2Stand").max(0.25));
+        let input = if off_board {
+            Input {
+                push: false,
+                crouch: false,
+                brake: true,
+                ..input
+            }
+        } else {
+            input
+        };
         // The revert window after a vert landing: the press reverts;
         // running out (and no manual) ends the combo.
         if self.revert_window > 0.0 {
@@ -1527,7 +1562,11 @@ impl Skater {
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
         );
-        let push = (input.push || self.auto_kick) && !input.brake && !self.manual && !bailing;
+        let push = (input.push || self.auto_kick)
+            && !input.brake
+            && !self.manual
+            && !bailing
+            && !off_board;
         let top = if input.crouch {
             p.max_crouched_kick_speed
         } else {
@@ -1777,6 +1816,12 @@ impl Skater {
             && self.action_time < 0.6)
         {
             self.action
+        } else if off_board {
+            if self.action == Action::OnBoard {
+                Action::OnBoard
+            } else {
+                Action::OffBoard
+            }
         } else if self.manual {
             Action::Manual
         } else if let Some(flail) = flailed {

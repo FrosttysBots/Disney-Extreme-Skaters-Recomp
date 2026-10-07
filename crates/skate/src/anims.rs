@@ -120,6 +120,9 @@ pub fn choose(skater: &Skater) -> Anim {
         }
         Action::Manual => Anim::into("ManualIn1", "ManualRange1", TRICK),
         Action::Lip => Anim::once("LipRange1", TRICK),
+        // `Handbrake`: off the board, idling, and back on.
+        Action::OffBoard => Anim::into("Stand2OffBoard", "OffBoardIdle", LAND).committed(),
+        Action::OnBoard => Anim::once("OffBoard2Stand", LAND).committed(),
         Action::Revert { frontside: true } => Anim::into("RevertFS", "StandIdle", LAND).committed(),
         Action::Revert { frontside: false } => {
             Anim::into("RevertBS", "StandIdle", LAND).committed()
