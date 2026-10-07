@@ -1191,6 +1191,9 @@ impl Skater {
             offset: self.position.dot(lip.out),
         });
         self.lip_out = lip.trick.out.map(|anim| (anim, 0.0));
+        if lip.trick.flip_after {
+            self.flipped = !self.flipped;
+        }
         self.ollied = false;
         self.air_time = 0.0;
         self.set_action(Action::Air);

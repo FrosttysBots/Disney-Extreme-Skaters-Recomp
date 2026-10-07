@@ -106,6 +106,8 @@ pub struct LipTrick {
     pub range: u32,
     pub out: Option<u32>,
     pub no_ollie: bool,
+    /// `FlipAfter`: out of the lip riding the other way round.
+    pub flip_after: bool,
 }
 
 /// A grind or manual: its name and score, and its animations in and
@@ -467,6 +469,7 @@ fn parse_lip(trick: &Value) -> Option<LipTrick> {
         range: anim("anim")?,
         out: anim("OutAnim"),
         no_ollie: params.has_flag(checksum("NoOllie")),
+        flip_after: params.has_flag(checksum("FlipAfter")),
     })
 }
 
