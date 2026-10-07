@@ -10,6 +10,7 @@
 
 mod audio;
 mod settings;
+mod sparks;
 mod ui;
 
 use std::collections::HashSet;
@@ -541,6 +542,8 @@ struct App<'a> {
     /// The skater's sounds (none in screenshots, or without a sound
     /// device).
     audio: Option<audio::Audio>,
+    /// The sparks off a grinding board.
+    sparks: sparks::Sparks,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -626,6 +629,7 @@ impl<'a> App<'a> {
             placement: Mat4::IDENTITY,
             skating: None,
             audio: None,
+            sparks: sparks::Sparks::new(),
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -891,6 +895,7 @@ impl<'a> App<'a> {
         self.blend_from = None;
         if self.skating.take().is_some() {
             self.model.character.skating = false;
+            self.sparks.clear();
             if let Some(audio) = &mut self.audio {
                 audio.stop();
             }
@@ -1052,6 +1057,7 @@ impl<'a> App<'a> {
         };
         skater.auto_kick = self.model.character.auto_kick;
         skater.update(input, physics, world, dt);
+        self.sparks.update(skater, dt);
         if let Some(audio) = self.audio.as_mut().filter(|_| self.model.character.sound) {
             audio.update(skater);
         } else {
@@ -1226,6 +1232,7 @@ impl<'a> App<'a> {
         // stats belong to it).
         if self.skating.take().is_some() {
             self.model.character.skating = false;
+            self.sparks.clear();
             if let Some(audio) = &mut self.audio {
                 audio.stop();
             }
@@ -1320,11 +1327,12 @@ impl<'a> App<'a> {
                     self.placement,
                     skater.flipped,
                 ));
-            let shadow = level
+            let mut shadow = level
                 .world
                 .as_ref()
                 .map(|world| skater_shadow(skater, world))
                 .unwrap_or_default();
+            shadow.extend(self.sparks.vertices(self.camera.position));
             level.renderer.set_shadow(&shadow);
             if let Some(blink) = character.blink {
                 let eyes = if model.blink {

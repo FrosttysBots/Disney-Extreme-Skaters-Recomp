@@ -118,6 +118,8 @@ pub struct BalanceTrick {
     pub score: u32,
     pub init: Option<u32>,
     pub range: u32,
+    /// A slide (`Type = Slide`): no sparks.
+    pub slide: bool,
 }
 
 /// A character's tricks and the combinations that do them.
@@ -516,6 +518,7 @@ fn parse_balance(trick: &Value, init: &str, range: &str) -> Option<BalanceTrick>
             .max(0) as u32,
         init: params.get(checksum(init)).and_then(Value::as_name),
         range: params.get(checksum(range)).and_then(Value::as_name)?,
+        slide: params.get(checksum("Type")).and_then(Value::as_name) == Some(checksum("Slide")),
     })
 }
 

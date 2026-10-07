@@ -21,7 +21,13 @@ fn main() {
     let terrain = TerrainSounds::new(&program);
     println!("{} terrain sounds in the scripts", terrain.len());
     let skater = data.sounds("skater_sounds.prg").unwrap();
-    for name in ["bail_knee1", "bodysmacka", "hud_jumpgap", "hud_specialtrickaa", "copinghit3_11"] {
+    for name in [
+        "bail_knee1",
+        "bodysmacka",
+        "hud_jumpgap",
+        "hud_specialtrickaa",
+        "copinghit3_11",
+    ] {
         println!("skater sound {name}: {}", skater.contains_key(name));
     }
     for level in data.levels() {

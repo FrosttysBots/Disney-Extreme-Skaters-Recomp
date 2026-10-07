@@ -42,7 +42,8 @@ skater is and what it's doing.
 ## What to try
 
 - Pushing, steering, ollies and flips/grabs around a level.
-- Grinding rails (each direction is a different grind), and balancing.
+- Grinding rails (each direction is a different grind), and balancing;
+  grinds throw sparks off the board (slides don't).
 - Manuals and branching between them, chaining grind → manual → grind.
 - Quarter pipes: vert air, lips on copings that have a rail, reverts,
   and spine transfers (hold R going up; Camp's half pipes have spines).
@@ -55,7 +56,8 @@ skater is and what it's doing.
   switch (the character mirrored, as the game shows it).
 - Sound: the game's own effects for each surface (rolling, ollies,
   landings, grinds), bails, gaps and slides; the characters' own lines
-  when they bail or start a trick; the level's ambience; and the
+  when they bail or start a trick; "Special Trick" and its sound for
+  specials; the coping knock going into a lip; the level's ambience; and the
   soundtrack (the Music box in the panel).
 - Every level, and a few characters (each has its own tricks and stats).
 
