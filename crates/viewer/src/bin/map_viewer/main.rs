@@ -597,6 +597,7 @@ impl<'a> App<'a> {
                     special: (0.0, false),
                     auto_kick: true,
                     skate_status: String::new(),
+                    trick_list: Vec::new(),
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -783,6 +784,7 @@ impl<'a> App<'a> {
                     .map(|(_, a)| a.duration)
             });
         }
+        self.model.character.trick_list = tricks.trick_list();
         skater.tricks = tricks;
         // Standing on the ground to start, not dropped onto it.
         if let Some(world) = &level.world {

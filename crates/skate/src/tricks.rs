@@ -158,6 +158,74 @@ pub struct TrickBook {
 }
 
 impl TrickBook {
+    /// The character's tricks and how to do them, a line each: the
+    /// buttons (flip, grab, grind) with the direction held or pressed,
+    /// the trick's name and its points.
+    pub fn trick_list(&self) -> Vec<String> {
+        let dir = |d: Option<Dir>| d.map_or(String::new(), |d| format!(" + {d:?}"));
+        let button = |b: Button| match b {
+            Button::Flip => "Flip",
+            Button::Grab => "Grab",
+        };
+        // (Diagonals only repeat a neighbour's trick: left out.)
+        let straight = |d: Option<Dir>| {
+            !matches!(
+                d,
+                Some(Dir::UpLeft | Dir::UpRight | Dir::DownLeft | Dir::DownRight)
+            )
+        };
+        let mut lines = Vec::new();
+        lines.push("In the air:".to_string());
+        for &(b, i) in &self.neutral {
+            let t = &self.tricks[i];
+            lines.push(format!("  {}: {} ({})", button(b), t.name, t.score));
+        }
+        for &(b, d, i) in self.air.iter().filter(|(_, d, _)| straight(Some(*d))) {
+            let t = &self.tricks[i];
+            lines.push(format!(
+                "  {}{}: {} ({})",
+                button(b),
+                dir(Some(d)),
+                t.name,
+                t.score
+            ));
+        }
+        lines.push("Grinds (Grind at a rail):".to_string());
+        for (d, t) in self.grinds.iter().filter(|(d, _)| straight(*d)) {
+            lines.push(format!("  Grind{}: {} ({})", dir(*d), t.name, t.score));
+        }
+        lines.push("Manuals (Up, Down; then Grab + direction):".to_string());
+        for (d, t) in &self.manuals {
+            let how = if d.is_none() {
+                "Up, Down".to_string()
+            } else {
+                format!("Grab{}", dir(*d))
+            };
+            lines.push(format!("  {how}: {} ({})", t.name, t.score));
+        }
+        lines.push("Lips (Grind at a coping):".to_string());
+        for (d, t) in self.lips.iter().filter(|(d, _)| straight(*d)) {
+            lines.push(format!("  Grind{}: {} ({})", dir(*d), t.name, t.score));
+        }
+        lines.push("Specials (special meter full):".to_string());
+        if let Some((a, b, i)) = self.special_air {
+            let t = &self.tricks[i];
+            lines.push(format!("  {a:?}, {b:?}, Flip: {} ({})", t.name, t.score));
+        }
+        if let Some((a, b, (name, score))) = &self.special_manual {
+            lines.push(format!(
+                "  {a:?}, {b:?}, Grind in a manual: {name} ({score})"
+            ));
+        }
+        if let Some((a, b, t)) = &self.special_lip {
+            lines.push(format!(
+                "  {a:?}, {b:?}, Grind at a coping: {} ({})",
+                t.name, t.score
+            ));
+        }
+        lines
+    }
+
     /// The tricks of `character` (such as `jessie`), from the scripts in
     /// `program`, with its stats.
     pub fn new(program: &Program, character: &str, stats: &Stats) -> Self {

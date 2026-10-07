@@ -54,6 +54,8 @@ pub struct CharacterModel {
     pub auto_kick: bool,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
+    /// The character's tricks and how to do them (while skating).
+    pub trick_list: Vec<String>,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -431,6 +433,21 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         "The game's controller option: the skater pushes by itself while under          its kick speed. Off, hold W to push.",
     );
     if model.skating {
+        if !model.trick_list.is_empty() {
+            egui::CollapsingHeader::new("Tricks")
+                .id_salt("trick_list")
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "Flip = Q / X, Grab = F / B, Grind = E / Y; directions W A S D",
+                        )
+                        .small(),
+                    );
+                    for line in &model.trick_list {
+                        ui.label(egui::RichText::new(line).small().monospace());
+                    }
+                });
+        }
         ui.label(egui::RichText::new(&model.skate_status).small().monospace())
             .on_hover_text("Where the skater is and what it's doing: handy for bug reports.");
         return;

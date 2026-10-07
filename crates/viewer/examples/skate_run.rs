@@ -96,6 +96,13 @@ fn main() {
         return;
     }
     let mut skater = Skater::new(Vec3::ZERO, 0.0);
+    // TRICKLIST=1: the character's tricks and how to do them.
+    if std::env::var("TRICKLIST").is_ok() {
+        for line in tricks.trick_list() {
+            println!("{line}");
+        }
+        return;
+    }
     skater.tricks = tricks;
     skater.teleports = desa_viewer::triggers::teleports(&nodes, &program)
         .into_iter()
