@@ -23,6 +23,7 @@ character. This page is for anyone trying it out.
 | Q (+ direction) | X | Flip trick in the air |
 | F (+ direction) | B | Grab in the air (hold to keep grabbing) |
 | E (+ direction) | Y | Grind: ollie at a rail, then press it |
+| Direction then E on a rail | Direction then Y | Switch to that direction's grind (another trick in the combo) |
 | W then S | Up then down | Manual (balance with W / S) |
 | F + direction | B + direction | Manuals 2 to 5, on the ground or from a manual |
 | E as you launch off a quarter pipe's lip | Y | Lip trick on the coping (balance with A / D) |

@@ -1282,6 +1282,12 @@ impl Skater {
         self.crouched = input.crouch;
         let travel = if forwards { direction } else { -direction };
         self.velocity = travel * (along.abs() + p.rail_speed_boost);
+        // Onto the rail facing against the way it goes (the trick table's
+        // `Grind1_180`...: `Grind_180` runs `FlipAndRotate` first): turned
+        // round to face along it, riding the other way round.
+        if self.forward().dot(travel) < 0.0 {
+            self.flipped = !self.flipped;
+        }
         self.heading = travel.x.atan2(travel.z);
         self.set_action(Action::Grinding);
     }
@@ -1324,6 +1330,24 @@ impl Skater {
             return;
         }
         self.crouched = input.crouch;
+
+        // `ExtraGrindTricks`: the grind button pressed again on the rail,
+        // with a direction (`AirTrickLogic`, 500 ms), changes to that
+        // direction's grind, a new trick in the combo.
+        if self.pressed_within(Press::Grind, 0.0) {
+            let dir = self.last_dir_within(0.5);
+            if let Some(next) = TrickBook::balance_trick(&self.tricks.grinds, dir) {
+                let same = self
+                    .balance_trick
+                    .as_ref()
+                    .is_some_and(|now| now.name == next.name);
+                if !same {
+                    self.credit(Some((next.name.clone(), next.score)), true);
+                    self.balance_trick = Some(next);
+                    self.balance_time = 0.0;
+                }
+            }
+        }
 
         // Balance (`DoBalanceTrick ButtonA = Right ButtonB = Left`): off
         // the top of the meter it falls to the left, off the bottom to the
