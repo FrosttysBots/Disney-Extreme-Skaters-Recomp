@@ -72,6 +72,15 @@ fn main() {
         }
         let into = -out;
         let mut skater = Skater::new(ground.point, into.x.atan2(into.z));
+        if std::env::var("STARTS").is_ok() {
+            println!(
+                "start {:.0},{:.0},{:.0},{:.0}",
+                ground.point.x,
+                ground.point.y,
+                ground.point.z,
+                into.x.atan2(into.z).to_degrees()
+            );
+        }
         skater.velocity = into * 650.0;
         skater.tricks = tricks.clone();
         let push = Input {

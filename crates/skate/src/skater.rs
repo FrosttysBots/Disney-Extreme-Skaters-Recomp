@@ -244,6 +244,10 @@ pub struct Skater {
     /// degrees (`DoCrouch_slope`): up or down, and seconds left of it.
     slope: f32,
     pub bump: Option<(bool, f32)>,
+    /// Riding the other way round (`Flipped`: switch stance), after
+    /// landing backwards (`FlipAndRotate`) or a revert. Swaps which turn
+    /// animations play.
+    pub flipped: bool,
     /// How long a turn has been held, in seconds.
     turn_time: f32,
     /// How long the skater has been crouched (tensing for an ollie).
@@ -362,6 +366,7 @@ impl Skater {
             crouched: false,
             slope: 0.0,
             bump: None,
+            flipped: false,
             turn_time: 0.0,
             crouch_time: 0.0,
             grind: None,
@@ -944,6 +949,7 @@ impl Skater {
         let name = if frontside { "FS Revert" } else { "BS Revert" };
         self.credit(Some((name.to_string(), REVERT_SCORE)), true);
         self.heading += std::f32::consts::PI;
+        self.flipped = !self.flipped;
         let flat = self.forward();
         let up = self.up;
         let forward = (flat - up * flat.dot(up)).normalize_or(flat);
@@ -1856,6 +1862,17 @@ impl Skater {
                     return;
                 }
                 self.trick = None;
+                // Landing backwards (`Land2`): `FlipAndRotate` turns the
+                // skater round to face the way it's going, riding the other
+                // way round from now on, while `LandBackward` plays.
+                if self.landing.backwards {
+                    self.heading += PI;
+                    self.flipped = !self.flipped;
+                    let flat = self.forward();
+                    let up = self.up;
+                    self.velocity =
+                        (flat - up * flat.dot(up)).normalize_or(flat) * self.velocity.length();
+                }
                 // Landing in a manual (up-down pressed just before) keeps
                 // the combo going; otherwise it ends.
                 if self.since_up.min(self.since_down) <= MANUAL_WINDOW

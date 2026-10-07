@@ -113,6 +113,13 @@ fn main() {
             revert: h("R"),
         };
         skater.update(input, &physics, &world, 1.0 / 60.0);
+        if std::env::var("TRICK").is_ok() {
+            println!(
+                "      trick {:?} bail_on {}",
+                skater.trick,
+                skater.bail_on()
+            );
+        }
         let p = skater.position;
         println!(
             "{now:5.2} {:?} at {:.0} {:.0} {:.0} v {:.0} heading {:.0} speed {:.0}{} | {} {:.2}{}",

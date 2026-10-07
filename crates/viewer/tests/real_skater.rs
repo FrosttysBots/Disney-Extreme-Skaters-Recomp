@@ -266,6 +266,14 @@ fn real_skater_on_the_hub() {
     // points, x1.5 for one 180.
     assert!(!landed.bailed);
     assert!(spinner.landing.backwards, "a 180 lands fakie");
+    // `FlipAndRotate`: turned round to face the way she's going, riding
+    // switch.
+    let going = Vec3::new(spinner.velocity.x, 0.0, spinner.velocity.z).normalize();
+    assert!(
+        spinner.forward().dot(going) > 0.99,
+        "facing the way she rolls"
+    );
+    assert!(spinner.flipped, "riding switch");
     assert_eq!(landed.combo.tricks[0].name, "Quickest Boots in the West");
     assert_eq!(landed.combo.tricks[0].spins, 1);
     assert_eq!(landed.total, 375);

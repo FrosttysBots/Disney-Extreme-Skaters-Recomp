@@ -1098,10 +1098,14 @@ impl<'a> App<'a> {
         }
         model.duration = character.animations[model.animation].1.duration;
         // Skating poses the character itself (blending animations).
-        if let (Some(_), Some(pose)) = (&self.skating, &self.skate_pose) {
+        if let (Some((skater, ..)), Some(pose)) = (&self.skating, &self.skate_pose) {
             level
                 .renderer
-                .pose_character(&character.pose_local(pose, self.placement));
+                .pose_character(&character.pose_local_mirrored(
+                    pose,
+                    self.placement,
+                    skater.flipped,
+                ));
             if let Some(blink) = character.blink {
                 let eyes = if model.blink {
                     blink.texture_at(clock)
@@ -1713,7 +1717,12 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.skate(1.0 / 60.0);
             }
             camera = app.camera;
-            if let Some((skater, ..)) = &app.skating {
+            if let Some((skater, _, chase)) = &app.skating {
+                println!(
+                    "camera: {:.0} from the target, {:.0} above it",
+                    chase.eye.distance(chase.target),
+                    chase.eye.y - chase.target.y
+                );
                 let model = &app.model.character;
                 let shown = app
                     .character

@@ -99,6 +99,9 @@ pub struct Landing {
 /// The animation for what the skater is doing.
 pub fn choose(skater: &Skater) -> Anim {
     let turn = skater.turn_input();
+    // Riding switch, the ground's turn animations swap (`OnGroundAI`:
+    // `if Flipped` plays the other side's).
+    let ground_turn = if skater.flipped { -turn } else { turn };
     let crouched = skater.is_crouched();
     match skater.action {
         Action::BailManual => Anim::into("BailManual", "BailManualGetUp", TRICK).committed(),
@@ -160,13 +163,13 @@ pub fn choose(skater: &Skater) -> Anim {
         // `OnGroundAI`: steering and crouching cut in on pushing; a push
         // plays through (`DoAPush` waits for `AnimFinished`).
         _ => {
-            if turn < 0.0 {
+            if ground_turn < 0.0 {
                 if crouched {
                     Anim::into("CrouchTurnLeft", "CrouchTurnLeftIdle", STEER)
                 } else {
                     Anim::into("StandTurnLeft", "StandTurnLeftIdle", STEER)
                 }
-            } else if turn > 0.0 {
+            } else if ground_turn > 0.0 {
                 if crouched {
                     Anim::into("CrouchTurnRight", "CrouchTurnRightIdle", STEER)
                 } else {

@@ -34,6 +34,9 @@ pub struct Character {
     skeleton: Skeleton,
     /// Model-space bone matrices of the rest pose.
     rest: Vec<Mat4>,
+    /// Each bone's mirror partner (the left arm's is the right arm), or
+    /// itself down the middle.
+    partner: Vec<usize>,
     /// Sorted by name. Only animations that fit the skeleton are kept: a
     /// few files were made for another character's skeleton (Jane's
     /// `Crouch` has Jessie's 39 bones, for example).
@@ -79,8 +82,15 @@ impl Character {
                 influences.len()
             );
         }
+        let partner = skeleton
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, bone)| bone.mirror.and_then(|m| skeleton.find(m)).unwrap_or(i))
+            .collect();
         Ok(Self {
             blink: Blink::find(&mesh),
+            partner,
             mesh,
             influences,
             skeleton,
@@ -110,11 +120,32 @@ impl Character {
     /// The mesh's vertices in a pose of parent-relative bone transforms
     /// (such as two animations blended), moved by `placement`.
     pub fn pose_local(&self, local: &[(Quat, Vec3)], placement: Mat4) -> Vec<Vertex> {
+        self.pose_local_mirrored(local, placement, false)
+    }
+
+    /// Like [`Character::pose_local`], optionally mirrored left to right
+    /// the way the game shows a skater riding switch (`Flipped`): each
+    /// bone moves as its mirror partner does, reflected across the
+    /// character's middle. The mesh is symmetric, so it stays the right
+    /// way out and its textures read the right way round.
+    pub fn pose_local_mirrored(
+        &self,
+        local: &[(Quat, Vec3)],
+        placement: Mat4,
+        mirrored: bool,
+    ) -> Vec<Vertex> {
         let posed = pose::model_space(&self.skeleton, local);
-        let matrices: Vec<Mat4> = pose::skinning(&self.rest, &posed)
-            .into_iter()
-            .map(|m| placement * m)
-            .collect();
+        let skin = pose::skinning(&self.rest, &posed);
+        let skin = if mirrored {
+            let flip = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+            self.partner
+                .iter()
+                .map(|&p| flip * skin[p] * flip)
+                .collect()
+        } else {
+            skin
+        };
+        let matrices: Vec<Mat4> = skin.into_iter().map(|m| placement * m).collect();
         self.mesh
             .vertices
             .iter()
