@@ -111,6 +111,11 @@ pub enum Action {
     CessSlide {
         frontside: bool,
     },
+    /// Bailing off an edge (`GroundGoneBail`): falling, then a splat and
+    /// getting up where it lands (backwards for a backwards bail).
+    BailFall {
+        backwards: bool,
+    },
 }
 
 /// A lip trick being held: the trick, the ramp's way out, and how long.
@@ -915,7 +920,9 @@ impl Skater {
         );
         self.last_input = input;
         // Bailing: no control until it's over.
-        let input = if matches!(
+        let input = if matches!(self.action, Action::BailFall { .. }) {
+            Input::default()
+        } else if matches!(
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
         ) {
@@ -962,7 +969,8 @@ impl Skater {
             // The button held, or pressed within the last half second
             // (`{ Press, Triangle, 500 }` in the game's `GrindTricks`).
             let armed = input.grind || self.since_grind <= GRIND_WINDOW;
-            if armed && !self.on_ground && self.since_rail >= p.regrind_time {
+            let falling_bail = matches!(self.action, Action::BailFall { .. });
+            if armed && !self.on_ground && !falling_bail && self.since_rail >= p.regrind_time {
                 if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
                     // Rising in vert air at the coping: a lip trick (the
                     // game's grind start, 0x80108470, checks the skater is
@@ -1935,6 +1943,17 @@ impl Skater {
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
+                // Mid-bail, `GeneralBail`'s `GroundGoneBail`: falling.
+                if matches!(
+                    self.action,
+                    Action::Bail | Action::BailManual | Action::BailGrind
+                ) && self.action_time < self.bail_time()
+                {
+                    let backwards = self.bail_anims.0.starts_with("BailBackward");
+                    self.up = Vec3::Y;
+                    self.set_action(Action::BailFall { backwards });
+                    return;
+                }
                 self.ollied = false;
                 self.air_time = 0.0;
                 self.manual = false;
@@ -2247,6 +2266,21 @@ impl Skater {
                 self.vert = None;
                 self.lip_out = None;
                 self.crouched = input.crouch;
+                // Down from a fall in a bail: the splat and getting up
+                // (`AnimFall2`, `AnimFall3`).
+                if let Action::BailFall { backwards } = self.action {
+                    self.bail_anims = if backwards {
+                        ("BailBackwardFallSplat", "BailBackwardFallGetUp")
+                    } else {
+                        ("BailFallSplat", "BailFallGetUp")
+                    };
+                    self.smacked = true;
+                    self.trick = None;
+                    self.air_time = 0.0;
+                    self.action = Action::Bail;
+                    self.action_time = 0.0;
+                    return;
+                }
                 if self.bail_on_landing {
                     self.bail_on_landing = false;
                     self.trick = None;

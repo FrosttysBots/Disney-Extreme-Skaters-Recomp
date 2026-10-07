@@ -198,6 +198,10 @@ fn main() {
             if !smacked && skater.bail_anims.0 == "BailSmackWall" {
                 *gaps.entry("(bail smacks)".into()).or_default() += 1;
             }
+            if matches!(skater.action, skate::Action::BailFall { .. }) && skater.action_time == 0.0
+            {
+                *gaps.entry("(bail falls)".into()).or_default() += 1;
+            }
             if let Some((name, _)) = skater.last_gap.take() {
                 *gaps.entry(name).or_default() += 1;
             }

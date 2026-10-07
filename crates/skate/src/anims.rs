@@ -116,6 +116,9 @@ pub fn choose(skater: &Skater) -> Anim {
             let (fall, get_up) = skater.bail_anims;
             Anim::into(fall, get_up, TRICK).committed()
         }
+        // `GroundGoneBail`: falling (`AnimFall1`).
+        Action::BailFall { backwards: false } => Anim::once("BailFall", TRICK).committed(),
+        Action::BailFall { backwards: true } => Anim::once("BailBackwardFall", TRICK).committed(),
         Action::FlailLeft if crouched => Anim::once("CrouchFlailLeft", LAND).committed(),
         Action::FlailRight if crouched => Anim::once("CrouchFlailRight", LAND).committed(),
         Action::FlailLeft => Anim::once("StandFlailLeft", LAND).committed(),
