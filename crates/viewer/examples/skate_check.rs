@@ -33,9 +33,11 @@ fn main() {
     for file in &files.scripts {
         program.add(file).unwrap();
     }
-    let stats = Stats::of(&program, "jessie");
+    // CHAR=id: another character's stats and tricks.
+    let who = std::env::var("CHAR").unwrap_or_else(|_| "jessie".into());
+    let stats = Stats::of(&program, &who);
     let physics = Physics::new(&program, &stats);
-    let mut tricks = TrickBook::new(&program, "jessie", &stats);
+    let mut tricks = TrickBook::new(&program, &who, &stats);
     tricks.set_durations(|_| Some(0.6));
     let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
     let nodes = LevelNodes::from_bytes(files.nodes.as_ref().unwrap()).unwrap();
