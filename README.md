@@ -158,7 +158,10 @@ the level's `<level>_AddGoal_SKATE` script and catching what it hands
 `GoalManager_AddGoal` (the time, the letters' objects, the restart node),
 the letters spin and bob with the goal's own scripts, and each is picked
 up within 8 feet, as `SkateLetter_InitLetter` sets. `--letters` with
-`--skate` screenshots it. `--run SECONDS`
+`--skate` screenshots it. The **High Score** and **Pro Score goals** read
+`AddGoal_HighScore` and `AddGoal_ProScore` the same way: the score (a
+global such as `pride_highscore_score`), the time and the goal's name;
+`--score-goal high|pro` screenshots one. `--run SECONDS`
 with `--skate` screenshots one with that much time left, and `--replay-at
 SECONDS` the replay of it that far in.
 | P | Play or pause the character |

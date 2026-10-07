@@ -125,6 +125,10 @@ struct Args {
     /// its clock
     #[arg(long, requires = "skate")]
     run: Option<f32>,
+    /// For --skate: play the level's score goal, `high` or `pro` (from its
+    /// start)
+    #[arg(long, requires = "skate", value_parser = ["high", "pro"])]
+    score_goal: Option<String>,
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
@@ -485,6 +489,9 @@ struct Run {
     ending: Option<f32>,
     /// Stopped, with the result up.
     over: bool,
+    /// A score goal: the score to reach and what it says when it is.
+    goal: Option<(u32, String)>,
+    won: bool,
 }
 
 /// How far away objects' sounds fade out (units).
@@ -695,6 +702,9 @@ impl<'a> App<'a> {
                     rumble: true,
                     run_clock: None,
                     run_result: None,
+                    run_goal: None,
+                    run_goal_won: None,
+                    score_goals: [None, None],
                     replaying: false,
                     can_letters: false,
                     letters: None,
@@ -794,6 +804,10 @@ impl<'a> App<'a> {
                 let shop = info.id.eq_ignore_ascii_case("SkateShop");
                 self.model.character.can_skate =
                     self.character.is_some() && !shop && level.world.is_some();
+                self.model.character.score_goals = [false, true].map(|pro| {
+                    desa_viewer::goals::score_goal(level.behaviour.program(), &info.id, pro)
+                        .map(|g| g.name)
+                });
                 self.model.character.can_letters = level
                     .nodes
                     .objects
@@ -1000,6 +1014,8 @@ impl<'a> App<'a> {
         }
         self.model.character.letters = None;
         self.model.character.letters_result = None;
+        self.model.character.run_goal = None;
+        self.model.character.run_goal_won = None;
         self.model.character.run_clock = None;
         self.model.character.run_result = None;
         self.blend_from = None;
@@ -1084,19 +1100,44 @@ impl<'a> App<'a> {
 
     /// Starts a two-minute run (`StartGoal_TrickAttack time = 120`) from
     /// where the character stands at the level's start.
-    fn start_run(&mut self) {
+    ///
+    /// With `Some(pro)`, the level's High Score or Pro Score goal
+    /// (`AddGoal_HighScore`, `AddGoal_ProScore`): its score to reach in its
+    /// time, from its restart node.
+    fn start_run(&mut self, goal: Option<bool>) {
         if self.skating.is_some() {
             self.toggle_skate();
         }
         let Some(level) = &self.level else { return };
+        let target = goal.and_then(|pro| {
+            desa_viewer::goals::score_goal(level.behaviour.program(), &level.id, pro)
+        });
+        if goal.is_some() && target.is_none() {
+            return;
+        }
         self.placement = level.home;
+        let start = target
+            .as_ref()
+            .and_then(|t| t.restart)
+            .and_then(|name| level.nodes.nodes.iter().find(|n| n.name == name))
+            .and_then(|n| n.position);
+        if let Some(start) = start {
+            let (_, rotation, _) = level.home.to_scale_rotation_translation();
+            self.placement = Mat4::from_rotation_translation(rotation, start);
+        }
         self.toggle_skate();
         if self.skating.is_some() {
             self.recording.clear();
+            self.model.character.run_goal = goal
+                .zip(target.as_ref())
+                .map(|(pro, t)| (pro, t.name.clone(), t.score));
+            self.model.character.run_goal_won = target.as_ref().map(|_| false);
             self.run = Some(Run {
-                left: RUN_TIME,
+                left: target.as_ref().map_or(RUN_TIME, |t| t.time),
                 ending: None,
                 over: false,
+                goal: target.map(|t| (t.score, t.win)),
+                won: false,
             });
         }
     }
@@ -1223,6 +1264,19 @@ impl<'a> App<'a> {
             return;
         }
         run.left = (run.left - dt).max(0.0);
+        // A score goal is won as soon as the score's there (the combo
+        // banked), and the run ends there.
+        if let Some((score, win)) = run.goal.as_ref().filter(|_| !run.won) {
+            if skater.score >= *score {
+                run.won = true;
+                run.ending.get_or_insert(0.0);
+                self.model.character.run_goal_won = Some(true);
+                if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+                let _ = win;
+            }
+        }
         let bailing = matches!(
             skater.action,
             SkateAction::Bail
@@ -1243,8 +1297,14 @@ impl<'a> App<'a> {
                 *time += dt;
                 if (*time > 1.0 && skater.speed().abs() < 20.0) || *time > 5.0 {
                     run.over = true;
+                    // Goals keep their own bests.
+                    let kind = match &self.model.character.run_goal {
+                        Some((true, ..)) => "pro.",
+                        Some((false, ..)) => "high.",
+                        None => "",
+                    };
                     let key = format!(
-                        "{}.{}",
+                        "{kind}{}.{}",
                         self.level.as_ref().map_or("", |l| l.id.as_str()),
                         self.model.character.current.map_or("", |i| self
                             .model
@@ -1982,7 +2042,7 @@ impl<'a> App<'a> {
                 ui::Action::LoadCharacter(i) => self.load_character(i),
                 ui::Action::LookAtCharacter => self.camera = camera_facing(self.placement),
                 ui::Action::ToggleSkate => self.toggle_skate(),
-                ui::Action::StartRun => self.start_run(),
+                ui::Action::StartRun(goal) => self.start_run(goal),
                 ui::Action::StartLetters => self.start_letters(),
                 ui::Action::Replay => {
                     if !self.recording.is_empty() {
@@ -2362,15 +2422,25 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         println!("letter {letter} at {:.0} {:.0} {:.0}", p.x, p.y, p.z);
                     }
                 }
+            } else if let Some(goal) = &args.score_goal {
+                app.start_run(Some(goal == "pro"));
             } else {
                 app.toggle_skate();
             }
             if let Some(left) = args.run {
-                app.run = Some(Run {
-                    left,
-                    ending: None,
-                    over: false,
-                });
+                // A run (or the score goal started), with this long left.
+                match &mut app.run {
+                    Some(run) => run.left = left,
+                    None => {
+                        app.run = Some(Run {
+                            left,
+                            ending: None,
+                            over: false,
+                            goal: None,
+                            won: false,
+                        })
+                    }
+                }
             }
             let script = args
                 .skate_keys

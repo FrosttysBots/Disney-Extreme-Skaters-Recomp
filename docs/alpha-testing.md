@@ -76,12 +76,16 @@ skater is and what it's doing.
   the level's letters goal, its own time (a minute on Beach and Canyon,
   two elsewhere) to collect the five spinning letters from the goal's
   start. Best times are kept.
+- High Score and Pro Score goals (the panel's buttons): the level's own
+  score goals, like Pride Rock's "Beat Scar's High Score!" (15,000) or
+  Beach's 150,000 Extreme Score, in two minutes from the goal's start.
+  The goal's won the moment the score's there.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game
 
 - Not yet: wall rides (the game barely uses them), skitching, the
-  Simplified controls, goals besides the letters and the other gameplay
+  Simplified controls, goals besides the letters and scores and the other gameplay
   modes, and the level's
   other triggers (breakables, goal pickups).
 - Approximations of our own: the camera follows the game's camera

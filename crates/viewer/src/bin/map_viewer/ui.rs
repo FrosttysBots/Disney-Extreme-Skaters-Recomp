@@ -15,8 +15,9 @@ pub enum Action {
     LoadCharacter(Option<usize>),
     LookAtCharacter,
     ToggleSkate,
-    /// A two-minute run from the level's start (again).
-    StartRun,
+    /// A two-minute run from the level's start, or (`Some(pro)`) the
+    /// level's High Score or Pro Score goal (again).
+    StartRun(Option<bool>),
     /// The level's S-K-A-T-E letters goal (again).
     StartLetters,
     /// Watch the run just skated again, or stop watching.
@@ -68,6 +69,11 @@ pub struct CharacterModel {
     /// score, the best before it, and whether it beat it.
     pub run_clock: Option<f32>,
     pub run_result: Option<(u32, u32, bool)>,
+    /// The run's goal (`Some(pro)`) and its name and score, whether it was
+    /// won, and the level's score goals' names (high, pro) if it has them.
+    pub run_goal: Option<(bool, String, u32)>,
+    pub run_goal_won: Option<bool>,
+    pub score_goals: [Option<String>; 2],
     /// Watching the run again.
     pub replaying: bool,
     /// The level has S-K-A-T-E letters; while collecting them, which are
@@ -227,10 +233,32 @@ fn run_clock(ctx: &egui::Context, left: f32) {
         });
 }
 
-/// The end of a two-minute run: the score against the best.
+/// A score goal's target, under the clock: green once reached.
+fn goal_target(ctx: &egui::Context, score: u32, won: bool) {
+    egui::Area::new(egui::Id::new("goal_target"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new(format!("Goal {score}"))
+                    .size(18.0)
+                    .strong()
+                    .color(if won {
+                        egui::Color32::from_rgb(90, 230, 90)
+                    } else {
+                        egui::Color32::WHITE
+                    })
+                    .background_color(egui::Color32::from_black_alpha(120)),
+            );
+        });
+}
+
+/// The end of a two-minute run: the score against the best, and for a
+/// score goal whether it was reached.
 fn run_result(
     ctx: &egui::Context,
     (score, best, record): (u32, u32, bool),
+    goal: Option<(bool, &str, Option<bool>)>,
     actions: &mut Vec<Action>,
 ) {
     egui::Area::new(egui::Id::new("run_result"))
@@ -238,7 +266,27 @@ fn run_result(
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading("Run over");
+                    match goal {
+                        Some((_, name, Some(true))) => {
+                            ui.heading(name);
+                            ui.label(
+                                egui::RichText::new("Goal complete!")
+                                    .size(18.0)
+                                    .color(egui::Color32::from_rgb(90, 230, 90)),
+                            );
+                        }
+                        Some((_, name, _)) => {
+                            ui.heading(name);
+                            ui.label(
+                                egui::RichText::new("Goal failed")
+                                    .size(18.0)
+                                    .color(egui::Color32::from_rgb(255, 90, 70)),
+                            );
+                        }
+                        None => {
+                            ui.heading("Run over");
+                        }
+                    }
                     ui.label(egui::RichText::new(format!("{score}")).size(30.0).strong());
                     if record {
                         ui.label(
@@ -257,7 +305,7 @@ fn run_result(
                             actions.push(Action::Replay);
                         }
                         if ui.button("Again").clicked() {
-                            actions.push(Action::StartRun);
+                            actions.push(Action::StartRun(goal.map(|(pro, ..)| pro)));
                         }
                         if ui.button("Done").clicked() {
                             actions.push(Action::ToggleSkate);
@@ -432,6 +480,9 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if let Some(left) = model.character.run_clock {
             run_clock(ctx, left);
         }
+        if let Some((_, _, score)) = &model.character.run_goal {
+            goal_target(ctx, *score, model.character.run_goal_won == Some(true));
+        }
         if let Some(got) = model.character.letters {
             letters_hud(ctx, got);
         }
@@ -441,7 +492,12 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if model.character.replaying {
             replay_banner(ctx, &mut actions);
         } else if let Some(result) = model.character.run_result {
-            run_result(ctx, result, &mut actions);
+            let goal = model
+                .character
+                .run_goal
+                .as_ref()
+                .map(|(pro, name, _)| (*pro, name.as_str(), model.character.run_goal_won));
+            run_result(ctx, result, goal, &mut actions);
         }
     }
     if !model.panel_open {
@@ -641,7 +697,29 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             )
             .clicked()
         {
-            actions.push(Action::StartRun);
+            actions.push(Action::StartRun(None));
+        }
+    });
+    ui.horizontal(|ui| {
+        for (pro, name) in [false, true].into_iter().zip(&model.score_goals) {
+            let label = if pro {
+                "Pro Score goal"
+            } else {
+                "High Score goal"
+            };
+            ui.add_enabled_ui(model.can_skate && name.is_some(), |ui| {
+                if ui
+                    .button(label)
+                    .on_hover_text(format!(
+                        "The level's goal \"{}\": reach its score before the clock runs out, \
+                         from the goal's start.",
+                        name.as_deref().unwrap_or("")
+                    ))
+                    .clicked()
+                {
+                    actions.push(Action::StartRun(Some(pro)));
+                }
+            });
         }
     });
     ui.add_enabled_ui(model.can_skate && model.can_letters, |ui| {

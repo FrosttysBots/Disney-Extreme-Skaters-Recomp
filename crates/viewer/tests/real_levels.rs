@@ -69,6 +69,13 @@ fn real_level_camera_paths() {
             .any(|o| o.name == qb::checksum("TRG_Goal_Letter_S"));
         let letters = desa_viewer::goals::skate_letters(behaviour.program(), &level.id);
         println!("{}: letters {has_letters}, goal {letters:?}", level.id);
+        for pro in [false, true] {
+            let goal = desa_viewer::goals::score_goal(behaviour.program(), &level.id, pro);
+            println!("{}: score goal {goal:?}", level.id);
+            if level.id != "SkateShop" {
+                assert!(goal.is_some_and(|g| g.score >= 10_000), "{}", level.id);
+            }
+        }
         if has_letters {
             let goal = letters.expect("a letters goal");
             assert!(goal.letters.iter().all(|l| behaviour.object(*l).is_some()));
