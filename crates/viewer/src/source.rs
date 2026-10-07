@@ -466,9 +466,22 @@ impl GameData {
                 lines.push((kind, offset, size));
             }
         }
+        // From a disc image the whole file is read once; from a folder, just
+        // each line.
+        let whole = if matches!(self, GameData::Disc { .. }) && !lines.is_empty() {
+            self.stream_file("streams.wad", None)?
+        } else {
+            None
+        };
         let mut out = Vec::new();
         for (kind, offset, size) in lines {
-            if let Some(data) = self.stream_file("streams.wad", Some((offset, size)))? {
+            let data = match &whole {
+                Some(whole) => whole
+                    .get(offset as usize..(offset + size) as usize)
+                    .map(<[u8]>::to_vec),
+                None => self.stream_file("streams.wad", Some((offset, size)))?,
+            };
+            if let Some(data) = data {
                 out.push((kind, data));
             }
         }
