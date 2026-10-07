@@ -422,6 +422,10 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
     let Some(hit) = world.ray(from, from - Vec3::Y * FADE) else {
         return Vec::new();
     };
+    // Faces flagged to take no skater shadow.
+    if hit.flags & ngc_collision::face_flags::NO_SKATER_SHADOW != 0 {
+        return Vec::new();
+    }
     let height = (skater.position.y - hit.point.y).max(0.0);
     let fade = (1.0 - height / FADE).clamp(0.0, 1.0);
     let alpha = (150.0 * fade) as u8;
