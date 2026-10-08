@@ -249,6 +249,8 @@ struct LoadedLevel {
     colors: [ColorAnimation; 3],
     /// The level's warps to other levels.
     portals: Vec<Portal>,
+    /// What each teleporter plays and says.
+    teleport_effects: HashMap<u32, desa_viewer::triggers::TeleportEffect>,
     /// The level's scene and textures, kept to make a layer for a hidden
     /// sector when a script creates it; those made so far.
     scene: Vec<u8>,
@@ -404,6 +406,7 @@ fn load_level(
         goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
+    let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
     let particles = desa_viewer::particles::Particles::new(behaviour.program(), &nodes);
     // The particles' textures: a soft round one first (for those missing),
     // then the level's.
@@ -436,6 +439,7 @@ fn load_level(
             behaviour,
             world: skate_world,
             colors,
+            teleport_effects,
             portals,
             scene: files.scene.clone(),
             scene_textures: files.textures.clone(),
@@ -2764,11 +2768,29 @@ impl<'a> App<'a> {
             }
         }
         self.sparks.update(skater, dt);
-        // Into the water (a teleporter): a splash where it went in.
+        // Through a teleporter: its sound and message; into the water, a
+        // splash where it went in.
         if skater.sounds.contains(&skate::skater::SkateSound::Teleport) {
-            self.sparks.splash(before);
-            // The camera stays a moment to see it, then cuts to the skater.
-            self.splash_hold = Some((self.camera, SPLASH_HOLD));
+            let effect = skater
+                .last_teleport
+                .and_then(|o| level.teleport_effects.get(&o))
+                .cloned()
+                .unwrap_or_default();
+            let water = effect.sound == Some(qb::checksum("bigsplash"));
+            if let (Some(sound), Some(audio)) = (
+                effect.sound,
+                self.audio.as_ref().filter(|_| self.model.character.sound),
+            ) {
+                audio.play_named(sound, 1.0);
+            }
+            if let Some(message) = effect.message {
+                skater.message = Some((message, 1.5));
+            }
+            if water {
+                self.sparks.splash(before);
+                // The camera stays a moment to see it, then cuts to the skater.
+                self.splash_hold = Some((self.camera, SPLASH_HOLD));
+            }
         }
         if let Some(gilrs) = self.gamepads.as_mut() {
             if self.model.character.rumble {

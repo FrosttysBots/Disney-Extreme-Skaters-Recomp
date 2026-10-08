@@ -16,9 +16,9 @@
 
 use std::collections::HashMap;
 
-use qb::checksum;
 use qb::token::Token;
-use qb::vm::Program;
+use qb::vm::{Host, Outcome, Program, Thread};
+use qb::{Value, checksum};
 use skate::{GapFlags, GapTrigger};
 
 use crate::nodes::LevelNodes;
@@ -42,6 +42,75 @@ pub fn teleports(nodes: &LevelNodes, program: &Program) -> HashMap<u32, usize> {
         .filter_map(|&(object, script)| {
             let target = restart_named(program, script, &restarts, DEPTH)?;
             Some((object, target))
+        })
+        .collect()
+}
+
+/// What a teleporter does besides moving the skater: the sound it plays
+/// (`playsound bigsplash` for water, `arc5` for Pizza Planet's) and the
+/// message it shows (`Create_Panel_Message text = ...`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TeleportEffect {
+    pub sound: Option<u32>,
+    pub message: Option<String>,
+}
+
+/// Catches a trigger script's sound and message.
+struct Catch<'a> {
+    program: &'a Program,
+    effect: TeleportEffect,
+}
+
+impl Host for Catch<'_> {
+    fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if name == checksum("playsound") || name == checksum("obj_playsound") {
+            if let Value::Struct(items) = args {
+                let sound = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                });
+                self.effect.sound = self.effect.sound.or(sound);
+            }
+        } else if name == checksum("Create_Panel_Message")
+            || name == checksum("CreateScreenElement")
+        {
+            // (The text may sit in a struct of its own: `CreateScreenElement
+            // { ... text = ... }`.)
+            let field = args.get(checksum("text")).or_else(|| match args {
+                Value::Struct(items) => items
+                    .iter()
+                    .find_map(|(k, v)| k.is_none().then(|| v.get(checksum("text"))).flatten()),
+                _ => None,
+            });
+            let text = match field {
+                Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                Some(Value::Name(n)) => match self.program.value(*n) {
+                    Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            self.effect.message = self.effect.message.take().or(text);
+        }
+        Outcome::Done(false)
+    }
+}
+
+/// Each teleporter's sound and message, run from its trigger script.
+pub fn teleport_effects(nodes: &LevelNodes, program: &Program) -> HashMap<u32, TeleportEffect> {
+    let teleports = teleports(nodes, program);
+    nodes
+        .geometry_scripts
+        .iter()
+        .filter(|(object, _)| teleports.contains_key(object))
+        .map(|&(object, script)| {
+            let mut host = Catch {
+                program,
+                effect: TeleportEffect::default(),
+            };
+            let mut thread = Thread::new(script, Vec::new());
+            thread.run(program, &mut host, 0.0);
+            (object, host.effect)
         })
         .collect()
 }

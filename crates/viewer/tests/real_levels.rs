@@ -147,6 +147,22 @@ fn real_level_camera_paths() {
                 );
             }
         }
+        let effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
+        let mut said: Vec<String> = effects
+            .values()
+            .map(|e| format!("{:?} {:08x}", e.message, e.sound.unwrap_or(0)))
+            .collect();
+        said.sort();
+        said.dedup();
+        println!("{}: {} teleporters: {said:?}", level.id, effects.len());
+        if level.id == "HUB" {
+            // The harbour water splashes.
+            assert!(
+                effects
+                    .values()
+                    .any(|e| e.sound == Some(qb::checksum("bigsplash")))
+            );
+        }
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         println!(
             "{}: warps {:?}",

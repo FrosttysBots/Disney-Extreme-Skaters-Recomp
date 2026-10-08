@@ -362,6 +362,8 @@ pub struct Skater {
     /// like, as the level's `TriggerScript`s do): their collision object's
     /// checksum, and where to and facing which way.
     pub teleports: HashMap<u32, (Vec3, f32)>,
+    /// The teleporter (its collision object) last gone through.
+    pub last_teleport: Option<u32>,
     /// Trigger faces that start or end gaps, by collision object, and the
     /// gaps under way.
     pub gap_triggers: HashMap<u32, GapTrigger>,
@@ -493,6 +495,7 @@ impl Skater {
             sounds: Vec::new(),
             terrain: 0,
             teleports: HashMap::new(),
+            last_teleport: None,
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
             last_gap: None,
@@ -758,7 +761,11 @@ impl Skater {
         if !self.teleports.is_empty() {
             let mut touched = world.triggers(before + knee, self.position + knee);
             touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
-            if let Some(&(position, heading)) = touched.iter().find_map(|o| self.teleports.get(o)) {
+            if let Some((object, &(position, heading))) = touched
+                .iter()
+                .find_map(|o| Some((*o, self.teleports.get(o)?)))
+            {
+                self.last_teleport = Some(object);
                 self.gaps.clear();
                 self.place(position, heading, p, world);
                 self.sounds.push(SkateSound::Teleport);

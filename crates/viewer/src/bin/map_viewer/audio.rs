@@ -342,7 +342,8 @@ impl Audio {
                 }
                 SkateSound::Smack => self.play("bodysmacka", 1.0, 1.0),
                 SkateSound::Gap => self.play("hud_jumpgap", 1.0, 1.0),
-                SkateSound::Teleport => self.play("bigsplash", 1.0, 1.0),
+                // The teleporter's own sound (the viewer plays it).
+                SkateSound::Teleport => {}
             }
         }
         // Rolling on the ground (not bailing or off the board).
