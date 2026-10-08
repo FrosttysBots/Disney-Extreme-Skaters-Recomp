@@ -163,6 +163,8 @@ struct Frame {
 pub struct Thread {
     frames: Vec<Frame>,
     wait: f32,
+    /// The object's tags (`SetTags`), read back with `GetTags`.
+    tags: Params,
 }
 
 impl Thread {
@@ -176,6 +178,7 @@ impl Thread {
                 started: false,
             }],
             wait: 0.0,
+            tags: Vec::new(),
         }
     }
 
@@ -344,6 +347,45 @@ impl Thread {
         }
         if target.is_none() && name == checksum("wait") {
             self.wait += wait_seconds(&args);
+            return true;
+        }
+        // Built in: whether the script was given a parameter, and the
+        // object's tags.
+        if target.is_none() && name == checksum("GotParam") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let Some(Value::Name(wanted)) = items.iter().find(|(k, _)| k.is_none()).map(|(_, v)| v)
+            else {
+                return false;
+            };
+            let frame = self.frames.last().unwrap();
+            return frame
+                .params
+                .iter()
+                .any(|(k, v)| *k == Some(*wanted) || (k.is_none() && *v == Value::Name(*wanted)));
+        }
+        if target.is_none() && name == checksum("SetTags") {
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    if let Some(k) = k {
+                        set_param(&mut self.tags, k, v);
+                    }
+                }
+            }
+            return true;
+        }
+        if target.is_none() && name == checksum("GetTags") {
+            let tags = self.tags.clone();
+            let frame = self.frames.last_mut().unwrap();
+            for (k, v) in tags {
+                if let Some(k) = k {
+                    set_param(&mut frame.params, k, v);
+                }
+            }
+            return true;
+        }
+        if target.is_none() && (name == checksum("printf") || name == checksum("printstruct")) {
             return true;
         }
         match host.command(target, name, &args) {
@@ -670,6 +712,52 @@ mod tests {
 
     fn names(log: &Log) -> Vec<u32> {
         log.calls.iter().map(|c| c.1).collect()
+    }
+
+    #[test]
+    fn got_param_and_tags() {
+        let mut program = Program::new();
+        // script Car: if GotParam Fast / Fast_Car / endif / SetTags Speed = 3
+        // / GetTags / Report <Speed>
+        program.add_script(
+            checksum("Car"),
+            vec![
+                Token::If,
+                n("GotParam"),
+                n("Fast"),
+                Token::EndOfLine,
+                n("Fast_Car"),
+                Token::EndOfLine,
+                Token::EndIf,
+                Token::EndOfLine,
+                n("SetTags"),
+                n("Speed"),
+                Token::Equals,
+                Token::Integer(3),
+                Token::EndOfLine,
+                n("GetTags"),
+                Token::EndOfLine,
+                n("Report"),
+                Token::Arg,
+                n("Speed"),
+                Token::EndOfLine,
+            ],
+        );
+        for (params, fast) in [
+            (vec![(None, Value::Name(checksum("Fast")))], true),
+            (vec![], false),
+        ] {
+            let mut log = Log::default();
+            let mut thread = Thread::new(checksum("Car"), params);
+            thread.run(&program, &mut log, 0.0);
+            assert_eq!(names(&log).contains(&checksum("Fast_Car")), fast);
+            let report = log
+                .calls
+                .iter()
+                .find(|c| c.1 == checksum("Report"))
+                .unwrap();
+            assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
+        }
     }
 
     #[test]

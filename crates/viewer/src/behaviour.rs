@@ -27,6 +27,7 @@
 //!   `Obj_WaitMove` and `Obj_IsMoving`.
 //! - `Obj_StickToGround distAbove distBelow [pitch]` (feet; `off`): kept
 //!   on the ground below as it goes, tipped with the slope.
+//! - `LocalSkaterExists` (skating), `Obj_LookAtObject Name = object`.
 //! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
 //!   `Obj_Hover Amp = units Freq = hertz`.
 //! - `playsound` / `obj_playsound name [Vol = percent]`: collected in
@@ -749,6 +750,28 @@ impl Host for Commands<'_> {
             };
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
+        } else if name == c("LocalSkaterExists") {
+            return Outcome::Done(b.skater.is_some());
+        } else if name == c("Obj_LookAtObject") {
+            let other = named("Name").and_then(|n| b.object_named(n));
+            if let Some(other) = other {
+                let at = b.states[other].position;
+                let state = &mut b.states[object];
+                let flat = (at - state.position).with_y(0.0).normalize_or_zero();
+                if flat != Vec3::ZERO {
+                    state.rotation = Quat::from_rotation_arc(Vec3::Z, flat);
+                    state.dirty = true;
+                }
+            }
+        } else if [
+            "Obj_SetPathTurnDist",
+            "Obj_SetPathMinStopVel",
+            "Obj_SetGroundOffset",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            // Fine points of following a path: close enough as it is.
         } else if name == c("Obj_ShadowOff") || name == c("Obj_ShadowOn") {
             // Pedestrians cast no shadows here anyway.
         } else if name == c("Obj_PlayAnim") {
