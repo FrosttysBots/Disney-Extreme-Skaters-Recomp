@@ -119,6 +119,9 @@ pub struct Behaviour {
     /// Sounds the scripts played since the viewer last took them: the
     /// sound's name (checksum), where, and the volume (1 is full).
     pub sounds: Vec<(u32, Vec3, f32)>,
+    /// Names scripts created or killed that aren't objects (particle
+    /// emitters, sectors), for the viewer: (name, created?).
+    pub other_creates: Vec<(u32, bool)>,
 }
 
 impl Behaviour {
@@ -186,6 +189,7 @@ impl Behaviour {
             skater: None,
             starting: Vec::new(),
             sounds: Vec::new(),
+            other_creates: Vec::new(),
         }
     }
 
@@ -681,7 +685,11 @@ impl Host for Commands<'_> {
                 }
             }
         } else if name == c("create") || name == c("kill") {
-            if let Some(o) = named("Name").and_then(|n| b.object_named(n)) {
+            let target = named("Name");
+            if let Some(n) = target.filter(|n| b.object_named(*n).is_none()) {
+                b.other_creates.push((n, name == c("create")));
+            }
+            if let Some(o) = target.and_then(|n| b.object_named(n)) {
                 let create = name == c("create");
                 // A new object runs its own script.
                 if create && !b.states[o].alive {

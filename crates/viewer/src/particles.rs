@@ -239,6 +239,11 @@ impl Particles {
         }
     }
 
+    /// Stops the emitter with this node name (`kill Name = ...`).
+    pub fn stop(&mut self, name: u32) {
+        self.systems.retain(|s| s.name != name);
+    }
+
     /// Whether the level has an emitter by this node name.
     pub fn has_emitter(nodes: &LevelNodes, name: u32) -> bool {
         nodes.emitters.iter().any(|e| e.name == name)

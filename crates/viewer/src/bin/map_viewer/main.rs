@@ -2962,7 +2962,16 @@ impl<'a> App<'a> {
                 clock,
                 dt,
             );
-            // The particle effects.
+            // The particle effects, those the scripts start and stop too.
+            for (name, created) in std::mem::take(&mut level.behaviour.other_creates) {
+                if created {
+                    level
+                        .particles
+                        .start(level.behaviour.program(), &level.nodes, name);
+                } else {
+                    level.particles.stop(name);
+                }
+            }
             level
                 .particles
                 .update(level.behaviour.program(), dt, self.camera.position);
