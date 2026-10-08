@@ -70,6 +70,9 @@ skater is and what it's doing.
   tricks landed, points, best combo, gaps and bails since you started.
 - The Gaps list in the panel while skating: every gap the level names,
   ticked off as you land each one (kept between sessions).
+- Races (the panel's Race button on Andy's Room, the Hub and Scar's
+  Canyon): through the level's gates in order before the clock runs out,
+  each gate adding its seconds.
 - Skitching (Andy's Room): roll up behind one of the toy cars and hold W
   (up): you hitch on ("Skitchin'", balance with A / D) and it sets off at
   its skitch speed towing you; let go of W, fall off the meter or ollie

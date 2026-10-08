@@ -241,6 +241,53 @@ pub fn level_goals(program: &Program, level: &str) -> Vec<LevelGoal> {
         .collect()
 }
 
+/// A race goal (`AddGoal_Race`): its name, the waypoints in order (each
+/// one's object, the script run when it's next, and the seconds it adds
+/// to the clock), where it starts, and the scripts run at the start and
+/// the end (`goal_start_script`, `goal_deactivate_script`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Race {
+    pub name: String,
+    pub waypoints: Vec<(u32, Option<u32>, f32)>,
+    pub restart: Option<u32>,
+    pub start_script: Option<u32>,
+    pub end_script: Option<u32>,
+}
+
+/// The level's race goal, if it has one.
+pub fn race(program: &Program, level: &str) -> Option<Race> {
+    let params = goal_params(program, level, "Race")?;
+    let name = |key: &str| param(&params, program, key).and_then(Value::as_name);
+    let Some(Value::Array(points)) = param(&params, program, "race_waypoints") else {
+        return None;
+    };
+    let waypoints: Vec<(u32, Option<u32>, f32)> = points
+        .iter()
+        .filter_map(|p| {
+            Some((
+                p.get(checksum("id"))?.as_name()?,
+                p.get(checksum("scr")).and_then(Value::as_name),
+                p.get(checksum("time"))
+                    .and_then(Value::as_f32)
+                    .unwrap_or(10.0),
+            ))
+        })
+        .collect();
+    if waypoints.is_empty() {
+        return None;
+    }
+    Some(Race {
+        name: match param(&params, program, "view_goals_text") {
+            Some(Value::String(s) | Value::LocalString(s)) => s.clone(),
+            _ => "Race".to_string(),
+        },
+        waypoints,
+        restart: name("restart_node"),
+        start_script: name("goal_start_script"),
+        end_script: name("goal_deactivate_script"),
+    })
+}
+
 /// A goal to score so many points in the time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScoreGoal {

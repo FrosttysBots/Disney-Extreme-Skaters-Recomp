@@ -134,6 +134,9 @@ struct Args {
     /// start)
     #[arg(long, requires = "skate", value_parser = ["high", "pro"])]
     score_goal: Option<String>,
+    /// For --skate: play the level's race (from its start)
+    #[arg(long, requires = "skate")]
+    race: bool,
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
@@ -246,6 +249,11 @@ struct LoadedLevel {
     colors: [ColorAnimation; 3],
     /// The level's warps to other levels.
     portals: Vec<Portal>,
+    /// The level's scene and textures, kept to make a layer for a hidden
+    /// sector when a script creates it; those made so far.
+    scene: Vec<u8>,
+    scene_textures: Option<Vec<u8>>,
+    sector_layers: HashMap<u32, Option<usize>>,
     /// The level from above, for the map in the corner.
     minimap: Option<minimap::Minimap>,
     /// The level's particle effects (steam, sparks, dust), and their
@@ -429,6 +437,9 @@ fn load_level(
             world: skate_world,
             colors,
             portals,
+            scene: files.scene.clone(),
+            scene_textures: files.textures.clone(),
+            sector_layers: HashMap::new(),
             minimap,
             particles,
             particle_textures,
@@ -511,6 +522,54 @@ struct ObjectLayers {
 }
 
 impl LoadedLevel {
+    /// The particle effects and hidden sectors the scripts started and
+    /// stopped, created and killed.
+    fn apply_creates(&mut self) {
+        for (name, created) in std::mem::take(&mut self.behaviour.other_creates) {
+            if self.nodes.hidden_sectors.contains(&name) {
+                self.show_sector(name, created);
+                continue;
+            }
+            if created {
+                self.particles
+                    .start(self.behaviour.program(), &self.nodes, name);
+            } else {
+                self.particles.stop(name);
+            }
+        }
+    }
+
+    /// Shows or hides a sector that isn't there at the start (made into a
+    /// layer of its own the first time).
+    fn show_sector(&mut self, name: u32, shown: bool) {
+        let node = self
+            .nodes
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .and_then(|n| n.position);
+        let layer = *self.sector_layers.entry(name).or_insert_with(|| {
+            let mut level =
+                Level::from_bytes_filtered(&self.scene, self.scene_textures.as_deref(), |s| {
+                    s == name
+                })
+                .ok()
+                .filter(|l| !l.vertices.is_empty())?;
+            // Some are stored round the origin, to be put where their node
+            // is (a race's gates); others already sit in place.
+            if let Some(at) = node {
+                let centre = level.focus.0;
+                if centre.length() < at.distance(centre) {
+                    for v in &mut level.vertices {
+                        v.position = (Vec3::from(v.position) + at).to_array();
+                    }
+                }
+            }
+            self.renderer.add_layer(&level, false)
+        });
+        self.renderer.show_layer(layer, shown);
+    }
+
     /// Runs objects' scripts for `dt` seconds, shows or hides the object
     /// layers, poses the pedestrians shown and animates vertex colors.
     fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32, dt: f32) {
@@ -804,6 +863,23 @@ fn record_value(kind: &str, value: u32) -> String {
     }
 }
 
+/// A race under way: its waypoints (where, script, seconds added), the
+/// next to reach, the clock and the time taken, the object its scripts
+/// run on, and its end script.
+struct RaceRun {
+    points: Vec<(Vec3, Option<u32>, f32)>,
+    next: usize,
+    left: f32,
+    time: f32,
+    over: bool,
+    runner: usize,
+    end_script: Option<u32>,
+    started: bool,
+}
+
+/// How near the skater reaches a race waypoint (`Obj_SetInnerRadius 8`).
+const RACE_RADIUS: f32 = 8.0 * 12.0;
+
 /// How near the skater picks a letter up: `Obj_SetInnerRadius 8` (feet).
 const LETTER_RADIUS: f32 = 8.0 * 12.0;
 /// How fast the letters spin (`Obj_RotY speed = 200`, degrees a second).
@@ -905,6 +981,8 @@ struct App<'a> {
     replay: Option<f32>,
     /// The S-K-A-T-E letters goal under way.
     letters: Option<LetterRun>,
+    /// The race goal under way.
+    racing: Option<RaceRun>,
     /// The camera turned to look round (yaw, and up or down) and the right
     /// stick as last read; whether the pad's Start was down, to toggle the
     /// pause on pressing it.
@@ -1029,6 +1107,9 @@ impl<'a> App<'a> {
                     replaying: false,
                     goals: Vec::new(),
                     can_letters: false,
+                    race_name: None,
+                    race: None,
+                    race_result: None,
                     letters: None,
                     letters_result: None,
                     skate_status: String::new(),
@@ -1064,6 +1145,7 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            racing: None,
             photo: false,
             vehicle_objects: Vec::new(),
             skitched: None,
@@ -1167,6 +1249,8 @@ impl<'a> App<'a> {
                         .into_iter()
                         .map(|g| (g.kind, g.text))
                         .collect();
+                self.model.character.race_name =
+                    desa_viewer::goals::race(level.behaviour.program(), &info.id).map(|r| r.name);
                 self.model.character.can_letters = level
                     .nodes
                     .objects
@@ -1403,6 +1487,14 @@ impl<'a> App<'a> {
         }
         self.model.character.letters = None;
         self.model.character.letters_result = None;
+        // A race stops: its own end script runs (cars back, gates gone).
+        if let Some(race) = self.racing.take() {
+            if let (Some(level), Some(script)) = (&mut self.level, race.end_script) {
+                level.behaviour.run_script(race.runner, script);
+            }
+        }
+        self.model.character.race = None;
+        self.model.character.race_result = None;
         self.model.character.run_goal = None;
         self.model.character.run_goal_won = None;
         // The collectibles go too (they come back on skating again).
@@ -1951,6 +2043,11 @@ impl<'a> App<'a> {
                 }
             }
         }
+        if let Some(race) = self.racing.as_ref().filter(|r| !r.over) {
+            if let Some((at, ..)) = race.points.get(race.next) {
+                markers.push((map.pixel(*at), ui::MapMark::Letter));
+            }
+        }
         if let Some(run) = &self.letters {
             for (i, &object) in run.objects.iter().enumerate() {
                 if !run.got[i] {
@@ -2029,6 +2126,119 @@ impl<'a> App<'a> {
             }
         }
         self.model.character.warp_prompt = None;
+    }
+
+    /// Starts the level's race (`AddGoal_Race`) from its restart node: the
+    /// goal's start script runs (the racing cars come out), then the first
+    /// waypoint's script (its gate), with the first waypoint's time on the
+    /// clock.
+    fn start_race(&mut self) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(level) = &self.level else { return };
+        let Some(race) = desa_viewer::goals::race(level.behaviour.program(), &level.id) else {
+            return;
+        };
+        let at = |name: u32| {
+            level
+                .nodes
+                .nodes
+                .iter()
+                .find(|n| n.name == name)
+                .and_then(|n| n.position)
+        };
+        let points: Vec<(Vec3, Option<u32>, f32)> = race
+            .waypoints
+            .iter()
+            .filter_map(|(name, script, time)| Some((at(*name)?, *script, *time)))
+            .collect();
+        let Some(first) = points.first() else { return };
+        self.placement = level.home;
+        if let Some(start) = race.restart.and_then(at) {
+            let to = first.0 - start;
+            self.placement =
+                Mat4::from_rotation_translation(Quat::from_rotation_y(to.x.atan2(to.z)), start);
+        }
+        // Scripts run on an object that's there all along (they only make
+        // and kill things and play sounds).
+        let runner = (0..level.nodes.objects.len())
+            .find(|&i| level.behaviour.alive(i))
+            .unwrap_or(0);
+        self.toggle_skate();
+        if self.skating.is_none() {
+            return;
+        }
+        let Some(level) = &mut self.level else { return };
+        if let Some(script) = race.start_script {
+            level.behaviour.run_script(runner, script);
+        }
+        let left = first.2;
+        let first_script = first.1;
+        self.racing = Some(RaceRun {
+            points,
+            next: 0,
+            left,
+            time: 0.0,
+            over: false,
+            runner,
+            end_script: race.end_script,
+            started: false,
+        });
+        let _ = first_script;
+        self.model.character.race_name = Some(race.name);
+    }
+
+    /// Counts the race down and takes the waypoints the skater reaches
+    /// (`goal_race_init_waypoint`: within 8 feet): each runs the next one's
+    /// script and adds its time. All reached wins; out of time loses.
+    fn update_race(&mut self, dt: f32) {
+        let (Some(race), Some((skater, ..)), Some(level)) =
+            (&mut self.racing, &self.skating, &mut self.level)
+        else {
+            return;
+        };
+        let model = &mut self.model.character;
+        if !race.started {
+            // The first waypoint's script (its gate and arrow).
+            race.started = true;
+            if let Some(script) = race.points[0].1 {
+                level.behaviour.run_script(race.runner, script);
+            }
+        }
+        model.run_clock = Some(race.left);
+        model.race = Some((race.next, race.points.len()));
+        if race.over {
+            return;
+        }
+        race.left = (race.left - dt).max(0.0);
+        race.time += dt;
+        let body = skater.position + Vec3::Y * 30.0;
+        if body.distance(race.points[race.next].0) < RACE_RADIUS {
+            race.next += 1;
+            if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                audio.play_named(qb::checksum("hud_jumpgap"), 1.0);
+            }
+            if let Some((_, script, time)) = race.points.get(race.next) {
+                race.left += time;
+                if let Some(script) = script {
+                    level.behaviour.run_script(race.runner, *script);
+                }
+            }
+        }
+        let won = race.next >= race.points.len();
+        if won || race.left == 0.0 {
+            race.over = true;
+            model.race_result = Some((won, race.time));
+            if won {
+                if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+            }
+            if let Some(script) = race.end_script.take() {
+                level.behaviour.run_script(race.runner, script);
+            }
+        }
     }
 
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
@@ -3063,6 +3273,7 @@ impl<'a> App<'a> {
         if !self.model.character.paused {
             self.update_run(dt);
             self.update_letters(dt);
+            self.update_race(dt);
             self.update_collecting();
             self.update_skitch();
             self.update_records(dt);
@@ -3089,16 +3300,7 @@ impl<'a> App<'a> {
                 clock,
                 dt,
             );
-            // The particle effects, those the scripts start and stop too.
-            for (name, created) in std::mem::take(&mut level.behaviour.other_creates) {
-                if created {
-                    level
-                        .particles
-                        .start(level.behaviour.program(), &level.nodes, name);
-                } else {
-                    level.particles.stop(name);
-                }
-            }
+            level.apply_creates();
             level
                 .particles
                 .update(level.behaviour.program(), dt, self.camera.position);
@@ -3235,6 +3437,7 @@ impl<'a> App<'a> {
                 ui::Action::ToggleSkate => self.toggle_skate(),
                 ui::Action::StartRun(goal) => self.start_run(goal),
                 ui::Action::StartLetters => self.start_letters(),
+                ui::Action::StartRace => self.start_race(),
                 ui::Action::Warp => self.take_warp(),
                 ui::Action::Pause => self.toggle_pause(),
                 ui::Action::Restart => self.restart(),
@@ -3658,6 +3861,8 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         println!("letter {letter} at {:.0} {:.0} {:.0}", p.x, p.y, p.z);
                     }
                 }
+            } else if args.race {
+                app.start_race();
             } else if let Some(goal) = &args.score_goal {
                 app.start_run(Some(goal == "pro"));
             } else {
@@ -3701,6 +3906,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.skate(1.0 / 60.0);
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
+                app.update_race(1.0 / 60.0);
                 app.update_collecting();
                 app.update_skitch();
                 app.update_records(1.0 / 60.0);
@@ -3711,6 +3917,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 if let Some(level) = &mut app.level {
                     level.behaviour.set_skater(skater);
                     level.update_objects(true, args.goal_objects, args.time + now, 1.0 / 60.0);
+                    level.apply_creates();
                     level.behaviour.sounds.clear();
                 }
             }

@@ -24,6 +24,8 @@ pub enum Action {
     /// goal again, if one's on).
     Pause,
     Restart,
+    /// The level's race goal (again).
+    StartRace,
     /// Through the warp the skater's at, or not.
     Warp,
     StayHere,
@@ -96,6 +98,11 @@ pub struct CharacterModel {
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
     pub can_letters: bool,
+    /// The level's race (its name); while racing, the waypoint reached
+    /// and how many; once over, whether won and in how long.
+    pub race_name: Option<String>,
+    pub race: Option<(usize, usize)>,
+    pub race_result: Option<(bool, f32)>,
     pub letters: Option<[bool; 5]>,
     pub letters_result: Option<(bool, f32, Option<f32>)>,
     /// Where the skater is and what it's doing, for bug reports.
@@ -662,6 +669,55 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if let Some(got) = model.character.letters {
             letters_hud(ctx, got);
         }
+        if let Some((reached, of)) = model.character.race {
+            egui::Area::new(egui::Id::new("race"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Checkpoint {}/{of}", (reached + 1).min(of)))
+                            .size(18.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(120, 220, 255))
+                            .background_color(egui::Color32::from_black_alpha(120)),
+                    );
+                });
+        }
+        if let Some((won, time)) = model.character.race_result {
+            egui::Area::new(egui::Id::new("race_result"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(model.character.race_name.as_deref().unwrap_or("Race"));
+                            if won {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Finished in {}",
+                                        clock_text(time)
+                                    ))
+                                    .size(20.0)
+                                    .color(egui::Color32::from_rgb(90, 230, 90)),
+                                );
+                            } else {
+                                ui.label(
+                                    egui::RichText::new("Out of time")
+                                        .size(20.0)
+                                        .color(egui::Color32::from_rgb(255, 90, 70)),
+                                );
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Again").clicked() {
+                                    actions.push(Action::StartRace);
+                                }
+                                if ui.button("Done").clicked() {
+                                    actions.push(Action::ToggleSkate);
+                                }
+                            });
+                        });
+                    });
+                });
+        }
         if let Some(result) = model.character.letters_result {
             letters_result(ctx, result, &mut actions);
         }
@@ -967,6 +1023,7 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     ui.horizontal(|ui| {
                         let action = match kind.as_str() {
                             "Skate" => Some(Action::StartLetters),
+                            "Race" => Some(Action::StartRace),
                             "HighScore" => Some(Action::StartRun(Some(false))),
                             "ProScore" => Some(Action::StartRun(Some(true))),
                             _ => None,
@@ -979,6 +1036,19 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     });
                 }
             });
+    }
+    if let Some(name) = &model.race_name {
+        ui.add_enabled_ui(model.can_skate, |ui| {
+            if ui
+                .button("Race")
+                .on_hover_text(format!(
+                    "The level's race, \"{name}\": reach each checkpoint before the clock runs out; each one adds its time."
+                ))
+                .clicked()
+            {
+                actions.push(Action::StartRace);
+            }
+        });
     }
     ui.add_enabled_ui(model.can_skate && model.can_letters, |ui| {
         if ui
@@ -997,30 +1067,30 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         ui.checkbox(&mut model.sound, "Sound").on_hover_text(
             "The skater's sounds (rolling, ollies, landings, grinds, bails) and the level's ambience.",
         );
+        ui.add(egui::Slider::new(&mut model.effects_volume, 0.0..=1.0).show_value(false))
+            .on_hover_text("How loud the sounds are.");
+    });
+    ui.horizontal(|ui| {
         ui.checkbox(&mut model.music, "Music")
             .on_hover_text("The game's soundtrack, one song after another.");
-        ui.add(
-            egui::Slider::new(&mut model.effects_volume, 0.0..=1.0)
-                .text("sound")
-                .show_value(false),
-        );
-        ui.add(
-            egui::Slider::new(&mut model.music_volume, 0.0..=1.0)
-                .text("music")
-                .show_value(false),
-        );
+        ui.add(egui::Slider::new(&mut model.music_volume, 0.0..=1.0).show_value(false))
+            .on_hover_text("How loud the music is.");
+    });
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut model.show_map, "Map")
             .on_hover_text("The level from above round the skater, with what's to find (M).");
-        ui.checkbox(&mut model.collect, "Collectibles").on_hover_text(
-            "The character's 25 collectibles on each level of its world (Jessie's \
+        ui.checkbox(&mut model.collect, "Collectibles")
+            .on_hover_text(
+                "The character's 25 collectibles on each level of its world (Jessie's \
              Cowgirl Boots, Woody's Badges...), there to pick up while skating. \
              What's collected is kept.",
+            );
+        ui.checkbox(&mut model.rumble, "Rumble").on_hover_text(
+            "The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.",
         );
-        ui.checkbox(&mut model.rumble, "Rumble")
-            .on_hover_text("The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.");
     });
     if !model.cameras.is_empty() {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Camera").on_hover_text(
                 "The game's chase cameras (its \"Camera Angle 1\" to \"4\"); C or the pad's Back changes it.",
             );

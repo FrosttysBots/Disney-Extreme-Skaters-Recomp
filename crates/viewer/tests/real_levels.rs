@@ -128,6 +128,25 @@ fn real_level_camera_paths() {
             particles.len(),
             nodes.emitters.len()
         );
+        if let Some(race) = desa_viewer::goals::race(behaviour.program(), &level.id) {
+            println!(
+                "{}: race {:?}, {} waypoints, {:.0} s in all",
+                level.id,
+                race.name,
+                race.waypoints.len(),
+                race.waypoints.iter().map(|w| w.2).sum::<f32>()
+            );
+            for (name, _, _) in &race.waypoints {
+                assert!(
+                    nodes
+                        .nodes
+                        .iter()
+                        .any(|n| n.name == *name && n.position.is_some()),
+                    "{} race waypoint",
+                    level.id
+                );
+            }
+        }
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         println!(
             "{}: warps {:?}",
