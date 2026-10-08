@@ -95,6 +95,14 @@ fn real_level_camera_paths() {
                 .filter(|o| behaviour.object(**o).is_some())
                 .count();
             assert!(here == 0 || here == 25, "{} {character}: {here}", level.id);
+            // And the world's special item with them.
+            let special = list.special.as_ref().expect("a special item").0;
+            assert_eq!(
+                behaviour.object(special).is_some(),
+                here == 25,
+                "{} {character}'s special",
+                level.id
+            );
             collectibles += here;
         }
         println!("{}: {collectibles} collectibles", level.id);

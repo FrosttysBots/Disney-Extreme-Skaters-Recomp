@@ -532,6 +532,8 @@ struct Collecting {
     /// Their objects and their bits in `got` (which are collected, kept in
     /// the settings under `key`).
     objects: Vec<(usize, u32)>,
+    /// The world's special item and what it's called.
+    special: Option<(usize, String)>,
     got: u32,
     kind: String,
     key: String,
@@ -542,6 +544,8 @@ struct Collecting {
 /// (`Obj_RotY speed = 250`).
 const COLLECT_RADIUS: f32 = 7.0 * 12.0;
 const COLLECT_SPIN: f32 = 250.0;
+/// The special item's bit in what's collected.
+const SPECIAL_BIT: u32 = 1 << 25;
 
 /// How near the skater picks a letter up: `Obj_SetInnerRadius 8` (feet).
 const LETTER_RADIUS: f32 = 8.0 * 12.0;
@@ -1043,6 +1047,9 @@ impl<'a> App<'a> {
                 for (object, _) in collecting.objects {
                     level.behaviour.set_alive(object, false);
                 }
+                if let Some((object, _)) = collecting.special {
+                    level.behaviour.set_alive(object, false);
+                }
             }
         }
         self.model.character.collected = None;
@@ -1201,6 +1208,18 @@ impl<'a> App<'a> {
         if objects.is_empty() {
             return;
         }
+        // The special item, after the 25 (its own bit, not counted with them).
+        let special = list
+            .special
+            .as_ref()
+            .and_then(|(name, title)| Some((level.behaviour.object(*name)?, title.clone())));
+        if let Some((object, _)) = &special {
+            if got & SPECIAL_BIT == 0 {
+                level.behaviour.set_alive(*object, true);
+                level.behaviour.set_spin(*object, COLLECT_SPIN.to_radians());
+                level.behaviour.set_hover(*object, 10.0, 1.0);
+            }
+        }
         for &(object, bit) in &objects {
             if got & bit == 0 {
                 level.behaviour.set_alive(object, true);
@@ -1214,6 +1233,7 @@ impl<'a> App<'a> {
         ));
         self.collecting = Some(Collecting {
             objects,
+            special,
             got,
             kind: list.kind,
             key,
@@ -1234,6 +1254,22 @@ impl<'a> App<'a> {
             return;
         };
         let body = skater.position + Vec3::Y * 30.0;
+        if let Some((object, title)) = &collecting.special {
+            if collecting.got & SPECIAL_BIT == 0
+                && body.distance(level.behaviour.position(*object)) <= COLLECT_RADIUS
+            {
+                collecting.got |= SPECIAL_BIT;
+                level.behaviour.set_alive(*object, false);
+                if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+                skater.message = Some((format!("Got the {title}!"), 2.5));
+                self.settings
+                    .best
+                    .insert(collecting.key.clone(), collecting.got);
+                self.settings.save();
+            }
+        }
         let mut changed = false;
         for &(object, bit) in &collecting.objects {
             if collecting.got & bit != 0

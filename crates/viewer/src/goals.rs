@@ -124,6 +124,9 @@ fn param<'a>(params: &'a [(u32, Value)], program: &'a Program, key: &str) -> Opt
 pub struct Collectibles {
     pub kind: String,
     pub objects: Vec<u32>,
+    /// The world's special item (`AddGoal_Super`,
+    /// `<first_name>_collect_super_objects`) and what it's called.
+    pub special: Option<(u32, String)>,
 }
 
 /// The character's collectibles (`<first_name>_collect25_objects`), named
@@ -153,9 +156,24 @@ pub fn collectibles(program: &Program, character: &str) -> Option<Collectibles> 
         .iter()
         .filter_map(|item| item.get(checksum("id")).and_then(Value::as_name))
         .collect();
+    let world = match id.as_str() {
+        "woody" | "buzz" | "jessie" | "zurg" => "Toy Story Special",
+        "tarzan" | "jane" | "terk" | "tantor" => "Tarzan Special",
+        "simba" | "nala" | "rafiki" | "timon" => "Lion King Special",
+        _ => "Kid Special",
+    };
+    let special = match program.value(checksum(&format!("{id}_collect_super_objects"))) {
+        Some(Value::Array(items)) => items
+            .first()
+            .and_then(|item| item.get(checksum("id")))
+            .and_then(Value::as_name)
+            .map(|object| (object, world.to_string())),
+        _ => None,
+    };
     (!objects.is_empty()).then(|| Collectibles {
         kind: kind.to_string(),
         objects,
+        special,
     })
 }
 
