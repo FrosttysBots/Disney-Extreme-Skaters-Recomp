@@ -1422,13 +1422,14 @@ impl<'a> App<'a> {
         };
         // How long each balance trick has gone on, the longest kept.
         let now = [skater.grind.is_some(), skater.manual, skater.lip.is_some()];
-        for i in 0..3 {
-            self.running_lengths[i] = if now[i] {
-                self.running_lengths[i] + dt
-            } else {
-                0.0
-            };
-            self.combo_lengths[i] = self.combo_lengths[i].max(self.running_lengths[i]);
+        for ((running, longest), on) in self
+            .running_lengths
+            .iter_mut()
+            .zip(&mut self.combo_lengths)
+            .zip(now)
+        {
+            *running = if on { *running + dt } else { 0.0 };
+            *longest = longest.max(*running);
         }
         if skater.combos_ended == self.combos_seen {
             return;
