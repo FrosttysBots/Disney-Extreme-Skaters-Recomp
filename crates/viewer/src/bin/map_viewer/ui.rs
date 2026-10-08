@@ -109,6 +109,9 @@ pub struct CharacterModel {
     pub paused: bool,
     /// This session's skating, line by line.
     pub session: Vec<String>,
+    /// The game's chase cameras by name, and the one picked.
+    pub cameras: Vec<String>,
+    pub camera: usize,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -170,7 +173,7 @@ Skating: W push, S brake, A/D steer,
   R revert (tap on the ground: 180 slide;
   hold going up a quarter pipe: spine transfer),
   S held: step off the board, Tab next spawn, J/L look round,
-  P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
+  C camera, P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
   right stick look round, Start pause),
   Esc stop";
 
@@ -842,6 +845,16 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         ui.checkbox(&mut model.rumble, "Rumble")
             .on_hover_text("The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.");
     });
+    if !model.cameras.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("Camera").on_hover_text(
+                "The game's chase cameras (its \"Camera Angle 1\" to \"4\"); C or the pad's Back changes it.",
+            );
+            for (i, name) in model.cameras.iter().enumerate() {
+                ui.selectable_value(&mut model.camera, i, name);
+            }
+        });
+    }
     ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
         "The game's controller option: the skater pushes by itself while under its kick speed. Off, hold W to push.",
     );

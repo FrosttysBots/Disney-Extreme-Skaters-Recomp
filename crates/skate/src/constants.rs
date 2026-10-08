@@ -286,6 +286,61 @@ impl Physics {
     }
 }
 
+impl Physics {
+    /// The game's chase cameras the player picks between
+    /// (`Skater_Camera_Array` after the undefined one, up to the replay
+    /// cameras: near, standard, far and standard LTG, the pause menu's
+    /// "Camera Angle 1" to "4"): each one's name and setting.
+    pub fn camera_choices(program: &Program) -> Vec<(String, u32)> {
+        let Some(Value::Array(cameras)) = program.value(checksum("Skater_Camera_Array")) else {
+            return Vec::new();
+        };
+        cameras
+            .iter()
+            .skip(1)
+            .take(4)
+            .filter_map(Value::as_name)
+            .filter_map(|setting| {
+                let name = match program.value(setting)?.get(checksum("Name"))? {
+                    Value::String(s) | Value::LocalString(s) => s.clone(),
+                    _ => return None,
+                };
+                Some((name, setting))
+            })
+            .collect()
+    }
+
+    /// Follows the skater with another of the game's camera settings
+    /// (`Skater_Camera_Standard_Far`...): what it doesn't say stays.
+    pub fn set_camera(&mut self, program: &Program, setting: u32) {
+        let Some(camera) = program.value(setting) else {
+            return;
+        };
+        let get = |key: &str, now: f32| {
+            camera
+                .get(checksum(key))
+                .and_then(Value::as_f32)
+                .unwrap_or(now)
+        };
+        self.camera_behind = get("behind", self.camera_behind);
+        self.camera_above = get("above", self.camera_above);
+        self.camera_fov = get("horiz_fov", self.camera_fov);
+        self.camera_tilt = get("Tilt", self.camera_tilt);
+        self.camera_slerp = get("slerp", self.camera_slerp);
+        self.camera_vert_air_slerp = get("vert_air_slerp", self.camera_vert_air_slerp);
+        self.camera_lerp_xz = get("lerp_xz", self.camera_lerp_xz);
+        self.camera_lerp_y = get("lerp_y", self.camera_lerp_y);
+        self.camera_vert_air_lerp_xz = get("vert_air_lerp_xz", self.camera_vert_air_lerp_xz);
+        self.camera_vert_air_lerp_y = get("vert_air_lerp_y", self.camera_vert_air_lerp_y);
+        self.camera_vert_air_landed_slerp =
+            get("vert_air_landed_slerp", self.camera_vert_air_landed_slerp);
+        self.camera_zoom_lerp = get("zoom_lerp", self.camera_zoom_lerp);
+        self.camera_big_air_trick_zoom = get("big_air_trick_zoom", self.camera_big_air_trick_zoom);
+        self.camera_grind_zoom = get("grind_zoom", self.camera_grind_zoom);
+        self.camera_lip_trick_zoom = get("lip_trick_zoom", self.camera_lip_trick_zoom);
+    }
+}
+
 /// A `{ (min, max) [limit = n] STATS_X }` constant for these stats.
 fn stat_value(program: &Program, name: &str, stats: &Stats) -> Option<f32> {
     scale(program, program.value(checksum(name))?, stats)

@@ -125,6 +125,10 @@ struct Args {
     /// its clock
     #[arg(long, requires = "skate")]
     run: Option<f32>,
+    /// For --skate: which of the game's chase cameras, 0 to 3 (near,
+    /// standard, far, standard LTG; default standard)
+    #[arg(long, requires = "skate")]
+    chase_camera: Option<usize>,
     /// For --skate: play the level's score goal, `high` or `pro` (from its
     /// start)
     #[arg(long, requires = "skate", value_parser = ["high", "pro"])]
@@ -622,6 +626,22 @@ const LOOK_YAW: f32 = 2.6;
 const LOOK_PITCH: f32 = 0.6;
 const LOOK_RATE: f32 = 8.0;
 
+/// A camera's name for the panel: "standard ltg" as "Standard LTG".
+fn title_case(name: &str) -> String {
+    name.split(' ')
+        .map(|word| {
+            if word == "ltg" {
+                return word.to_ascii_uppercase();
+            }
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |c| {
+                c.to_ascii_uppercase().to_string() + chars.as_str()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Where F12 saves a picture: the Pictures folder's `DESA Map Viewer`,
 /// named by the time.
 fn photo_path() -> PathBuf {
@@ -822,6 +842,10 @@ struct App<'a> {
     pad_start: bool,
     /// This session's skating (since the viewer started).
     session: Session,
+    /// The camera setting following the skater now (index into the
+    /// panel's list), and whether the pad's Back was down.
+    camera_shown: usize,
+    pad_back: bool,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
@@ -859,6 +883,7 @@ struct App<'a> {
 impl<'a> App<'a> {
     fn new(settings: &'a mut Settings) -> Self {
         let speed = settings.speed.unwrap_or(DEFAULT_SPEED);
+        let camera = settings.best.get("camera").map_or(1, |c| *c as usize);
         App {
             settings,
             gpu: None,
@@ -929,6 +954,8 @@ impl<'a> App<'a> {
                     warp_prompt: None,
                     paused: false,
                     session: Vec::new(),
+                    cameras: Vec::new(),
+                    camera,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -948,6 +975,8 @@ impl<'a> App<'a> {
             replay: None,
             letters: None,
             photo: false,
+            camera_shown: usize::MAX,
+            pad_back: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
             pad_look: glam::Vec2::ZERO,
@@ -1290,7 +1319,14 @@ impl<'a> App<'a> {
         let id = &self.model.character.characters[index].id;
         let program = level.behaviour.program();
         let stats = Stats::of(program, id);
-        let physics = Physics::new(program, &stats);
+        let mut physics = Physics::new(program, &stats);
+        // The chase camera picked.
+        let choices = Physics::camera_choices(program);
+        self.model.character.cameras = choices.iter().map(|(name, _)| title_case(name)).collect();
+        if let Some((_, setting)) = choices.get(self.model.character.camera) {
+            physics.set_camera(program, *setting);
+        }
+        self.camera_shown = self.model.character.camera;
         let position = self.placement.transform_point3(Vec3::ZERO);
         let forward = self.placement.transform_vector3(Vec3::Z);
         let mut skater = Skater::new(position, forward.x.atan2(forward.z));
@@ -1976,6 +2012,7 @@ impl<'a> App<'a> {
         let mut input = Input::default();
         let mut look = glam::Vec2::ZERO;
         let mut start = false;
+        let mut back = false;
         for (_, pad) in gilrs.gamepads() {
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
@@ -2010,13 +2047,44 @@ impl<'a> App<'a> {
                 look = stick;
             }
             start |= pressed(Button::Start);
+            back |= pressed(Button::Select);
         }
         self.pad_look = look;
         if start && !self.pad_start && self.skating.is_some() {
             self.toggle_pause();
         }
         self.pad_start = start;
+        if back && !self.pad_back {
+            self.next_camera();
+        }
+        self.pad_back = back;
         input
+    }
+
+    /// The next of the game's chase cameras (`ToggleSkaterCamMode`).
+    fn next_camera(&mut self) {
+        let count = self.model.character.cameras.len();
+        if count > 0 {
+            self.model.character.camera = (self.model.character.camera + 1) % count;
+        }
+    }
+
+    /// Follows the skater with the camera picked, when it changes.
+    fn apply_camera(&mut self) {
+        let wanted = self.model.character.camera;
+        if wanted == self.camera_shown {
+            return;
+        }
+        let (Some((_, physics, _)), Some(level)) = (&mut self.skating, &self.level) else {
+            return;
+        };
+        let program = level.behaviour.program();
+        if let Some((_, setting)) = Physics::camera_choices(program).get(wanted) {
+            physics.set_camera(program, *setting);
+            self.camera_shown = wanted;
+            self.settings.best.insert("camera".into(), wanted as u32);
+            self.settings.save();
+        }
     }
 
     /// Pauses skating, or goes on.
@@ -2685,6 +2753,7 @@ impl<'a> App<'a> {
             self.update_records(dt);
             self.update_portals(dt);
         }
+        self.apply_camera();
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -2873,6 +2942,10 @@ impl<'a> App<'a> {
                 KeyCode::Escape if !repeat => self.toggle_skate(),
                 _ => {}
             }
+            return;
+        }
+        if code == KeyCode::KeyC && !repeat && self.skating.is_some() {
+            self.next_camera();
             return;
         }
         if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
@@ -3213,6 +3286,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 anyhow::ensure!(v.len() == 4, "--skate-from is x,y,z,heading");
                 app.placement = Mat4::from_translation(Vec3::new(v[0], v[1], v[2]))
                     * Mat4::from_rotation_y(v[3].to_radians());
+            }
+            if let Some(camera) = args.chase_camera {
+                app.model.character.camera = camera;
             }
             if args.letters {
                 let from = app.placement.transform_point3(Vec3::ZERO);

@@ -143,6 +143,7 @@ around takes over from wherever it is.
 | Tab | While skating: to the next spawn point |
 | J / L | While skating: look round (springs back) |
 | P | While skating: pause (Resume, Restart, Stop skating) |
+| C | While skating: the next of the game's chase cameras (`Skater_Camera_Array`: near, standard, far, standard LTG) |
 | F12 | Save a picture of the window to `Pictures\DESA Map Viewer` |
 
 A gamepad works too while skating, laid out like the GameCube game: the
