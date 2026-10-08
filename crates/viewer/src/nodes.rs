@@ -159,6 +159,19 @@ pub struct LevelNodes {
     /// trigger faces: the node's name (its collision object's checksum)
     /// and the `TriggerScript`.
     pub geometry_scripts: Vec<(u32, u32)>,
+    /// Particle emitters (`ParticleEmitter`): where, their `TriggerScript`
+    /// (which makes the particle system), whether there at the start, and
+    /// how far off they're drawn (`CutOff`).
+    pub emitters: Vec<Emitter>,
+}
+
+/// A `ParticleEmitter` node.
+#[derive(Clone, Debug)]
+pub struct Emitter {
+    pub position: Vec3,
+    pub script: u32,
+    pub created_at_start: bool,
+    pub cutoff: f32,
 }
 
 impl LevelNodes {
@@ -282,6 +295,19 @@ impl LevelNodes {
                         node: index,
                         script: node.get(key("TriggerScript")).and_then(Value::as_name),
                     });
+                }
+                Some(c) if c == key("ParticleEmitter") => {
+                    if let Some(script) = node.get(key("TriggerScript")).and_then(Value::as_name) {
+                        out.emitters.push(Emitter {
+                            position: pos,
+                            script,
+                            created_at_start: node.has_flag(key("CreatedAtStart")),
+                            cutoff: node
+                                .get(key("CutOff"))
+                                .and_then(Value::as_f32)
+                                .unwrap_or(500.0),
+                        });
+                    }
                 }
                 Some(c) if c == key("Restart") => {
                     let heading = node

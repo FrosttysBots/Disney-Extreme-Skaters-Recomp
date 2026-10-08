@@ -248,6 +248,8 @@ struct LoadedLevel {
     portals: Vec<Portal>,
     /// The level from above, for the map in the corner.
     minimap: Option<minimap::Minimap>,
+    /// The level's particle effects (steam, sparks, dust).
+    particles: desa_viewer::particles::Particles,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -392,6 +394,7 @@ fn load_level(
         goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
+    let particles = desa_viewer::particles::Particles::new(behaviour.program(), &nodes);
     Ok((
         LoadedLevel {
             id: info.id.clone(),
@@ -408,6 +411,7 @@ fn load_level(
             colors,
             portals,
             minimap,
+            particles,
             markers: (false, false),
         },
         stats,
@@ -2730,6 +2734,7 @@ impl<'a> App<'a> {
                 .map(|world| skater_shadow(skater, world))
                 .unwrap_or_default();
             shadow.extend(self.sparks.vertices(self.camera.position));
+            shadow.extend(level.particles.vertices(self.camera.position));
             // The way back to the Hub, glowing.
             for portal in level.portals.iter().filter(|p| p.strip.is_none()) {
                 shadow.extend(portal_ring(
@@ -2749,7 +2754,10 @@ impl<'a> App<'a> {
             }
             return;
         }
-        level.renderer.set_shadow(&[]);
+        // Not skating: the level's particle effects all the same.
+        level
+            .renderer
+            .set_shadow(&level.particles.vertices(self.camera.position));
         if model.playing && model.duration > 0.0 {
             // Everything loops here, even one-off moves like an ollie.
             model.time = (model.time + dt * model.speed) % model.duration;
@@ -2933,6 +2941,10 @@ impl<'a> App<'a> {
                 clock,
                 dt,
             );
+            // The particle effects.
+            level
+                .particles
+                .update(level.behaviour.program(), dt, self.camera.position);
             // The sounds they played, quieter further from the skater.
             let sounds = std::mem::take(&mut level.behaviour.sounds);
             if let (Some(audio), Some(skater)) = (
@@ -3570,6 +3582,26 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         // The blink clock follows --time too, so blinks can be captured.
         app.animate(0.0, args.time);
         loaded = app.level.take().unwrap();
+    }
+    // The level's particle effects, run for the time asked (two seconds at
+    // least) and seen from the camera, with the skater's shadow and sparks.
+    {
+        let LoadedLevel {
+            behaviour,
+            particles,
+            world,
+            renderer,
+            ..
+        } = &mut loaded;
+        for _ in 0..(args.time.max(2.0) * 60.0) as usize {
+            particles.update(behaviour.program(), 1.0 / 60.0, camera.position);
+        }
+        let mut overlay = particles.vertices(camera.position);
+        if let (Some((skater, ..)), Some(world)) = (&app.skating, world.as_ref()) {
+            overlay.extend(skater_shadow(skater, world));
+            overlay.extend(app.sparks.vertices(camera.position));
+        }
+        renderer.set_shadow(&overlay);
     }
 
     let (width, height) = args.size;

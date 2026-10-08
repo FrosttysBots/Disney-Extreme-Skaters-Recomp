@@ -106,6 +106,8 @@ skater is and what it's doing.
 - The Goals list in the panel: every goal the level has in the career,
   by the game's own words ("Push 10 Henchmen into the ocean"), with Play
   on those the viewer runs so far (the letters and the score goals).
+- Particle effects there from the start, like Camp's campfires and the
+  steam off Clayton's ship, run from the levels' own emit scripts.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game

@@ -176,7 +176,12 @@ the levels' scripts too: the Hub's portals are the sectors whose scripts
 call `LevelWarp level_num = N filmStrip = ...` (the level being the `N`th
 of `level_select_menu_level_info`), opening as the skater comes within 60
 feet; each level's `Warp_Master_Hub` (`HubWarp`, the Kid's way back in the
-game) is shown to everyone as a glowing ring. `--run SECONDS`
+game) is shown to everyone as a glowing ring. **Particle effects**
+(campfires, steam) come from the levels' `ParticleEmitter` nodes: their
+scripts' `CreateParticleSystem` names an emit script, which the
+interpreter runs (`setlife`, `setspeedrange`, `setemittarget`,
+`setcolor`, `emit`...) to throw soft glowing blobs; most emitters are
+made later by goals, so the ones there at the start show. `--run SECONDS`
 with `--skate` screenshots one with that much time left, and `--replay-at
 SECONDS` the replay of it that far in.
 | P | Play or pause the character |

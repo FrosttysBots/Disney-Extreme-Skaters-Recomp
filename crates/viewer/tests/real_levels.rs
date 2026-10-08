@@ -118,6 +118,16 @@ fn real_level_camera_paths() {
         if level.id != "SkateShop" {
             assert!(goals.len() >= 5, "{}: {} goals", level.id, goals.len());
         }
+        let mut particles = desa_viewer::particles::Particles::new(behaviour.program(), &nodes);
+        for _ in 0..120 {
+            particles.update(behaviour.program(), 1.0 / 60.0, glam::Vec3::ZERO);
+        }
+        println!(
+            "{}: {} of {} particle emitters make systems",
+            level.id,
+            particles.len(),
+            nodes.emitters.len()
+        );
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         println!(
             "{}: warps {:?}",
