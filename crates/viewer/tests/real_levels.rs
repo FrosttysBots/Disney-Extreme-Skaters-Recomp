@@ -147,7 +147,7 @@ fn real_level_camera_paths() {
         }
         let mut objects = built;
         for step in 0..600 {
-            behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false);
+            behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false, None);
         }
         let movers = (0..nodes.objects.len())
             .filter(|&i| behaviour.position(i).distance(nodes.objects[i].position) > 10.0)

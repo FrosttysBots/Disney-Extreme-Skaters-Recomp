@@ -25,6 +25,8 @@
 //!   [orient]` (at once without a speed), `Obj_MoveToRelPos (x, y, z) time
 //!   = seconds` (relative to the object's facing), `Obj_LookAtNode`,
 //!   `Obj_WaitMove` and `Obj_IsMoving`.
+//! - `Obj_StickToGround distAbove distBelow [pitch]` (feet; `off`): kept
+//!   on the ground below as it goes, tipped with the slope.
 //! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
 //!   `Obj_Hover Amp = units Freq = hertz`.
 //! - `playsound` / `obj_playsound name [Vol = percent]`: collected in
@@ -75,6 +77,10 @@ struct State {
     /// Bobbing up and down (`Obj_Hover Amp = units Freq = hertz`), shown
     /// only: where it is stays put.
     hover: Option<(f32, f32)>,
+    /// Kept on the ground below as it moves (`Obj_StickToGround distAbove
+    /// distBelow [pitch]`): how far up and down to look (units), and
+    /// whether to tip with the slope.
+    stick: Option<(f32, f32, bool)>,
 }
 
 #[derive(Default)]
@@ -154,6 +160,7 @@ impl Behaviour {
                 exceptions: Vec::new(),
                 spin: 0.0,
                 hover: None,
+                stick: None,
             })
             .collect();
         let threads = nodes
@@ -275,6 +282,31 @@ impl Behaviour {
         }
     }
 
+    /// Keeps an object that sticks to the ground on it, tipped with the
+    /// slope if it says so.
+    fn stick_to_ground(&mut self, i: usize, world: &skate::World) {
+        let state = &mut self.states[i];
+        let (Some((above, below, pitch)), true, true) = (state.stick, state.alive, state.dirty)
+        else {
+            return;
+        };
+        let from = state.position + Vec3::Y * above;
+        let Some(hit) = world.ray(from, state.position - Vec3::Y * below) else {
+            return;
+        };
+        state.position = hit.point;
+        if pitch && hit.normal.y > 0.3 {
+            // Facing the same way round, along the slope.
+            let forward = state.rotation * Vec3::Z;
+            let along = (forward - hit.normal * forward.dot(hit.normal)).normalize_or(forward);
+            state.rotation = Quat::from_mat3(&glam::Mat3::from_cols(
+                hit.normal.cross(along).normalize_or(Vec3::X),
+                hit.normal,
+                along,
+            ));
+        }
+    }
+
     /// Moves objects heading straight for a spot.
     fn move_straight(&mut self, i: usize, dt: f32) {
         let state = &mut self.states[i];
@@ -342,6 +374,7 @@ impl Behaviour {
         now: f32,
         dt: f32,
         show_goal: bool,
+        ground: Option<&skate::World>,
     ) -> Vec<(bool, usize, Mat4)> {
         // Goals' objects show when made (or all of them, previewing).
         if self.goal_shown != Some(show_goal) {
@@ -377,6 +410,9 @@ impl Behaviour {
         for i in 0..self.states.len() {
             self.follow_path(i, dt);
             self.move_straight(i, dt);
+            if let Some(world) = ground {
+                self.stick_to_ground(i, world);
+            }
         }
 
         // Push changes to the models.
@@ -656,6 +692,22 @@ impl Host for Commands<'_> {
             let amp = args.get(c("Amp")).and_then(Value::as_f32).unwrap_or(0.0);
             let freq = args.get(c("Freq")).and_then(Value::as_f32).unwrap_or(1.0);
             b.states[object].hover = Some((amp, freq));
+        } else if name == c("Obj_StickToGround") {
+            b.states[object].stick = if args.has_flag(c("off")) {
+                None
+            } else {
+                Some((
+                    args.get(c("distAbove"))
+                        .and_then(Value::as_f32)
+                        .unwrap_or(10.0)
+                        * FOOT,
+                    args.get(c("distBelow"))
+                        .and_then(Value::as_f32)
+                        .unwrap_or(30.0)
+                        * FOOT,
+                    args.has_flag(c("pitch")),
+                ))
+            };
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
         } else if name == c("Obj_ShadowOff") || name == c("Obj_ShadowOn") {

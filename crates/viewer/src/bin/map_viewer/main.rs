@@ -494,10 +494,13 @@ impl LoadedLevel {
     /// Runs objects' scripts for `dt` seconds, shows or hides the object
     /// layers, poses the pedestrians shown and animates vertex colors.
     fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32, dt: f32) {
-        for (goal, copy, placement) in
-            self.behaviour
-                .update(&mut self.objects, seconds, dt, goal_objects)
-        {
+        for (goal, copy, placement) in self.behaviour.update(
+            &mut self.objects,
+            seconds,
+            dt,
+            goal_objects,
+            self.world.as_ref(),
+        ) {
             let (props, layer) = if goal {
                 (&self.objects.goal_props, self.layers.goal_props)
             } else {
