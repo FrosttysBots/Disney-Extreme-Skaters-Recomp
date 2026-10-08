@@ -625,10 +625,15 @@ impl LoadedLevel {
 /// The skater's shadow, as the game draws one under it: a dark disc laid on
 /// the ground straight below, smaller and fainter the higher it is.
 fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision::ColorVertex> {
-    const RADIUS: f32 = 16.0;
+    blob_shadow(skater.position, 16.0, world)
+}
+
+/// A round shadow on the ground under `at`, `radius` across at the ground,
+/// fading and shrinking with height.
+fn blob_shadow(at: Vec3, radius: f32, world: &skate::World) -> Vec<collision::ColorVertex> {
     const FADE: f32 = 400.0;
     const SIDES: usize = 20;
-    let from = skater.position + Vec3::Y * 10.0;
+    let from = at + Vec3::Y * 10.0;
     let Some(hit) = world.ray(from, from - Vec3::Y * FADE) else {
         return Vec::new();
     };
@@ -636,7 +641,7 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
     if hit.flags & ngc_collision::face_flags::NO_SKATER_SHADOW != 0 {
         return Vec::new();
     }
-    let height = (skater.position.y - hit.point.y).max(0.0);
+    let height = (at.y - hit.point.y).max(0.0);
     let fade = (1.0 - height / FADE).clamp(0.0, 1.0);
     let alpha = (150.0 * fade) as u8;
     if alpha == 0 {
@@ -645,7 +650,7 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
     let normal = hit.normal.normalize_or(Vec3::Y);
     let side = normal.any_orthonormal_vector();
     let along = normal.cross(side);
-    let radius = RADIUS * (0.6 + 0.4 * fade);
+    let radius = radius * (0.6 + 0.4 * fade);
     let centre = hit.point + normal * 0.5;
     let point = |i: usize| {
         let a = i as f32 / SIDES as f32 * std::f32::consts::TAU;
@@ -787,6 +792,9 @@ fn particle_batches(
         })
         .collect()
 }
+
+/// How near the camera the animals' and cars' shadows are drawn.
+const SHADOW_RANGE: f32 = 3000.0;
 
 /// How far away objects' sounds fade out (units).
 const OBJECT_SOUND_RANGE: f32 = 2000.0;
@@ -3091,6 +3099,15 @@ impl<'a> App<'a> {
                 .as_ref()
                 .map(|world| skater_shadow(skater, world))
                 .unwrap_or_default();
+            // The animals' and toy cars' shadows too, those near.
+            if let Some(world) = &level.world {
+                for o in world.obstacles() {
+                    let feet = o.base + Vec3::Y * 24.0;
+                    if feet.distance(self.camera.position) < SHADOW_RANGE {
+                        shadow.extend(blob_shadow(feet, o.radius * 0.8, world));
+                    }
+                }
+            }
             shadow.extend(self.sparks.vertices(self.camera.position));
             // The way back to the Hub, glowing.
             // (Our own ring where the level has no particles for it.)

@@ -76,6 +76,11 @@ impl World {
             .unwrap_or(f32::NEG_INFINITY)
     }
 
+    /// What moves about, where it is now.
+    pub fn obstacles(&self) -> &[Obstacle] {
+        &self.obstacles
+    }
+
     /// Where the obstacles are now.
     pub fn set_obstacles(&mut self, obstacles: Vec<Obstacle>) {
         self.obstacles = obstacles;
