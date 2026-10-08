@@ -661,21 +661,28 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         }
         if model.character.paused {
             egui::Area::new(egui::Id::new("pause"))
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.vertical_centered(|ui| {
                             ui.heading("Paused");
-                            if ui.button("Resume").clicked() {
-                                actions.push(Action::Pause);
-                            }
-                            if ui.button("Restart").clicked() {
-                                actions.push(Action::Restart);
-                            }
-                            if ui.button("Stop skating").clicked() {
-                                actions.push(Action::ToggleSkate);
-                            }
-                            ui.label(egui::RichText::new("P or Start to resume").small());
+                            ui.horizontal(|ui| {
+                                if ui.button("Resume").clicked() {
+                                    actions.push(Action::Pause);
+                                }
+                                if ui.button("Restart").clicked() {
+                                    actions.push(Action::Restart);
+                                }
+                                if ui.button("Stop skating").clicked() {
+                                    actions.push(Action::ToggleSkate);
+                                }
+                            });
+                            ui.label(
+                                egui::RichText::new(
+                                    "P resumes. Photo mode: W A S D fly, right-drag looks, F12 takes a picture (without the panel)",
+                                )
+                                .small(),
+                            );
                         });
                     });
                 });

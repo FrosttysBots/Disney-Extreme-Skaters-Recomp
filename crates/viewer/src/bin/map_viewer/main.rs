@@ -2801,8 +2801,9 @@ impl<'a> App<'a> {
     }
 
     fn update(&mut self, dt: f32) {
-        // The keys drive the skater instead while skating.
-        if self.skating.is_some() {
+        // The keys drive the skater instead while skating (paused, they fly
+        // the camera round for pictures).
+        if self.skating.is_some() && !self.model.character.paused {
             return;
         }
         let typing = self
@@ -2945,7 +2946,12 @@ impl<'a> App<'a> {
                 time,
                 &target.create_view(&Default::default()),
                 (w, h),
-                output.clone(),
+                // Paused (photo mode): the picture without the panel and HUD.
+                if self.model.character.paused {
+                    egui::FullOutput::default()
+                } else {
+                    output.clone()
+                },
             );
             let path = photo_path();
             self.model.message = Some(
@@ -3039,6 +3045,10 @@ impl<'a> App<'a> {
     }
 
     fn key_pressed(&mut self, code: KeyCode, repeat: bool) {
+        if code == KeyCode::F12 && !repeat {
+            self.photo = true;
+            return;
+        }
         // Paused: P resumes, Esc stops skating.
         if self.model.character.paused {
             match code {
@@ -3058,10 +3068,6 @@ impl<'a> App<'a> {
         }
         if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
             self.toggle_pause();
-            return;
-        }
-        if code == KeyCode::F12 && !repeat {
-            self.photo = true;
             return;
         }
         // At a warp: Enter goes through, Esc stays.
