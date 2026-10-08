@@ -32,6 +32,9 @@ pub type Params = Vec<(Option<u32>, Value)>;
 pub struct Program {
     scripts: HashMap<u32, Vec<Token>>,
     values: HashMap<u32, Value>,
+    /// Each script's default parameters, from its header (`script TransAm
+    /// DefaultSpeed = 30`): a call gets them where it doesn't pass its own.
+    defaults: HashMap<u32, Params>,
 }
 
 impl Program {
@@ -49,10 +52,25 @@ impl Program {
                     tokens: range,
                 } => {
                     // Skip `script name` and the closing `endscript`.
-                    let body = tokens[range.start + 2..range.end - 1]
+                    let mut body: Vec<Token> = tokens[range.start + 2..range.end - 1]
                         .iter()
                         .map(|(_, t)| t.clone())
                         .collect();
+                    // The rest of the header line: default parameters.
+                    let header = body
+                        .iter()
+                        .position(|t| matches!(t, Token::EndOfLine | Token::LineNumber(_)))
+                        .unwrap_or(body.len());
+                    if header > 0 {
+                        let mut items = vec![(0, Token::StartStruct)];
+                        items.extend(body[..header].iter().cloned().map(|t| (0, t)));
+                        items.push((0, Token::EndStruct));
+                        let mut at = 0;
+                        if let Ok(Value::Struct(defaults)) = parse_value(&items, &mut at) {
+                            self.defaults.insert(name, defaults);
+                        }
+                        body.drain(..header);
+                    }
                     self.scripts.insert(name, body);
                 }
                 Definition::Value { name, value } => {
@@ -79,6 +97,15 @@ impl Program {
     /// A script's body, as tokens.
     pub fn script(&self, name: u32) -> Option<&[Token]> {
         self.scripts.get(&name).map(Vec::as_slice)
+    }
+
+    /// A script's default for a parameter, from its header.
+    pub fn default_param(&self, script: u32, key: u32) -> Option<&Value> {
+        self.defaults
+            .get(&script)?
+            .iter()
+            .find(|(k, _)| *k == Some(key))
+            .map(|(_, v)| v)
     }
 
     pub fn has_script(&self, name: u32) -> bool {
@@ -129,6 +156,8 @@ struct Frame {
     /// Open `begin` loops: where the body starts, and how many more times
     /// it runs (`None` until the `repeat` is first reached).
     loops: Vec<(usize, Option<i64>)>,
+    /// Whether the header's defaults are in yet.
+    started: bool,
 }
 
 pub struct Thread {
@@ -144,6 +173,7 @@ impl Thread {
                 pc: 0,
                 params,
                 loops: Vec::new(),
+                started: false,
             }],
             wait: 0.0,
         }
@@ -175,6 +205,21 @@ impl Thread {
             self.frames.pop();
             return;
         };
+        // Starting: the header's defaults for what wasn't passed.
+        if frame.pc == 0 && !frame.started {
+            frame.started = true;
+            for (key, value) in program.defaults.get(&frame.script).into_iter().flatten() {
+                match key {
+                    Some(k) if !frame.params.iter().any(|(p, _)| *p == Some(*k)) => {
+                        frame.params.push((Some(*k), value.clone()));
+                    }
+                    None if !frame.params.iter().any(|(p, v)| p.is_none() && v == value) => {
+                        frame.params.push((None, value.clone()));
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Skip line breaks.
         while matches!(
             body.get(frame.pc),
@@ -292,6 +337,7 @@ impl Thread {
                     pc: 0,
                     params,
                     loops: Vec::new(),
+                    started: false,
                 });
             }
             return true;
