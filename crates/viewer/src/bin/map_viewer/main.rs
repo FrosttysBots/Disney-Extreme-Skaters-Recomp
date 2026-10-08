@@ -113,7 +113,7 @@ struct Args {
     #[arg(long, requires = "character", default_value_t = 0.0)]
     skate: f32,
     /// For --skate: keys pressed and let go at times, as "seconds:+Key" and
-    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R);
+    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R J L);
     /// without it W is held throughout
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
@@ -584,6 +584,12 @@ struct Run {
     won: bool,
 }
 
+/// Looking round: how far the camera swings round (radians, either way)
+/// and up or down at full stick, and how fast it follows the stick.
+const LOOK_YAW: f32 = 2.6;
+const LOOK_PITCH: f32 = 0.6;
+const LOOK_RATE: f32 = 8.0;
+
 /// How far away objects' sounds fade out (units).
 const OBJECT_SOUND_RANGE: f32 = 2000.0;
 
@@ -760,6 +766,12 @@ struct App<'a> {
     replay: Option<f32>,
     /// The S-K-A-T-E letters goal under way.
     letters: Option<LetterRun>,
+    /// The camera turned to look round (yaw, and up or down) and the right
+    /// stick as last read; whether the pad's Start was down, to toggle the
+    /// pause on pressing it.
+    look: glam::Vec2,
+    pad_look: glam::Vec2,
+    pad_start: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
     /// arriving.
     warp_offer: Option<usize>,
@@ -863,6 +875,7 @@ impl<'a> App<'a> {
                     records: Vec::new(),
                     record_message: None,
                     warp_prompt: None,
+                    paused: false,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -881,6 +894,9 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            look: glam::Vec2::ZERO,
+            pad_look: glam::Vec2::ZERO,
+            pad_start: false,
             warp_offer: None,
             skate_on_load: false,
             collecting: None,
@@ -1167,6 +1183,8 @@ impl<'a> App<'a> {
         self.run = None;
         self.warp_offer = None;
         self.model.character.warp_prompt = None;
+        self.model.character.paused = false;
+        self.look = glam::Vec2::ZERO;
         self.recording.clear();
         self.replay = None;
         self.model.character.replaying = false;
@@ -1876,6 +1894,8 @@ impl<'a> App<'a> {
         };
         while gilrs.next_event().is_some() {}
         let mut input = Input::default();
+        let mut look = glam::Vec2::ZERO;
+        let mut start = false;
         for (_, pad) in gilrs.gamepads() {
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
@@ -1904,8 +1924,44 @@ impl<'a> App<'a> {
             ]
             .into_iter()
             .any(pressed);
+            // The C-stick looks round; Start pauses.
+            let stick = glam::Vec2::new(pad.value(Axis::RightStickX), pad.value(Axis::RightStickY));
+            if stick.length() > look.length() && stick.length() > 0.2 {
+                look = stick;
+            }
+            start |= pressed(Button::Start);
         }
+        self.pad_look = look;
+        if start && !self.pad_start && self.skating.is_some() {
+            self.toggle_pause();
+        }
+        self.pad_start = start;
         input
+    }
+
+    /// Pauses skating, or goes on.
+    fn toggle_pause(&mut self) {
+        if self.skating.is_some() && self.replay.is_none() {
+            self.model.character.paused = !self.model.character.paused;
+        }
+    }
+
+    /// Starts over from the start: the run or goal on, again, or skating
+    /// from the level's start.
+    fn restart(&mut self) {
+        self.model.character.paused = false;
+        if self.letters.is_some() {
+            self.start_letters();
+        } else if self.run.is_some() {
+            let goal = self.model.character.run_goal.as_ref().map(|(pro, ..)| *pro);
+            self.start_run(goal);
+        } else if let Some(level) = &self.level {
+            self.placement = level.home;
+            if self.skating.is_some() {
+                self.toggle_skate();
+            }
+            self.toggle_skate();
+        }
     }
 
     /// Shows the next frame of the replay, and at its end goes back to
@@ -1944,8 +2000,10 @@ impl<'a> App<'a> {
             self.play_replay(dt);
             return;
         }
-        // Held still while a warp's offered (`PauseSkaters`).
-        if self.warp_offer.is_some() {
+        // Held still while a warp's offered (`PauseSkaters`) or paused.
+        if self.warp_offer.is_some() || self.model.character.paused {
+            // (The pad's still read, for Start.)
+            let _ = self.pad_input();
             return;
         }
         let pad = self.pad_input();
@@ -2205,7 +2263,28 @@ impl<'a> App<'a> {
 
         // Chase camera, on the game's medium camera settings.
         chase.update(skater, physics, world, dt);
-        self.camera = FlyCamera::looking_at(chase.eye, chase.target);
+        // Looking round (our own: the game's look-around is in its code,
+        // not read yet): the right stick or J/L swings the camera round the
+        // skater and tilts it, springing back when let go; it stays out of
+        // walls the camera can't see through.
+        let keys =
+            f32::from(u8::from(held(KeyCode::KeyL))) - f32::from(u8::from(held(KeyCode::KeyJ)));
+        let wanted = glam::Vec2::new(
+            (self.pad_look.x + keys).clamp(-1.0, 1.0) * LOOK_YAW,
+            self.pad_look.y * LOOK_PITCH,
+        );
+        self.look = self.look.lerp(wanted, (dt * LOOK_RATE).min(1.0));
+        let mut eye = chase.eye;
+        if self.look.length() > 1e-3 {
+            let back = chase.eye - chase.target;
+            let turned = Quat::from_rotation_y(self.look.x) * back;
+            let side = turned.cross(Vec3::Y).normalize_or(Vec3::X);
+            eye = chase.target + Quat::from_axis_angle(side, self.look.y) * turned;
+            if let Some(hit) = world.ray_requiring(chase.target, eye, 0x80) {
+                eye = hit.point + (chase.target - hit.point).normalize_or_zero() * 8.0;
+            }
+        }
+        self.camera = FlyCamera::looking_at(eye, chase.target);
 
         // A run is recorded as it's shown, to watch again.
         if let Some(run) = self.run.as_ref().filter(|r| !r.over) {
@@ -2517,11 +2596,14 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.skate(dt);
-        self.update_run(dt);
-        self.update_letters(dt);
-        self.update_collecting();
-        self.update_portals(dt);
-        self.update_records(dt);
+        // Paused: the clocks stop too.
+        if !self.model.character.paused {
+            self.update_run(dt);
+            self.update_letters(dt);
+            self.update_collecting();
+            self.update_records(dt);
+            self.update_portals(dt);
+        }
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -2617,6 +2699,8 @@ impl<'a> App<'a> {
                 ui::Action::StartRun(goal) => self.start_run(goal),
                 ui::Action::StartLetters => self.start_letters(),
                 ui::Action::Warp => self.take_warp(),
+                ui::Action::Pause => self.toggle_pause(),
+                ui::Action::Restart => self.restart(),
                 ui::Action::StayHere => self.stay_here(),
                 ui::Action::Replay => {
                     if !self.recording.is_empty() {
@@ -2658,6 +2742,19 @@ impl<'a> App<'a> {
     }
 
     fn key_pressed(&mut self, code: KeyCode, repeat: bool) {
+        // Paused: P resumes, Esc stops skating.
+        if self.model.character.paused {
+            match code {
+                KeyCode::KeyP if !repeat => self.toggle_pause(),
+                KeyCode::Escape if !repeat => self.toggle_skate(),
+                _ => {}
+            }
+            return;
+        }
+        if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
+            self.toggle_pause();
+            return;
+        }
         // At a warp: Enter goes through, Esc stays.
         if self.warp_offer.is_some() {
             match code {
@@ -3242,6 +3339,8 @@ fn parse_skate_keys(spec: &str) -> Result<Vec<(f32, KeyCode, bool)>> {
                 "Q" => KeyCode::KeyQ,
                 "F" => KeyCode::KeyF,
                 "R" => KeyCode::KeyR,
+                "J" => KeyCode::KeyJ,
+                "L" => KeyCode::KeyL,
                 "SPACE" => KeyCode::Space,
                 other => anyhow::bail!("unknown key {other:?}"),
             };

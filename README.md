@@ -141,10 +141,13 @@ around takes over from wherever it is.
 | E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
 | R as you land from vert | Revert (keeps the combo going into a manual) |
 | Tab | While skating: to the next spawn point |
+| J / L | While skating: look round (springs back) |
+| P | While skating: pause (Resume, Restart, Stop skating) |
 
 A gamepad works too while skating, laid out like the GameCube game: the
 left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
-X flips, B grabs, Y grinds, and the shoulder buttons revert. It rumbles
+X flips, B grabs, Y grinds, the shoulder buttons revert, the right stick
+looks round and Start pauses. It rumbles
 where the game's does (ollies, landings, grinds, reverts, flails, bails);
 the panel's Rumble box turns that off, and the `pad_check` example
 checks that a pad can rumble.

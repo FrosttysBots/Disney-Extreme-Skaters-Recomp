@@ -32,6 +32,8 @@ character. This page is for anyone trying it out.
 | W held going up a quarter pipe | Stick up held | Launch out over the lip instead of straight up |
 | R tapped on the ground | Shoulder button tapped | 180 slide (A or D for backside/frontside), riding on the other way round |
 | Two directions, then Q (or E in a manual) | Two directions, then X (or Y) | Special trick, when the special meter is full |
+| J / L | Right stick | Look round (springs back when let go) |
+| P | Start | Pause (Resume, Restart, Stop skating) |
 | Tab | | Jump to the next spawn point |
 | Esc | | Stop skating |
 

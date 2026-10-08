@@ -20,6 +20,10 @@ pub enum Action {
     StartRun(Option<bool>),
     /// The level's S-K-A-T-E letters goal (again).
     StartLetters,
+    /// Pause or go on skating, or start again from the start (the run or
+    /// goal again, if one's on).
+    Pause,
+    Restart,
     /// Through the warp the skater's at, or not.
     Warp,
     StayHere,
@@ -101,6 +105,8 @@ pub struct CharacterModel {
     pub record_message: Option<String>,
     /// At a warp: the level it goes to.
     pub warp_prompt: Option<String>,
+    /// Skating paused.
+    pub paused: bool,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -161,8 +167,9 @@ Skating: W push, S brake, A/D steer,
   in the air Q flip, F grab (+ W/S/A/D),
   R revert (tap on the ground: 180 slide;
   hold going up a quarter pipe: spine transfer),
-  S held: step off the board, Tab next spawn; or a gamepad
-  (stick, A ollie, X flip, B grab, Y grind),
+  S held: step off the board, Tab next spawn, J/L look round,
+  P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
+  right stick look round, Start pause),
   Esc stop";
 
 /// The score (top right) and the combo (bottom centre, above the balance
@@ -531,6 +538,27 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         }
         if let Some(result) = model.character.letters_result {
             letters_result(ctx, result, &mut actions);
+        }
+        if model.character.paused {
+            egui::Area::new(egui::Id::new("pause"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading("Paused");
+                            if ui.button("Resume").clicked() {
+                                actions.push(Action::Pause);
+                            }
+                            if ui.button("Restart").clicked() {
+                                actions.push(Action::Restart);
+                            }
+                            if ui.button("Stop skating").clicked() {
+                                actions.push(Action::ToggleSkate);
+                            }
+                            ui.label(egui::RichText::new("P or Start to resume").small());
+                        });
+                    });
+                });
         }
         if let Some(title) = &model.character.warp_prompt {
             egui::Area::new(egui::Id::new("warp"))
