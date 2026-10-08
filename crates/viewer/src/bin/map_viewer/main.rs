@@ -856,6 +856,8 @@ struct App<'a> {
     pad_back: bool,
     /// After a splash: the camera held where it was, and for how long.
     splash_hold: Option<(FlyCamera, f32)>,
+    /// Frames drawn (for things done now and then).
+    frame: u32,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
@@ -904,6 +906,7 @@ impl<'a> App<'a> {
             model: ui::Model {
                 data_path: None,
                 levels: Vec::new(),
+                level_progress: Vec::new(),
                 current: None,
                 loading: None,
                 stats: None,
@@ -995,6 +998,7 @@ impl<'a> App<'a> {
             replay: None,
             letters: None,
             photo: false,
+            frame: 0,
             splash_hold: None,
             camera_shown: usize::MAX,
             pad_back: false,
@@ -2178,6 +2182,38 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Each level's progress for the character shown, beside its name in
+    /// the list: its collectibles got and the gaps landed there.
+    fn update_progress(&mut self) {
+        let character = self
+            .model
+            .character
+            .current
+            .map(|i| self.model.character.characters[i].id.clone());
+        self.model.level_progress = self
+            .model
+            .levels
+            .iter()
+            .map(|level| {
+                let mut parts = Vec::new();
+                if let Some(c) = &character {
+                    let got = self
+                        .settings
+                        .best
+                        .get(&format!("collected.{}.{c}", level.id))
+                        .map_or(0, |bits| (bits & 0x01FF_FFFF).count_ones());
+                    if got > 0 {
+                        parts.push(format!("{got}/25"));
+                    }
+                }
+                if let Some(gaps) = self.settings.gaps.get(&level.id).filter(|g| !g.is_empty()) {
+                    parts.push(format!("{} gaps", gaps.len()));
+                }
+                parts.join(", ")
+            })
+            .collect();
+    }
+
     /// Follows the skater with the camera picked, when it changes.
     fn apply_camera(&mut self) {
         let wanted = self.model.character.camera;
@@ -2878,6 +2914,10 @@ impl<'a> App<'a> {
         }
         self.update_map();
         self.apply_camera();
+        if self.frame % 30 == 0 {
+            self.update_progress();
+        }
+        self.frame = self.frame.wrapping_add(1);
         self.update_music();
         self.play(dt);
         self.sync_view();

@@ -134,6 +134,9 @@ pub struct CharacterModel {
 pub struct Model {
     pub data_path: Option<String>,
     pub levels: Vec<LevelInfo>,
+    /// Each level's progress for the character shown (collectibles got,
+    /// gaps landed), beside its name.
+    pub level_progress: Vec<String>,
     pub current: Option<usize>,
     pub loading: Option<String>,
     pub stats: Option<String>,
@@ -756,9 +759,16 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 ui.separator();
                 ui.label(egui::RichText::new("Levels").strong());
                 for (i, level) in model.levels.iter().enumerate() {
-                    if ui.selectable_label(model.current == Some(i), &level.title).clicked() && model.loading.is_none() {
-                        actions.push(Action::LoadLevel(i));
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(model.current == Some(i), &level.title).clicked()
+                            && model.loading.is_none()
+                        {
+                            actions.push(Action::LoadLevel(i));
+                        }
+                        if let Some(progress) = model.level_progress.get(i).filter(|p| !p.is_empty()) {
+                            ui.label(egui::RichText::new(progress).small().weak());
+                        }
+                    });
                 }
             }
 
