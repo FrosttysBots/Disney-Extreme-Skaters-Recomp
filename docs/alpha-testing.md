@@ -103,6 +103,9 @@ skater is and what it's doing.
   the walls, which open as you come near) to be offered that level; on
   each level, the glowing ring is the way back to the Hub. Enter warps
   (you go on skating there), Esc stays.
+- The Goals list in the panel: every goal the level has in the career,
+  by the game's own words ("Push 10 Henchmen into the ocean"), with Play
+  on those the viewer runs so far (the letters and the score goals).
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game

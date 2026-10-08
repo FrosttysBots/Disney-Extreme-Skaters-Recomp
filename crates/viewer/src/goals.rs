@@ -27,16 +27,25 @@ pub struct SkateLetters {
     pub restart: Option<u32>,
 }
 
-/// Catches the goal manager's goals.
+/// Catches the goal manager's goals (and each one's type, as
+/// `GoalManager_CreateGoalName goal_type = ...` names it).
 #[derive(Default)]
 struct Catch {
     goals: Vec<Value>,
+    kinds: Vec<String>,
+    kind: String,
 }
 
 impl Host for Catch {
     fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
         // `GoalManager_AddGoal Name = id { params = {...} }`: the params
         // are in a struct of their own.
+        if name == checksum("GoalManager_CreateGoalName") {
+            self.kind = match args.get(checksum("goal_type")) {
+                Some(Value::String(s) | Value::LocalString(s)) => s.clone(),
+                _ => String::new(),
+            };
+        }
         if name == checksum("GoalManager_AddGoal") {
             let params = args.get(checksum("params")).or_else(|| match args {
                 Value::Struct(items) => items
@@ -46,6 +55,7 @@ impl Host for Catch {
             });
             if let Some(params) = params {
                 self.goals.push(params.clone());
+                self.kinds.push(self.kind.clone());
             }
         }
         Outcome::Done(false)
@@ -175,6 +185,60 @@ pub fn collectibles(program: &Program, character: &str) -> Option<Collectibles> 
         objects,
         special,
     })
+}
+
+/// One of the level's goals: its type (`Skate`, `HighScore`, `Gaps`...)
+/// and what the goal list calls it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelGoal {
+    pub kind: String,
+    pub text: String,
+}
+
+/// The goals the level adds (`<level>_goals`, as the career has them, or
+/// straight from `<level>_Startup` as Pizza Planet does).
+pub fn level_goals(program: &Program, level: &str) -> Vec<LevelGoal> {
+    let names = level_names(level);
+    let Some(script) = ["goals", "Startup"]
+        .iter()
+        .flat_map(|suffix| {
+            names
+                .iter()
+                .map(move |l| checksum(&format!("{l}_{suffix}")))
+        })
+        .find(|s| program.has_script(*s))
+    else {
+        return Vec::new();
+    };
+    let mut host = Catch::default();
+    let mut thread = Thread::new(script, Vec::new());
+    // (A start-up script is long: run it through, a slice at a time.)
+    for _ in 0..50 {
+        if thread.is_finished() {
+            break;
+        }
+        thread.run(program, &mut host, 0.0);
+    }
+    host.goals
+        .iter()
+        .zip(&host.kinds)
+        .filter_map(|(params, kind)| {
+            let mut out = Vec::new();
+            flatten(params, program, &mut out);
+            let text = ["view_goals_text", "goal_text"].iter().find_map(|key| {
+                match param(&out, program, key) {
+                    Some(Value::String(s) | Value::LocalString(s)) if !s.is_empty() => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                }
+            })?;
+            Some(LevelGoal {
+                kind: kind.clone(),
+                text,
+            })
+        })
+        .collect()
 }
 
 /// A goal to score so many points in the time.

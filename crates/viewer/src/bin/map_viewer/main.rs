@@ -953,6 +953,7 @@ impl<'a> App<'a> {
                     collect: true,
                     collected: None,
                     replaying: false,
+                    goals: Vec::new(),
                     can_letters: false,
                     letters: None,
                     letters_result: None,
@@ -1084,6 +1085,11 @@ impl<'a> App<'a> {
                     desa_viewer::goals::score_goal(level.behaviour.program(), &info.id, pro)
                         .map(|g| g.name)
                 });
+                self.model.character.goals =
+                    desa_viewer::goals::level_goals(level.behaviour.program(), &info.id)
+                        .into_iter()
+                        .map(|g| (g.kind, g.text))
+                        .collect();
                 self.model.character.can_letters = level
                     .nodes
                     .objects

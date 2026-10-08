@@ -87,6 +87,8 @@ pub struct CharacterModel {
     pub collected: Option<(u32, u32)>,
     /// Watching the run again.
     pub replaying: bool,
+    /// The level's goals (type, text), for the list in the panel.
+    pub goals: Vec<(String, String)>,
     /// The level has S-K-A-T-E letters; while collecting them, which are
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
@@ -927,6 +929,33 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             });
         }
     });
+    if !model.goals.is_empty() {
+        egui::CollapsingHeader::new(format!("Goals ({})", model.goals.len()))
+            .id_salt("goals")
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "The level's goals as the career has them; those with Play work here so far.",
+                    )
+                    .small(),
+                );
+                for (kind, text) in &model.goals {
+                    ui.horizontal(|ui| {
+                        let action = match kind.as_str() {
+                            "Skate" => Some(Action::StartLetters),
+                            "HighScore" => Some(Action::StartRun(Some(false))),
+                            "ProScore" => Some(Action::StartRun(Some(true))),
+                            _ => None,
+                        };
+                        let playable = action.is_some() && model.can_skate;
+                        if ui.add_enabled(playable, egui::Button::new("Play").small()).clicked() {
+                            actions.extend(action);
+                        }
+                        ui.label(egui::RichText::new(text).small());
+                    });
+                }
+            });
+    }
     ui.add_enabled_ui(model.can_skate && model.can_letters, |ui| {
         if ui
             .button("S-K-A-T-E letters")

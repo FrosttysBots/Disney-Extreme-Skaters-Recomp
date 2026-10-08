@@ -106,6 +106,18 @@ fn real_level_camera_paths() {
             collectibles += here;
         }
         println!("{}: {collectibles} collectibles", level.id);
+        let goals = desa_viewer::goals::level_goals(behaviour.program(), &level.id);
+        println!(
+            "{}: goals {:?}",
+            level.id,
+            goals
+                .iter()
+                .map(|g| format!("{}: {}", g.kind, g.text))
+                .collect::<Vec<_>>()
+        );
+        if level.id != "SkateShop" {
+            assert!(goals.len() >= 5, "{}: {} goals", level.id, goals.len());
+        }
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         println!(
             "{}: warps {:?}",
