@@ -590,6 +590,22 @@ const LOOK_YAW: f32 = 2.6;
 const LOOK_PITCH: f32 = 0.6;
 const LOOK_RATE: f32 = 8.0;
 
+/// Where F12 saves a picture: the Pictures folder's `DESA Map Viewer`,
+/// named by the time.
+fn photo_path() -> PathBuf {
+    let pictures = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join("Pictures"))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    pictures
+        .join("DESA Map Viewer")
+        .join(format!("desa_{stamp}.png"))
+}
+
 /// How far away objects' sounds fade out (units).
 const OBJECT_SOUND_RANGE: f32 = 2000.0;
 
@@ -772,6 +788,8 @@ struct App<'a> {
     look: glam::Vec2,
     pad_look: glam::Vec2,
     pad_start: bool,
+    /// F12 pressed: the next frame is saved as a picture too.
+    photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
     /// arriving.
     warp_offer: Option<usize>,
@@ -894,6 +912,7 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            photo: false,
             look: glam::Vec2::ZERO,
             pad_look: glam::Vec2::ZERO,
             pad_start: false,
@@ -2665,6 +2684,49 @@ impl<'a> App<'a> {
         let view = frame.texture.create_view(&Default::default());
         let (w, h) = (gpu.config.width, gpu.config.height);
         let time = self.started.elapsed().as_secs_f32();
+        // A picture of the frame, as shown, into the Pictures folder.
+        if std::mem::take(&mut self.photo) {
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("photo"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: gpu.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            paint(
+                &gpu.device,
+                &gpu.queue,
+                &mut gpu.egui_renderer,
+                &gpu.egui_ctx,
+                self.level.as_mut().map(|l| &mut l.renderer),
+                &self.camera,
+                time,
+                &target.create_view(&Default::default()),
+                (w, h),
+                output.clone(),
+            );
+            let path = photo_path();
+            self.model.message = Some(
+                match path
+                    .parent()
+                    .map(std::fs::create_dir_all)
+                    .transpose()
+                    .and_then(|_| {
+                        renderer::save_png(&gpu.device, &gpu.queue, &target, w, h, &path)
+                            .map_err(std::io::Error::other)
+                    }) {
+                    Ok(_) => format!("Saved {}", path.display()),
+                    Err(e) => format!("Couldn't save a picture: {e}"),
+                },
+            );
+        }
         paint(
             &gpu.device,
             &gpu.queue,
@@ -2753,6 +2815,10 @@ impl<'a> App<'a> {
         }
         if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
             self.toggle_pause();
+            return;
+        }
+        if code == KeyCode::F12 && !repeat {
+            self.photo = true;
             return;
         }
         // At a warp: Enter goes through, Esc stays.

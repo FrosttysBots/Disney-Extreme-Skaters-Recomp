@@ -1078,6 +1078,15 @@ pub fn save_png(
     for line in mapped.chunks(padded_row as usize) {
         pixels.extend_from_slice(&line[..row as usize]);
     }
+    // A window's frame is often blue-green-red: put red first.
+    if matches!(
+        target.format(),
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+    }
     let file = File::create(out).with_context(|| format!("could not create {}", out.display()))?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
