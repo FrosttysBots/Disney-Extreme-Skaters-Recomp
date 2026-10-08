@@ -109,6 +109,8 @@ pub struct CharacterModel {
     pub paused: bool,
     /// This session's skating, line by line.
     pub session: Vec<String>,
+    /// Riding switch (the game's `switch_icon`).
+    pub switch: bool,
     /// The game's chase cameras by name, and the one picked.
     pub cameras: Vec<String>,
     pub camera: usize,
@@ -504,6 +506,20 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
         }
         special_meter(ctx, model.character.special);
+        if model.character.switch {
+            egui::Area::new(egui::Id::new("switch"))
+                .anchor(egui::Align2::RIGHT_TOP, [-180.0, 47.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new("SWITCH")
+                            .size(13.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(255, 150, 60))
+                            .background_color(egui::Color32::from_black_alpha(140)),
+                    );
+                });
+        }
         if let Some(text) = &model.character.record_message {
             egui::Area::new(egui::Id::new("record"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 130.0])

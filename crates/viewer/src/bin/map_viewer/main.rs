@@ -954,6 +954,7 @@ impl<'a> App<'a> {
                     warp_prompt: None,
                     paused: false,
                     session: Vec::new(),
+                    switch: false,
                     cameras: Vec::new(),
                     camera,
                 },
@@ -2287,6 +2288,7 @@ impl<'a> App<'a> {
             if skater.special { ", SPECIAL" } else { "" },
         );
         self.model.character.special = (skater.special_meter / 3000.0, skater.special);
+        self.model.character.switch = skater.flipped;
         self.model.character.combo = combo_text(skater);
         // The skater's message, or for a few seconds the song that began.
         let song = self
