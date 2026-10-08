@@ -9,6 +9,7 @@
 //! spawn point and play their animations.
 
 mod audio;
+mod minimap;
 mod rumble;
 mod settings;
 mod sparks;
@@ -245,6 +246,8 @@ struct LoadedLevel {
     colors: [ColorAnimation; 3],
     /// The level's warps to other levels.
     portals: Vec<Portal>,
+    /// The level from above, for the map in the corner.
+    minimap: Option<minimap::Minimap>,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -388,6 +391,7 @@ fn load_level(
         crowd: renderer.add_layer(&objects.crowd.mesh, true),
         goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
     };
+    let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     Ok((
         LoadedLevel {
             id: info.id.clone(),
@@ -403,6 +407,7 @@ fn load_level(
             world: skate_world,
             colors,
             portals,
+            minimap,
             markers: (false, false),
         },
         stats,
@@ -955,6 +960,10 @@ impl<'a> App<'a> {
                     paused: false,
                     session: Vec::new(),
                     switch: false,
+                    show_map: true,
+                    map_image: None,
+                    map_texture: None,
+                    map: None,
                     cameras: Vec::new(),
                     camera,
                 },
@@ -1079,6 +1088,12 @@ impl<'a> App<'a> {
                     self.model.collision = CollisionView::Hidden;
                 }
                 self.model.set_spawns(&level.nodes.spawns);
+                // The new level's map.
+                self.model.character.map = None;
+                self.model.character.map_texture = None;
+                self.model.character.map_image = level.minimap.as_ref().map(|m| {
+                    egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels)
+                });
                 self.model.camera_paths = ui::CameraPathModel {
                     paths: level
                         .camera_paths
@@ -1774,6 +1789,46 @@ impl<'a> App<'a> {
                 self.model.character.warp_prompt = Some(portal.warp.title.clone());
             }
         }
+    }
+
+    /// What the map in the corner shows round the skater: the collectibles
+    /// and letters still to get, and the warps.
+    fn update_map(&mut self) {
+        let (Some((skater, ..)), Some(level)) = (&self.skating, &self.level) else {
+            self.model.character.map = None;
+            return;
+        };
+        let Some(map) = &level.minimap else { return };
+        let mut markers = Vec::new();
+        if let Some(c) = &self.collecting {
+            for &(object, bit) in &c.objects {
+                if c.got & bit == 0 {
+                    markers.push((
+                        map.pixel(level.behaviour.position(object)),
+                        ui::MapMark::Collectible,
+                    ));
+                }
+            }
+        }
+        if let Some(run) = &self.letters {
+            for (i, &object) in run.objects.iter().enumerate() {
+                if !run.got[i] {
+                    markers.push((
+                        map.pixel(level.behaviour.position(object)),
+                        ui::MapMark::Letter,
+                    ));
+                }
+            }
+        }
+        for portal in &level.portals {
+            markers.push((map.pixel(portal.warp.position), ui::MapMark::Warp));
+        }
+        self.model.character.map = Some(ui::MapView {
+            centre: map.pixel(skater.position),
+            heading: skater.heading,
+            size: (map.width as f32, map.height as f32),
+            markers,
+        });
     }
 
     /// Goes through the warp offered: that level loads, and skating goes on
@@ -2752,6 +2807,7 @@ impl<'a> App<'a> {
             self.update_records(dt);
             self.update_portals(dt);
         }
+        self.update_map();
         self.apply_camera();
         self.update_music();
         self.play(dt);
@@ -2941,6 +2997,10 @@ impl<'a> App<'a> {
                 KeyCode::Escape if !repeat => self.toggle_skate(),
                 _ => {}
             }
+            return;
+        }
+        if code == KeyCode::KeyM && !repeat && self.skating.is_some() {
+            self.model.character.show_map = !self.model.character.show_map;
             return;
         }
         if code == KeyCode::KeyC && !repeat && self.skating.is_some() {
@@ -3274,6 +3334,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         };
         app.placement = Mat4::from_translation(Vec3::Y * args.lift) * app.placement;
         camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
+        app.model.character.map_image = loaded.minimap.as_ref().map(|m| {
+            egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels)
+        });
         app.level = Some(loaded);
         if args.skate > 0.0 {
             if let Some(from) = &args.skate_from {
@@ -3351,6 +3414,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_collecting();
                 app.update_records(1.0 / 60.0);
                 app.update_portals(1.0 / 60.0);
+                app.update_map();
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
                 if let Some(level) = &mut app.level {

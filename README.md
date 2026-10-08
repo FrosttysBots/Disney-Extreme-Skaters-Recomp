@@ -143,6 +143,7 @@ around takes over from wherever it is.
 | Tab | While skating: to the next spawn point |
 | J / L | While skating: look round (springs back) |
 | P | While skating: pause (Resume, Restart, Stop skating) |
+| M | While skating: show or hide the map (the level from above round the skater, drawn from its collision, with collectibles, letters and warps marked) |
 | C | While skating: the next of the game's chase cameras (`Skater_Camera_Array`: near, standard, far, standard LTG) |
 | F12 | Save a picture of the window to `Pictures\DESA Map Viewer` |
 

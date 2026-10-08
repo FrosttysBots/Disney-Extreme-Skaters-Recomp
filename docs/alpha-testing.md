@@ -34,6 +34,7 @@ character. This page is for anyone trying it out.
 | Two directions, then Q (or E in a manual) | Two directions, then X (or Y) | Special trick, when the special meter is full |
 | J / L | Right stick | Look round (springs back when let go) |
 | P | Start | Pause (Resume, Restart, Stop skating) |
+| M | | Show or hide the map |
 | C | Back | Next chase camera (the game's Near, Standard, Far, Standard LTG; also in the panel) |
 | F12 | | Save a picture (`Pictures\DESA Map Viewer`), handy for bug reports |
 | Tab | | Jump to the next spawn point |

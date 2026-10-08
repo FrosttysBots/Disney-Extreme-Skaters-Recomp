@@ -109,6 +109,12 @@ pub struct CharacterModel {
     pub paused: bool,
     /// This session's skating, line by line.
     pub session: Vec<String>,
+    /// The map in the corner: shown or not, a new level's picture to
+    /// upload, the uploaded picture, and what's round the skater.
+    pub show_map: bool,
+    pub map_image: Option<egui::ColorImage>,
+    pub map_texture: Option<egui::TextureHandle>,
+    pub map: Option<MapView>,
     /// Riding switch (the game's `switch_icon`).
     pub switch: bool,
     /// The game's chase cameras by name, and the one picked.
@@ -175,7 +181,7 @@ Skating: W push, S brake, A/D steer,
   R revert (tap on the ground: 180 slide;
   hold going up a quarter pipe: spine transfer),
   S held: step off the board, Tab next spawn, J/L look round,
-  C camera, P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
+  C camera, M map, P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
   right stick look round, Start pause),
   Esc stop";
 
@@ -475,7 +481,87 @@ fn balance_meter(ctx: &egui::Context, meter: f32) {
         });
 }
 
+/// The map round the skater: where on the level's picture (pixels), which
+/// way it faces, the picture's size, and what's marked (where, and what).
+pub struct MapView {
+    pub centre: (f32, f32),
+    pub heading: f32,
+    pub size: (f32, f32),
+    pub markers: Vec<((f32, f32), MapMark)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MapMark {
+    Collectible,
+    Letter,
+    Warp,
+}
+
+/// The map in the corner: the level from above round the skater (north
+/// up), what's to find on it, and the skater as an arrow.
+fn minimap(ctx: &egui::Context, texture: &egui::TextureHandle, view: &MapView) {
+    const SIDE: f32 = 190.0;
+    /// Map pixels across the panel.
+    const SPAN: f32 = 150.0;
+    egui::Area::new(egui::Id::new("minimap"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -56.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(SIDE, SIDE), egui::Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 6.0, egui::Color32::from_black_alpha(170));
+            let (w, h) = view.size;
+            let half = SPAN / 2.0;
+            let uv = egui::Rect::from_min_max(
+                egui::pos2((view.centre.0 - half) / w, (view.centre.1 - half) / h),
+                egui::pos2((view.centre.0 + half) / w, (view.centre.1 + half) / h),
+            );
+            painter.image(texture.id(), rect.shrink(3.0), uv, egui::Color32::WHITE);
+            let to_screen = |(x, z): (f32, f32)| {
+                let inner = rect.shrink(3.0);
+                egui::pos2(
+                    inner.left() + (x - (view.centre.0 - half)) / SPAN * inner.width(),
+                    inner.top() + (z - (view.centre.1 - half)) / SPAN * inner.height(),
+                )
+            };
+            for &(at, mark) in &view.markers {
+                let p = to_screen(at);
+                if !rect.shrink(4.0).contains(p) {
+                    continue;
+                }
+                let (colour, radius) = match mark {
+                    MapMark::Collectible => (egui::Color32::from_rgb(120, 170, 255), 2.5),
+                    MapMark::Letter => (egui::Color32::from_rgb(255, 205, 50), 4.0),
+                    MapMark::Warp => (egui::Color32::from_rgb(200, 120, 255), 4.5),
+                };
+                painter.circle_filled(p, radius, colour);
+                painter.circle_stroke(p, radius, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
+            }
+            // The skater: an arrow the way it faces (heading 0 along +z,
+            // which is down the map).
+            let centre = to_screen(view.centre);
+            let (s, c) = view.heading.sin_cos();
+            let forward = egui::vec2(s, c);
+            let side = egui::vec2(c, -s);
+            let points = vec![
+                centre + forward * 8.0,
+                centre - forward * 5.0 + side * 5.0,
+                centre - forward * 2.5,
+                centre - forward * 5.0 - side * 5.0,
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                egui::Color32::from_rgb(255, 80, 60),
+                egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
+            ));
+        });
+}
+
 pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
+    // A new level's map, uploaded once.
+    if let Some(image) = model.character.map_image.take() {
+        model.character.map_texture = Some(ctx.load_texture("minimap", image, Default::default()));
+    }
     let mut actions = Vec::new();
     if let Some(title) = &model.loading {
         egui::Area::new(egui::Id::new("loading"))
@@ -506,6 +592,13 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
         }
         special_meter(ctx, model.character.special);
+        if let (true, Some(texture), Some(view)) = (
+            model.character.show_map,
+            &model.character.map_texture,
+            &model.character.map,
+        ) {
+            minimap(ctx, texture, view);
+        }
         if model.character.switch {
             egui::Area::new(egui::Id::new("switch"))
                 .anchor(egui::Align2::RIGHT_TOP, [-180.0, 47.0])
@@ -853,6 +946,8 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         );
         ui.checkbox(&mut model.music, "Music")
             .on_hover_text("The game's soundtrack, one song after another.");
+        ui.checkbox(&mut model.show_map, "Map")
+            .on_hover_text("The level from above round the skater, with what's to find (M).");
         ui.checkbox(&mut model.collect, "Collectibles").on_hover_text(
             "The character's 25 collectibles on each level of its world (Jessie's \
              Cowgirl Boots, Woody's Badges...), there to pick up while skating. \
