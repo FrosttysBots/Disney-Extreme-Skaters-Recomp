@@ -584,6 +584,38 @@ struct Run {
     won: bool,
 }
 
+/// This session's skating, since the viewer started.
+#[derive(Default)]
+struct Session {
+    /// Seconds skated (not paused), and units travelled.
+    time: f32,
+    distance: f32,
+    last_position: Option<Vec3>,
+    /// Combos landed, their tricks and points, the best, bails and gaps.
+    combos: u32,
+    tricks: u32,
+    points: u32,
+    best: u32,
+    bails: u32,
+    gaps: u32,
+}
+
+impl Session {
+    fn lines(&self) -> Vec<String> {
+        let minutes = (self.time / 60.0) as u32;
+        vec![
+            format!("Skated {minutes}:{:02}", self.time as u32 % 60),
+            // Units are inches.
+            format!("Distance {:.2} miles", self.distance / 63_360.0),
+            format!("Combos landed {} ({} tricks)", self.combos, self.tricks),
+            format!("Points {}", self.points),
+            format!("Best combo {}", self.best),
+            format!("Gaps {}", self.gaps),
+            format!("Bails {}", self.bails),
+        ]
+    }
+}
+
 /// Looking round: how far the camera swings round (radians, either way)
 /// and up or down at full stick, and how fast it follows the stick.
 const LOOK_YAW: f32 = 2.6;
@@ -788,6 +820,8 @@ struct App<'a> {
     look: glam::Vec2,
     pad_look: glam::Vec2,
     pad_start: bool,
+    /// This session's skating (since the viewer started).
+    session: Session,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
@@ -894,6 +928,7 @@ impl<'a> App<'a> {
                     record_message: None,
                     warp_prompt: None,
                     paused: false,
+                    session: Vec::new(),
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -913,6 +948,7 @@ impl<'a> App<'a> {
             replay: None,
             letters: None,
             photo: false,
+            session: Session::default(),
             look: glam::Vec2::ZERO,
             pad_look: glam::Vec2::ZERO,
             pad_start: false,
@@ -1204,6 +1240,7 @@ impl<'a> App<'a> {
         self.model.character.warp_prompt = None;
         self.model.character.paused = false;
         self.look = glam::Vec2::ZERO;
+        self.session.last_position = None;
         self.recording.clear();
         self.replay = None;
         self.model.character.replaying = false;
@@ -1560,6 +1597,18 @@ impl<'a> App<'a> {
         let Some((skater, ..)) = &self.skating else {
             return;
         };
+        // The session's tally.
+        let session = &mut self.session;
+        session.time += dt;
+        if let Some(last) = session.last_position {
+            let step = skater.position.distance(last);
+            // (Not a jump to a spawn point or through a teleporter.)
+            if step < 100.0 {
+                session.distance += step;
+            }
+        }
+        session.last_position = Some(skater.position);
+        self.model.character.session = session.lines();
         // How long each balance trick has gone on, the longest kept.
         let now = [skater.grind.is_some(), skater.manual, skater.lip.is_some()];
         for ((running, longest), on) in self
@@ -1575,6 +1624,18 @@ impl<'a> App<'a> {
             return;
         }
         self.combos_seen = skater.combos_ended;
+        if let Some(landed) = &skater.last_combo {
+            let session = &mut self.session;
+            if landed.bailed {
+                session.bails += 1;
+            } else {
+                session.combos += 1;
+                session.tricks += landed.combo.tricks.len() as u32;
+                session.best = session.best.max(landed.total);
+                session.points += landed.total;
+            }
+            self.model.character.session = session.lines();
+        }
         let lengths = std::mem::take(&mut self.combo_lengths);
         let Some(landed) = skater.last_combo.as_ref().filter(|l| !l.bailed) else {
             return;
@@ -2099,6 +2160,7 @@ impl<'a> App<'a> {
         skater.update(input, physics, world, dt);
         // A gap landed: ticked off on the level's list, and kept.
         if let Some((name, _)) = skater.last_gap.take() {
+            self.session.gaps += 1;
             if let Some(entry) = self
                 .model
                 .character

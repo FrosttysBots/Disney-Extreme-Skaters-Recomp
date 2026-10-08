@@ -64,6 +64,8 @@ skater is and what it's doing.
   most tricks in a combo on each level, in the panel's Records list; a
   new one past the game's mark (10,000 points, 10 seconds, 5 tricks) is
   announced as the game does ("Record Combo Score!").
+- The Session list in the panel: time skated, distance, combos and
+  tricks landed, points, best combo, gaps and bails since you started.
 - The Gaps list in the panel while skating: every gap the level names,
   ticked off as you land each one (kept between sessions).
 - Teleporters and water: falling in the Hub's harbour puts you back on

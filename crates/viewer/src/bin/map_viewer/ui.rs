@@ -107,6 +107,8 @@ pub struct CharacterModel {
     pub warp_prompt: Option<String>,
     /// Skating paused.
     pub paused: bool,
+    /// This session's skating, line by line.
+    pub session: Vec<String>,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -856,6 +858,15 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     );
                     for line in &model.trick_list {
                         ui.label(egui::RichText::new(line).small().monospace());
+                    }
+                });
+        }
+        if !model.session.is_empty() {
+            egui::CollapsingHeader::new("Session")
+                .id_salt("session")
+                .show(ui, |ui| {
+                    for line in &model.session {
+                        ui.label(egui::RichText::new(line).small());
                     }
                 });
         }
