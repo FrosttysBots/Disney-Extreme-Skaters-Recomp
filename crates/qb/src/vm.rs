@@ -56,14 +56,34 @@ impl Program {
                         .iter()
                         .map(|(_, t)| t.clone())
                         .collect();
-                    // The rest of the header line: default parameters.
-                    let header = body
-                        .iter()
-                        .position(|t| matches!(t, Token::EndOfLine | Token::LineNumber(_)))
-                        .unwrap_or(body.len());
+                    // The rest of the header: default parameters, to the end
+                    // of the line or, written as a struct, to its close.
+                    let header = if body.first() == Some(&Token::StartStruct) {
+                        let mut depth = 0;
+                        body.iter()
+                            .position(|t| {
+                                match t {
+                                    Token::StartStruct => depth += 1,
+                                    Token::EndStruct => depth -= 1,
+                                    _ => {}
+                                }
+                                depth == 0
+                            })
+                            .map_or(body.len(), |end| end + 1)
+                    } else {
+                        body.iter()
+                            .position(|t| matches!(t, Token::EndOfLine | Token::LineNumber(_)))
+                            .unwrap_or(body.len())
+                    };
                     if header > 0 {
                         let mut items = vec![(0, Token::StartStruct)];
-                        items.extend(body[..header].iter().cloned().map(|t| (0, t)));
+                        items.extend(
+                            body[..header]
+                                .iter()
+                                .filter(|t| !matches!(t, Token::EndOfLine | Token::LineNumber(_)))
+                                .cloned()
+                                .map(|t| (0, t)),
+                        );
                         items.push((0, Token::EndStruct));
                         let mut at = 0;
                         if let Ok(Value::Struct(defaults)) = parse_value(&items, &mut at) {
