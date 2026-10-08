@@ -1835,6 +1835,28 @@ impl<'a> App<'a> {
         for portal in &level.portals {
             markers.push((map.pixel(portal.warp.position), ui::MapMark::Warp));
         }
+        // The gaps' ends (where each scores), landed or not.
+        for (object, trigger) in &skater.gap_triggers {
+            let skate::gaps::GapTrigger::End { text, .. } = trigger else {
+                continue;
+            };
+            let Some(at) = level
+                .nodes
+                .nodes
+                .iter()
+                .find(|n| n.name == *object)
+                .and_then(|n| n.position)
+            else {
+                continue;
+            };
+            let landed = self
+                .model
+                .character
+                .gap_list
+                .iter()
+                .any(|(name, _, got)| *got && name == text);
+            markers.insert(0, (map.pixel(at), ui::MapMark::Gap(landed)));
+        }
         self.model.character.map = Some(ui::MapView {
             centre: map.pixel(skater.position),
             heading: skater.heading,
