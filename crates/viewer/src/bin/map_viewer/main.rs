@@ -873,6 +873,7 @@ struct RaceRun {
     time: f32,
     over: bool,
     runner: usize,
+    goal_runner: usize,
     end_script: Option<u32>,
     started: bool,
 }
@@ -1490,7 +1491,7 @@ impl<'a> App<'a> {
         // A race stops: its own end script runs (cars back, gates gone).
         if let Some(race) = self.racing.take() {
             if let (Some(level), Some(script)) = (&mut self.level, race.end_script) {
-                level.behaviour.run_script(race.runner, script);
+                level.behaviour.run_script(race.goal_runner, script);
             }
         }
         self.model.character.race = None;
@@ -2160,18 +2161,19 @@ impl<'a> App<'a> {
             self.placement =
                 Mat4::from_rotation_translation(Quat::from_rotation_y(to.x.atan2(to.z)), start);
         }
-        // Scripts run on an object that's there all along (they only make
-        // and kill things and play sounds).
-        let runner = (0..level.nodes.objects.len())
-            .find(|&i| level.behaviour.alive(i))
-            .unwrap_or(0);
+        // Scripts run on objects that are there all along (they only make
+        // and kill things and play sounds): the waypoints' on one, the
+        // start and end scripts on another, so neither cuts the other off.
+        let mut alive = (0..level.nodes.objects.len()).filter(|&i| level.behaviour.alive(i));
+        let runner = alive.next().unwrap_or(0);
+        let goal_runner = alive.next().unwrap_or(runner);
         self.toggle_skate();
         if self.skating.is_none() {
             return;
         }
         let Some(level) = &mut self.level else { return };
         if let Some(script) = race.start_script {
-            level.behaviour.run_script(runner, script);
+            level.behaviour.run_script(goal_runner, script);
         }
         let left = first.2;
         let first_script = first.1;
@@ -2182,6 +2184,7 @@ impl<'a> App<'a> {
             time: 0.0,
             over: false,
             runner,
+            goal_runner,
             end_script: race.end_script,
             started: false,
         });
@@ -2236,7 +2239,7 @@ impl<'a> App<'a> {
                 }
             }
             if let Some(script) = race.end_script.take() {
-                level.behaviour.run_script(race.runner, script);
+                level.behaviour.run_script(race.goal_runner, script);
             }
         }
     }
