@@ -625,6 +625,9 @@ impl Session {
     }
 }
 
+/// How long the camera stays to see a splash (seconds).
+const SPLASH_HOLD: f32 = 0.8;
+
 /// Looking round: how far the camera swings round (radians, either way)
 /// and up or down at full stick, and how fast it follows the stick.
 const LOOK_YAW: f32 = 2.6;
@@ -851,6 +854,8 @@ struct App<'a> {
     /// panel's list), and whether the pad's Back was down.
     camera_shown: usize,
     pad_back: bool,
+    /// After a splash: the camera held where it was, and for how long.
+    splash_hold: Option<(FlyCamera, f32)>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
@@ -985,6 +990,7 @@ impl<'a> App<'a> {
             replay: None,
             letters: None,
             photo: false,
+            splash_hold: None,
             camera_shown: usize::MAX,
             pad_back: false,
             session: Session::default(),
@@ -2281,6 +2287,7 @@ impl<'a> App<'a> {
             input
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
+        let before = skater.position;
         skater.update(input, physics, world, dt);
         // A gap landed: ticked off on the level's list, and kept.
         if let Some((name, _)) = skater.last_gap.take() {
@@ -2304,6 +2311,12 @@ impl<'a> App<'a> {
             }
         }
         self.sparks.update(skater, dt);
+        // Into the water (a teleporter): a splash where it went in.
+        if skater.sounds.contains(&skate::skater::SkateSound::Teleport) {
+            self.sparks.splash(before);
+            // The camera stays a moment to see it, then cuts to the skater.
+            self.splash_hold = Some((self.camera, SPLASH_HOLD));
+        }
         if let Some(gilrs) = self.gamepads.as_mut() {
             if self.model.character.rumble {
                 self.rumble.update(gilrs, skater);
@@ -2491,6 +2504,14 @@ impl<'a> App<'a> {
             }
         }
         self.camera = FlyCamera::looking_at(eye, chase.target);
+        if let Some((camera, left)) = &mut self.splash_hold {
+            *left -= dt;
+            if *left > 0.0 {
+                self.camera = *camera;
+            } else {
+                self.splash_hold = None;
+            }
+        }
 
         // A run is recorded as it's shown, to watch again.
         if let Some(run) = self.run.as_ref().filter(|r| !r.over) {
@@ -3334,9 +3355,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         };
         app.placement = Mat4::from_translation(Vec3::Y * args.lift) * app.placement;
         camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
-        app.model.character.map_image = loaded.minimap.as_ref().map(|m| {
-            egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels)
-        });
+        app.model.character.map_image = loaded
+            .minimap
+            .as_ref()
+            .map(|m| egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels));
         app.level = Some(loaded);
         if args.skate > 0.0 {
             if let Some(from) = &args.skate_from {
