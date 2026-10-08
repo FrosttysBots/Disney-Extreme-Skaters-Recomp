@@ -80,6 +80,11 @@ skater is and what it's doing.
   score goals, like Pride Rock's "Beat Scar's High Score!" (15,000) or
   Beach's 150,000 Extreme Score, in two minutes from the goal's start.
   The goal's won the moment the score's there.
+- Collectibles: each character's 25 on every level of its world
+  (Jessie's Cowgirl Boots on Pizza, the Bedroom and Zurg's Home; the Kid's
+  Medals everywhere), spinning and hovering while you skate. Roll through
+  one to collect it; what's collected stays collected (the Collectibles
+  box in the panel hides them).
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game

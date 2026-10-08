@@ -28,6 +28,7 @@ fn main() {
         "hud_specialtrickaa",
         "copinghit3_11",
         "goaldone",
+        "gapsound",
     ] {
         println!("skater sound {name}: {}", skater.contains_key(name));
     }

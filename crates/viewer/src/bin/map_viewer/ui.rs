@@ -74,6 +74,10 @@ pub struct CharacterModel {
     pub run_goal: Option<(bool, String, u32)>,
     pub run_goal_won: Option<bool>,
     pub score_goals: [Option<String>; 2],
+    /// The character's collectibles shown while skating, and how many of
+    /// this level's are got.
+    pub collect: bool,
+    pub collected: Option<(u32, u32)>,
     /// Watching the run again.
     pub replaying: bool,
     /// The level has S-K-A-T-E letters; while collecting them, which are
@@ -477,6 +481,20 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
         }
         special_meter(ctx, model.character.special);
+        if let Some((got, of)) = model.character.collected {
+            egui::Area::new(egui::Id::new("collected"))
+                .anchor(egui::Align2::RIGHT_TOP, [-16.0, 74.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{got}/{of}"))
+                            .size(16.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(170, 190, 255))
+                            .background_color(egui::Color32::from_black_alpha(120)),
+                    );
+                });
+        }
         if let Some(left) = model.character.run_clock {
             run_clock(ctx, left);
         }
@@ -741,6 +759,11 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         );
         ui.checkbox(&mut model.music, "Music")
             .on_hover_text("The game's soundtrack, one song after another.");
+        ui.checkbox(&mut model.collect, "Collectibles").on_hover_text(
+            "The character's 25 collectibles on each level of its world (Jessie's \
+             Cowgirl Boots, Woody's Badges...), there to pick up while skating. \
+             What's collected is kept.",
+        );
         ui.checkbox(&mut model.rumble, "Rumble")
             .on_hover_text("The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.");
     });

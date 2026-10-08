@@ -117,6 +117,48 @@ fn param<'a>(params: &'a [(u32, Value)], program: &'a Program, key: &str) -> Opt
     }
 }
 
+/// A character's collectibles on a level (`AddGoal_Collect25`): what the
+/// game calls them and their objects (node names), in order (their goal
+/// flags `Got_1` to `got_25`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Collectibles {
+    pub kind: String,
+    pub objects: Vec<u32>,
+}
+
+/// The character's collectibles (`<first_name>_collect25_objects`), named
+/// as `AddGoal_Collect25` names them for each character.
+pub fn collectibles(program: &Program, character: &str) -> Option<Collectibles> {
+    let id = character.to_ascii_lowercase();
+    let kind = match id.as_str() {
+        "woody" => "Badges",
+        "buzz" => "PowerCells",
+        "jessie" => "Cowgirl Boots",
+        "zurg" => "RayGuns",
+        "tarzan" => "Spearheads",
+        "jane" => "Sketchbooks",
+        "terk" => "Bananas",
+        "tantor" => "Peanuts",
+        "simba" | "nala" => "Haunches",
+        "rafiki" => "Spirit Guides",
+        "timon" => "Tasty Grubs",
+        "kid" => "Medals",
+        _ => return None,
+    };
+    let list = program.value(checksum(&format!("{id}_collect25_objects")))?;
+    let Value::Array(items) = list else {
+        return None;
+    };
+    let objects: Vec<u32> = items
+        .iter()
+        .filter_map(|item| item.get(checksum("id")).and_then(Value::as_name))
+        .collect();
+    (!objects.is_empty()).then(|| Collectibles {
+        kind: kind.to_string(),
+        objects,
+    })
+}
+
 /// A goal to score so many points in the time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScoreGoal {

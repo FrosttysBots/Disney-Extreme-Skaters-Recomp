@@ -161,7 +161,11 @@ up within 8 feet, as `SkateLetter_InitLetter` sets. `--letters` with
 `--skate` screenshots it. The **High Score** and **Pro Score goals** read
 `AddGoal_HighScore` and `AddGoal_ProScore` the same way: the score (a
 global such as `pride_highscore_score`), the time and the goal's name;
-`--score-goal high|pro` screenshots one. `--run SECONDS`
+`--score-goal high|pro` screenshots one. **Collectibles** are the
+character's `AddGoal_Collect25` objects (`jessie_collect25_objects`: 25 on
+each level of its world), shown spinning (`Obj_RotY speed = 250`) and
+hovering (`Obj_Hover`) while skating, picked up within 7 feet with the
+gap sound, and kept collected in the settings file. `--run SECONDS`
 with `--skate` screenshots one with that much time left, and `--replay-at
 SECONDS` the replay of it that far in.
 | P | Play or pause the character |

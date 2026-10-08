@@ -527,6 +527,22 @@ struct LetterRun {
     over: bool,
 }
 
+/// The character's collectibles on the level, while skating.
+struct Collecting {
+    /// Their objects and their bits in `got` (which are collected, kept in
+    /// the settings under `key`).
+    objects: Vec<(usize, u32)>,
+    got: u32,
+    kind: String,
+    key: String,
+}
+
+/// How near the skater picks a collectible up
+/// (`set_goal_collect_exception_25`: 7 feet), and how fast they spin
+/// (`Obj_RotY speed = 250`).
+const COLLECT_RADIUS: f32 = 7.0 * 12.0;
+const COLLECT_SPIN: f32 = 250.0;
+
 /// How near the skater picks a letter up: `Obj_SetInnerRadius 8` (feet).
 const LETTER_RADIUS: f32 = 8.0 * 12.0;
 /// How fast the letters spin (`Obj_RotY speed = 200`, degrees a second).
@@ -628,6 +644,8 @@ struct App<'a> {
     replay: Option<f32>,
     /// The S-K-A-T-E letters goal under way.
     letters: Option<LetterRun>,
+    /// The character's collectibles on the level, while skating.
+    collecting: Option<Collecting>,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -705,6 +723,8 @@ impl<'a> App<'a> {
                     run_goal: None,
                     run_goal_won: None,
                     score_goals: [None, None],
+                    collect: true,
+                    collected: None,
                     replaying: false,
                     can_letters: false,
                     letters: None,
@@ -729,6 +749,7 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            collecting: None,
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -1016,6 +1037,15 @@ impl<'a> App<'a> {
         self.model.character.letters_result = None;
         self.model.character.run_goal = None;
         self.model.character.run_goal_won = None;
+        // The collectibles go too (they come back on skating again).
+        if let Some(collecting) = self.collecting.take() {
+            if let Some(level) = &mut self.level {
+                for (object, _) in collecting.objects {
+                    level.behaviour.set_alive(object, false);
+                }
+            }
+        }
+        self.model.character.collected = None;
         self.model.character.run_clock = None;
         self.model.character.run_result = None;
         self.blend_from = None;
@@ -1093,6 +1123,7 @@ impl<'a> App<'a> {
         self.stop_camera_path();
         let chase = ChaseCamera::behind(&skater, &physics);
         self.skating = Some((skater, physics, chase));
+        self.start_collecting();
         self.model.character.skating = true;
         self.model.character.playing = false;
         self.set_looking(false);
@@ -1140,6 +1171,105 @@ impl<'a> App<'a> {
                 won: false,
             });
         }
+    }
+
+    /// The character's collectibles on this level (`AddGoal_Collect25`),
+    /// those not got yet put out spinning and hovering
+    /// (`create_goal_disney_collect_object`).
+    fn start_collecting(&mut self) {
+        self.collecting = None;
+        self.model.character.collected = None;
+        if !self.model.character.collect {
+            return;
+        }
+        let (Some(level), Some(index)) = (&mut self.level, self.model.character.current) else {
+            return;
+        };
+        let character = self.model.character.characters[index].id.clone();
+        let Some(list) = desa_viewer::goals::collectibles(level.behaviour.program(), &character)
+        else {
+            return;
+        };
+        let key = format!("collected.{}.{character}", level.id);
+        let got = self.settings.best.get(&key).copied().unwrap_or(0);
+        let objects: Vec<(usize, u32)> = list
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, name)| Some((level.behaviour.object(*name)?, 1 << i)))
+            .collect();
+        if objects.is_empty() {
+            return;
+        }
+        for &(object, bit) in &objects {
+            if got & bit == 0 {
+                level.behaviour.set_alive(object, true);
+                level.behaviour.set_spin(object, COLLECT_SPIN.to_radians());
+                level.behaviour.set_hover(object, 10.0, 1.0);
+            }
+        }
+        self.model.character.collected = Some((
+            objects.iter().filter(|(_, bit)| got & bit != 0).count() as u32,
+            objects.len() as u32,
+        ));
+        self.collecting = Some(Collecting {
+            objects,
+            got,
+            kind: list.kind,
+            key,
+        });
+    }
+
+    /// Picks up the collectibles the skater reaches
+    /// (`set_goal_collect_exception_25`: within 7 feet), with the gap sound
+    /// and "3 of 25 Cowgirl Boots" (`goal_collect_got_object`), and keeps
+    /// what's got.
+    fn update_collecting(&mut self) {
+        if self.replay.is_some() {
+            return;
+        }
+        let (Some(collecting), Some((skater, ..)), Some(level)) =
+            (&mut self.collecting, &mut self.skating, &mut self.level)
+        else {
+            return;
+        };
+        let body = skater.position + Vec3::Y * 30.0;
+        let mut changed = false;
+        for &(object, bit) in &collecting.objects {
+            if collecting.got & bit != 0
+                || body.distance(level.behaviour.position(object)) > COLLECT_RADIUS
+            {
+                continue;
+            }
+            collecting.got |= bit;
+            changed = true;
+            level.behaviour.set_alive(object, false);
+            if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                audio.play_named(qb::checksum("gapsound"), 1.0);
+            }
+        }
+        if !changed {
+            return;
+        }
+        let got = collecting
+            .objects
+            .iter()
+            .filter(|(_, bit)| collecting.got & bit != 0)
+            .count();
+        let of = collecting.objects.len();
+        skater.message = Some((
+            if got == of {
+                format!("All {of} {} collected!", collecting.kind)
+            } else {
+                format!("{got} of {of} {}", collecting.kind)
+            },
+            2.0,
+        ));
+        self.model.character.collected = Some((got as u32, of as u32));
+        self.settings
+            .best
+            .insert(collecting.key.clone(), collecting.got);
+        self.settings.save();
     }
 
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
@@ -1951,6 +2081,7 @@ impl<'a> App<'a> {
         self.skate(dt);
         self.update_run(dt);
         self.update_letters(dt);
+        self.update_collecting();
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -2466,6 +2597,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.skate(1.0 / 60.0);
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
+                app.update_collecting();
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
                 if let Some(level) = &mut app.level {

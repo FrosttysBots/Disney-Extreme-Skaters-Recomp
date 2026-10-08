@@ -25,7 +25,8 @@
 //!   [orient]` (at once without a speed), `Obj_MoveToRelPos (x, y, z) time
 //!   = seconds` (relative to the object's facing), `Obj_LookAtNode`,
 //!   `Obj_WaitMove` and `Obj_IsMoving`.
-//! - `Obj_RotY speed = degrees a second` and `Obj_StopRotating`.
+//! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
+//!   `Obj_Hover Amp = units Freq = hertz`.
 //! - `playsound` / `obj_playsound name [Vol = percent]`: collected in
 //!   [`Behaviour::sounds`] for the viewer to play.
 //!
@@ -71,6 +72,9 @@ struct State {
     exceptions: Vec<(u32, u32, Params)>,
     /// Turning about Y (radians a second; `Obj_RotY`).
     spin: f32,
+    /// Bobbing up and down (`Obj_Hover Amp = units Freq = hertz`), shown
+    /// only: where it is stays put.
+    hover: Option<(f32, f32)>,
 }
 
 #[derive(Default)]
@@ -146,6 +150,7 @@ impl Behaviour {
                 was_outside: true,
                 exceptions: Vec::new(),
                 spin: 0.0,
+                hover: None,
             })
             .collect();
         let threads = nodes
@@ -197,6 +202,7 @@ impl Behaviour {
         state.dirty = true;
         state.moving = None;
         state.spin = 0.0;
+        state.hover = None;
         state.exceptions.clear();
         self.threads.retain(|(o, _)| *o != object);
     }
@@ -204,6 +210,11 @@ impl Behaviour {
     /// Runs `script` as the object's script.
     pub fn run_script(&mut self, object: usize, script: u32) {
         self.start(object, Thread::new(script, Vec::new()));
+    }
+
+    /// Sets an object bobbing up and down so far, so often a second.
+    pub fn set_hover(&mut self, object: usize, amplitude: f32, frequency: f32) {
+        self.states[object].hover = Some((amplitude, frequency));
     }
 
     /// Sets an object spinning about Y (radians a second).
@@ -263,6 +274,9 @@ impl Behaviour {
     /// Moves objects heading straight for a spot.
     fn move_straight(&mut self, i: usize, dt: f32) {
         let state = &mut self.states[i];
+        if state.hover.is_some() && state.alive {
+            state.dirty = true;
+        }
         if state.spin != 0.0 && state.alive {
             state.rotation = Quat::from_rotation_y(state.spin * dt) * state.rotation;
             state.dirty = true;
@@ -368,8 +382,11 @@ impl Behaviour {
                 continue;
             }
             let shown = state.alive || (self.goal[i] && show_goal);
+            let bob = state.hover.map_or(0.0, |(amplitude, frequency)| {
+                amplitude * (now * frequency * std::f32::consts::TAU).sin()
+            });
             let placement = if shown {
-                Mat4::from_rotation_translation(state.rotation, state.position)
+                Mat4::from_rotation_translation(state.rotation, state.position + Vec3::Y * bob)
             } else {
                 // Gone: shrink it to nothing.
                 Mat4::from_scale(Vec3::ZERO)
@@ -631,6 +648,10 @@ impl Host for Commands<'_> {
         } else if name == c("Obj_RotY") {
             let speed = args.get(c("speed")).and_then(Value::as_f32).unwrap_or(0.0);
             b.states[object].spin = speed.to_radians();
+        } else if name == c("Obj_Hover") {
+            let amp = args.get(c("Amp")).and_then(Value::as_f32).unwrap_or(0.0);
+            let freq = args.get(c("Freq")).and_then(Value::as_f32).unwrap_or(1.0);
+            b.states[object].hover = Some((amp, freq));
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
         } else if name == c("Obj_ShadowOff") || name == c("Obj_ShadowOn") {

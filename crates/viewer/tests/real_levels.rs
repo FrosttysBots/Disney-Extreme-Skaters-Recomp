@@ -80,6 +80,24 @@ fn real_level_camera_paths() {
             let goal = letters.expect("a letters goal");
             assert!(goal.letters.iter().all(|l| behaviour.object(*l).is_some()));
         }
+        // Each character's collectibles on the levels of its world.
+        let mut collectibles = 0;
+        for character in [
+            "woody", "buzz", "jessie", "zurg", "tarzan", "jane", "terk", "tantor", "simba", "nala",
+            "rafiki", "timon", "kid",
+        ] {
+            let list = desa_viewer::goals::collectibles(behaviour.program(), character)
+                .unwrap_or_else(|| panic!("{character}'s collectibles"));
+            assert_eq!(list.objects.len(), 25, "{character}");
+            let here = list
+                .objects
+                .iter()
+                .filter(|o| behaviour.object(**o).is_some())
+                .count();
+            assert!(here == 0 || here == 25, "{} {character}: {here}", level.id);
+            collectibles += here;
+        }
+        println!("{}: {collectibles} collectibles", level.id);
         let mut objects = built;
         for step in 0..600 {
             behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false);
