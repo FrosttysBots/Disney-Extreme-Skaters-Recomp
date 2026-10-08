@@ -1788,6 +1788,12 @@ impl<'a> App<'a> {
                 if portal.appeared.is_none() && to.length() < PORTAL_APPEAR {
                     portal.appeared = Some(0.0);
                     level.renderer.show_layer(*layer, true);
+                    // Its sparkle (`create Name = <warpParticle>`).
+                    if let Some(particle) = portal.warp.particle {
+                        level
+                            .particles
+                            .start(level.behaviour.program(), &level.nodes, particle);
+                    }
                     if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound)
                     {
                         audio.play_named(qb::checksum("portalAppears"), 1.0);
@@ -1813,6 +1819,15 @@ impl<'a> App<'a> {
                             .collect();
                         level.renderer.update_layer(*layer, 0, &moved);
                     }
+                }
+            }
+            // The way back to the Hub glows (`HubWarp`: `create Name =
+            // TRG_Warp_Particle_Hub`).
+            if portal.strip.is_none() {
+                if let Some(particle) = portal.warp.particle {
+                    level
+                        .particles
+                        .start(level.behaviour.program(), &level.nodes, particle);
                 }
             }
             let to = skater - portal.warp.position;
@@ -2736,7 +2751,13 @@ impl<'a> App<'a> {
             shadow.extend(self.sparks.vertices(self.camera.position));
             shadow.extend(level.particles.vertices(self.camera.position));
             // The way back to the Hub, glowing.
-            for portal in level.portals.iter().filter(|p| p.strip.is_none()) {
+            // (Our own ring where the level has no particles for it.)
+            for portal in level.portals.iter().filter(|p| {
+                p.strip.is_none()
+                    && !p.warp.particle.is_some_and(|name| {
+                        desa_viewer::particles::Particles::has_emitter(&level.nodes, name)
+                    })
+            }) {
                 shadow.extend(portal_ring(
                     portal.warp.position,
                     clock,

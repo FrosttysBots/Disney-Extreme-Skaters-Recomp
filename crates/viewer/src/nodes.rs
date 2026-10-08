@@ -168,6 +168,7 @@ pub struct LevelNodes {
 /// A `ParticleEmitter` node.
 #[derive(Clone, Debug)]
 pub struct Emitter {
+    pub name: u32,
     pub position: Vec3,
     pub script: u32,
     pub created_at_start: bool,
@@ -299,6 +300,7 @@ impl LevelNodes {
                 Some(c) if c == key("ParticleEmitter") => {
                     if let Some(script) = node.get(key("TriggerScript")).and_then(Value::as_name) {
                         out.emitters.push(Emitter {
+                            name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
                             position: pos,
                             script,
                             created_at_start: node.has_flag(key("CreatedAtStart")),

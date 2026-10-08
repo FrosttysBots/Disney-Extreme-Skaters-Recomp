@@ -59,6 +59,8 @@ struct Particle {
 }
 
 struct System {
+    /// The emitter's node name.
+    name: u32,
     emitter: Vec3,
     thread: Thread,
     settings: Settings,
@@ -216,18 +218,45 @@ impl Particles {
     /// The level's particle systems there at the start: each emitter's
     /// script run to make its system.
     pub fn new(program: &Program, nodes: &LevelNodes) -> Self {
-        let mut systems = Vec::new();
+        let mut particles = Particles {
+            systems: Vec::new(),
+            seed: 0x1234_5679,
+        };
         for emitter in nodes.emitters.iter().filter(|e| e.created_at_start) {
+            particles.add(program, emitter);
+        }
+        particles
+    }
+
+    /// Starts the emitter with this node name (as `create Name = ...` does
+    /// in the scripts), unless it's going already.
+    pub fn start(&mut self, program: &Program, nodes: &LevelNodes, name: u32) {
+        if self.systems.iter().any(|s| s.name == name) {
+            return;
+        }
+        if let Some(emitter) = nodes.emitters.iter().find(|e| e.name == name) {
+            self.add(program, emitter);
+        }
+    }
+
+    /// Whether the level has an emitter by this node name.
+    pub fn has_emitter(nodes: &LevelNodes, name: u32) -> bool {
+        nodes.emitters.iter().any(|e| e.name == name)
+    }
+
+    fn add(&mut self, program: &Program, emitter: &crate::nodes::Emitter) {
+        {
             let mut host = Create::default();
             let mut thread = Thread::new(emitter.script, Vec::new());
             thread.run(program, &mut host, 0.0);
             let Some((script, max)) = host.made else {
-                continue;
+                return;
             };
             if !program.has_script(script) {
-                continue;
+                return;
             }
-            systems.push(System {
+            self.systems.push(System {
+                name: emitter.name,
                 emitter: emitter.position,
                 thread: Thread::new(script, Vec::new()),
                 settings: Settings {
@@ -253,10 +282,6 @@ impl Particles {
                 // short for inches).
                 range: (emitter.cutoff * 6.0).max(3000.0),
             });
-        }
-        Particles {
-            systems,
-            seed: 0x1234_5679,
         }
     }
 

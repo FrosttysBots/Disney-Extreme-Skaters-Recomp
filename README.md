@@ -176,7 +176,9 @@ the levels' scripts too: the Hub's portals are the sectors whose scripts
 call `LevelWarp level_num = N filmStrip = ...` (the level being the `N`th
 of `level_select_menu_level_info`), opening as the skater comes within 60
 feet; each level's `Warp_Master_Hub` (`HubWarp`, the Kid's way back in the
-game) is shown to everyone as a glowing ring. **Particle effects**
+game) is shown to everyone with the game's own sparkle
+(`TRG_Warp_Particle_Hub`), and each Hub portal starts its `warpParticle`
+as it opens. **Particle effects**
 (campfires, steam) come from the levels' `ParticleEmitter` nodes: their
 scripts' `CreateParticleSystem` names an emit script, which the
 interpreter runs (`setlife`, `setspeedrange`, `setemittarget`,
