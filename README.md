@@ -165,7 +165,12 @@ global such as `pride_highscore_score`), the time and the goal's name;
 character's `AddGoal_Collect25` objects (`jessie_collect25_objects`: 25 on
 each level of its world), shown spinning (`Obj_RotY speed = 250`) and
 hovering (`Obj_Hover`) while skating, picked up within 7 feet with the
-gap sound, and kept collected in the settings file. `--run SECONDS`
+gap sound, and kept collected in the settings file. **Warps** come from
+the levels' scripts too: the Hub's portals are the sectors whose scripts
+call `LevelWarp level_num = N filmStrip = ...` (the level being the `N`th
+of `level_select_menu_level_info`), opening as the skater comes within 60
+feet; each level's `Warp_Master_Hub` (`HubWarp`, the Kid's way back in the
+game) is shown to everyone as a glowing ring. `--run SECONDS`
 with `--skate` screenshots one with that much time left, and `--replay-at
 SECONDS` the replay of it that far in.
 | P | Play or pause the character |

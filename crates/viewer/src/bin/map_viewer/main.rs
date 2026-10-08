@@ -239,6 +239,8 @@ struct LoadedLevel {
     world: Option<World>,
     /// Animated vertex colors of the level, its sky and its goal geometry.
     colors: [ColorAnimation; 3],
+    /// The level's warps to other levels.
+    portals: Vec<Portal>,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -351,6 +353,30 @@ fn load_level(
             .unwrap_or_default(),
         goal_geometry.color_animation.clone(),
     ];
+    // Warps, each Hub portal's film strip in a layer of its own (shown
+    // when it appears).
+    let portals = desa_viewer::warps::warps(behaviour.program(), &nodes)
+        .into_iter()
+        .map(|warp| {
+            let strip = warp.sector.and_then(|sector| {
+                let mesh =
+                    Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
+                        s == sector
+                    })
+                    .ok()
+                    .filter(|m| !m.vertices.is_empty())?;
+                let layer = renderer.add_layer(&mesh, false);
+                renderer.show_layer(layer, false);
+                Some((layer, mesh.vertices))
+            });
+            Portal {
+                warp,
+                strip,
+                appeared: None,
+                declined: false,
+            }
+        })
+        .collect();
     let layers = ObjectLayers {
         goal_geometry: renderer.add_layer(&goal_geometry, false),
         props: renderer.add_layer(&objects.props.mesh, false),
@@ -372,10 +398,74 @@ fn load_level(
             behaviour,
             world: skate_world,
             colors,
+            portals,
             markers: (false, false),
         },
         stats,
     ))
+}
+
+/// A warp on the level, and how it's shown.
+struct Portal {
+    warp: desa_viewer::warps::Warp,
+    /// A Hub portal's film strip: its layer and vertices as stored.
+    strip: Option<(Option<usize>, Vec<desa_viewer::level::Vertex>)>,
+    /// Seconds since it appeared (the skater came within 60 feet).
+    appeared: Option<f32>,
+    /// Offered and turned down: not again until the skater's gone off.
+    declined: bool,
+}
+
+/// How near a Hub portal appears (`LevelWarp`: `Obj_SetInnerRadius 60`),
+/// and how long it takes to open out (the game's `WarpAppears` turns and
+/// moves the strip in its own axes, which aren't read yet; this grows it
+/// from its middle instead, ending where the level stores it).
+const PORTAL_APPEAR: f32 = 60.0 * 12.0;
+const PORTAL_TIME: f32 = 0.6;
+/// How near the skater goes through a warp (across, and up or down), and
+/// how far it has to go after turning one down to be offered it again
+/// (`WarpDialogHub`: `Obj_SetOuterRadius 20`).
+const WARP_ENTER: f32 = 8.0 * 12.0;
+const WARP_HEIGHT: f32 = 250.0;
+const WARP_LEAVE: f32 = 20.0 * 12.0;
+
+/// The way back to the Hub, as a ring of glowing streaks turning in the air
+/// (the game shows a particle portal there to the Kid).
+fn portal_ring(center: Vec3, time: f32, eye: Vec3) -> Vec<collision::ColorVertex> {
+    const COUNT: usize = 28;
+    const RADIUS: f32 = 70.0;
+    let center = center + Vec3::Y * 70.0;
+    let mut out = Vec::with_capacity(COUNT * 6);
+    let to_eye = (eye - center).normalize_or(Vec3::Z);
+    // The ring faces the camera, about the vertical.
+    let flat = Vec3::new(to_eye.x, 0.0, to_eye.z).normalize_or(Vec3::Z);
+    let side = Vec3::Y.cross(flat).normalize_or(Vec3::X);
+    for i in 0..COUNT {
+        let a = i as f32 / COUNT as f32 * std::f32::consts::TAU + time * 1.5;
+        let wobble = 1.0 + 0.08 * (time * 3.0 + i as f32).sin();
+        let p = center + (side * a.cos() + Vec3::Y * a.sin()) * RADIUS * wobble;
+        let tangent = (-side * a.sin() + Vec3::Y * a.cos()) * 9.0;
+        let across = tangent.cross(to_eye).normalize_or(Vec3::Y) * 4.0;
+        let glow = 0.6 + 0.4 * (time * 4.0 + i as f32 * 0.7).sin();
+        let color = [
+            (120.0 + 100.0 * glow) as u8,
+            (90.0 + 60.0 * glow) as u8,
+            255,
+            (200.0 * glow) as u8,
+        ];
+        let v = |p: Vec3| collision::ColorVertex {
+            position: p.to_array(),
+            color,
+        };
+        let (a0, a1, b0, b1) = (
+            p - tangent - across,
+            p - tangent + across,
+            p + tangent - across,
+            p + tangent + across,
+        );
+        out.extend([v(a0), v(a1), v(b1), v(a0), v(b1), v(b0)]);
+    }
+    out
 }
 
 /// The renderer layers holding a level's objects (`None` when empty).
@@ -670,6 +760,10 @@ struct App<'a> {
     replay: Option<f32>,
     /// The S-K-A-T-E letters goal under way.
     letters: Option<LetterRun>,
+    /// The warp offered (the level's portal) and, once taken, to skate on
+    /// arriving.
+    warp_offer: Option<usize>,
+    skate_on_load: bool,
     /// The character's collectibles on the level, while skating.
     collecting: Option<Collecting>,
     /// The combo under way's longest grind, manual and lip trick (seconds)
@@ -768,6 +862,7 @@ impl<'a> App<'a> {
                     gap_list: Vec::new(),
                     records: Vec::new(),
                     record_message: None,
+                    warp_prompt: None,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -786,6 +881,8 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            warp_offer: None,
+            skate_on_load: false,
             collecting: None,
             combo_lengths: [0.0; 3],
             running_lengths: [0.0; 3],
@@ -895,6 +992,10 @@ impl<'a> App<'a> {
                 self.level = Some(level);
                 self.settings.last_level = Some(info.id);
                 self.settings.save();
+                // Arrived through a warp: skating on.
+                if std::mem::take(&mut self.skate_on_load) {
+                    self.toggle_skate();
+                }
             }
             Err(err) => self.model.message = Some(format!("{err:#}")),
         }
@@ -1064,6 +1165,8 @@ impl<'a> App<'a> {
     fn toggle_skate(&mut self) {
         self.skate_pose = None;
         self.run = None;
+        self.warp_offer = None;
+        self.model.character.warp_prompt = None;
         self.recording.clear();
         self.replay = None;
         self.model.character.replaying = false;
@@ -1473,6 +1576,108 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The level's warps: a Hub portal animates into place as the skater
+    /// comes within 60 feet (`WarpAppears`: dropping and turning, with the
+    /// portal sound); going into one (or the way back to the Hub) holds the
+    /// skater and offers the level.
+    fn update_portals(&mut self, dt: f32) {
+        let skater = self.skating.as_ref().map(|(s, ..)| s.position);
+        let Some(level) = &mut self.level else { return };
+        for (i, portal) in level.portals.iter_mut().enumerate() {
+            let Some(skater) = skater else {
+                // Not skating: put away again.
+                if portal.appeared.take().is_some() {
+                    if let Some((layer, _)) = &portal.strip {
+                        level.renderer.show_layer(*layer, false);
+                    }
+                }
+                portal.declined = false;
+                continue;
+            };
+            let to = skater - portal.warp.position;
+            if let Some((layer, base)) = &portal.strip {
+                if portal.appeared.is_none() && to.length() < PORTAL_APPEAR {
+                    portal.appeared = Some(0.0);
+                    level.renderer.show_layer(*layer, true);
+                    if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound)
+                    {
+                        audio.play_named(qb::checksum("portalAppears"), 1.0);
+                    }
+                }
+                if let Some(t) = &mut portal.appeared {
+                    if *t <= PORTAL_TIME {
+                        *t += dt;
+                        let k = (*t / PORTAL_TIME).min(1.0);
+                        // Quick to start, easing into place.
+                        let k = 1.0 - (1.0 - k) * (1.0 - k);
+                        let middle = base
+                            .iter()
+                            .fold(Vec3::ZERO, |sum, v| sum + Vec3::from(v.position))
+                            / base.len().max(1) as f32;
+                        let moved: Vec<_> = base
+                            .iter()
+                            .map(|v| desa_viewer::level::Vertex {
+                                position: (middle + (Vec3::from(v.position) - middle) * k)
+                                    .to_array(),
+                                ..*v
+                            })
+                            .collect();
+                        level.renderer.update_layer(*layer, 0, &moved);
+                    }
+                }
+            }
+            let to = skater - portal.warp.position;
+            let across = Vec3::new(to.x, 0.0, to.z).length();
+            if portal.declined {
+                portal.declined = across < WARP_LEAVE;
+                continue;
+            }
+            let ready = portal.strip.is_none() || portal.appeared.is_some_and(|t| t > PORTAL_TIME);
+            if ready && self.warp_offer.is_none() && across < WARP_ENTER && to.y.abs() < WARP_HEIGHT
+            {
+                self.warp_offer = Some(i);
+                self.model.character.warp_prompt = Some(portal.warp.title.clone());
+            }
+        }
+    }
+
+    /// Goes through the warp offered: that level loads, and skating goes on
+    /// there from its start.
+    fn take_warp(&mut self) {
+        let Some(i) = self.warp_offer.take() else {
+            return;
+        };
+        self.model.character.warp_prompt = None;
+        let Some(level) = self
+            .level
+            .as_ref()
+            .and_then(|l| l.portals.get(i))
+            .map(|p| p.warp.level)
+        else {
+            return;
+        };
+        let index = self
+            .model
+            .levels
+            .iter()
+            .position(|info| qb::checksum(&format!("load_{}", info.id)) == level);
+        if let Some(index) = index {
+            self.skate_on_load = true;
+            self.start_load(index);
+        }
+    }
+
+    /// Turns the warp down: skating on, not offered it again until the
+    /// skater's gone off from it.
+    fn stay_here(&mut self) {
+        if let Some(i) = self.warp_offer.take() {
+            if let Some(portal) = self.level.as_mut().and_then(|l| l.portals.get_mut(i)) {
+                portal.declined = true;
+            }
+        }
+        self.model.character.warp_prompt = None;
+    }
+
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
     /// letters appear, spinning and bobbing (`SkateLetter_InitLetter`,
     /// `bounce_skate_letter`), and the skater starts at the goal's restart
@@ -1737,6 +1942,10 @@ impl<'a> App<'a> {
     fn skate(&mut self, dt: f32) {
         if self.replay.is_some() {
             self.play_replay(dt);
+            return;
+        }
+        // Held still while a warp's offered (`PauseSkaters`).
+        if self.warp_offer.is_some() {
             return;
         }
         let pad = self.pad_input();
@@ -2135,6 +2344,14 @@ impl<'a> App<'a> {
                 .map(|world| skater_shadow(skater, world))
                 .unwrap_or_default();
             shadow.extend(self.sparks.vertices(self.camera.position));
+            // The way back to the Hub, glowing.
+            for portal in level.portals.iter().filter(|p| p.strip.is_none()) {
+                shadow.extend(portal_ring(
+                    portal.warp.position,
+                    clock,
+                    self.camera.position,
+                ));
+            }
             level.renderer.set_shadow(&shadow);
             if let Some(blink) = character.blink {
                 let eyes = if model.blink {
@@ -2303,6 +2520,7 @@ impl<'a> App<'a> {
         self.update_run(dt);
         self.update_letters(dt);
         self.update_collecting();
+        self.update_portals(dt);
         self.update_records(dt);
         self.update_music();
         self.play(dt);
@@ -2398,6 +2616,8 @@ impl<'a> App<'a> {
                 ui::Action::ToggleSkate => self.toggle_skate(),
                 ui::Action::StartRun(goal) => self.start_run(goal),
                 ui::Action::StartLetters => self.start_letters(),
+                ui::Action::Warp => self.take_warp(),
+                ui::Action::StayHere => self.stay_here(),
                 ui::Action::Replay => {
                     if !self.recording.is_empty() {
                         self.replay = Some(0.0);
@@ -2438,6 +2658,15 @@ impl<'a> App<'a> {
     }
 
     fn key_pressed(&mut self, code: KeyCode, repeat: bool) {
+        // At a warp: Enter goes through, Esc stays.
+        if self.warp_offer.is_some() {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter if !repeat => self.take_warp(),
+                KeyCode::Escape if !repeat => self.stay_here(),
+                _ => {}
+            }
+            return;
+        }
         match code {
             KeyCode::Escape => {
                 self.set_looking(false);
@@ -2821,6 +3050,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_letters(1.0 / 60.0);
                 app.update_collecting();
                 app.update_records(1.0 / 60.0);
+                app.update_portals(1.0 / 60.0);
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
                 if let Some(level) = &mut app.level {

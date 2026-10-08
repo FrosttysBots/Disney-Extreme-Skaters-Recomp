@@ -92,6 +92,10 @@ skater is and what it's doing.
   Special...), spinning and hovering while you skate. Roll through
   one to collect it; what's collected stays collected (the Collectibles
   box in the panel hides them).
+- Warps: on the Hub, skate up to a level's portal (the film strips in
+  the walls, which open as you come near) to be offered that level; on
+  each level, the glowing ring is the way back to the Hub. Enter warps
+  (you go on skating there), Esc stays.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game

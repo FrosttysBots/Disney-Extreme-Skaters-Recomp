@@ -20,6 +20,9 @@ pub enum Action {
     StartRun(Option<bool>),
     /// The level's S-K-A-T-E letters goal (again).
     StartLetters,
+    /// Through the warp the skater's at, or not.
+    Warp,
+    StayHere,
     /// Watch the run just skated again, or stop watching.
     Replay,
     StopReplay,
@@ -96,6 +99,8 @@ pub struct CharacterModel {
     /// new one being announced.
     pub records: Vec<String>,
     pub record_message: Option<String>,
+    /// At a warp: the level it goes to.
+    pub warp_prompt: Option<String>,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -526,6 +531,26 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         }
         if let Some(result) = model.character.letters_result {
             letters_result(ctx, result, &mut actions);
+        }
+        if let Some(title) = &model.character.warp_prompt {
+            egui::Area::new(egui::Id::new("warp"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(format!("Warp to {title}?"));
+                            ui.horizontal(|ui| {
+                                if ui.button("Warp").clicked() {
+                                    actions.push(Action::Warp);
+                                }
+                                if ui.button("Stay").clicked() {
+                                    actions.push(Action::StayHere);
+                                }
+                            });
+                            ui.label(egui::RichText::new("Enter to warp, Esc to stay").small());
+                        });
+                    });
+                });
         }
         if model.character.replaying {
             replay_banner(ctx, &mut actions);

@@ -106,6 +106,23 @@ fn real_level_camera_paths() {
             collectibles += here;
         }
         println!("{}: {collectibles} collectibles", level.id);
+        let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
+        println!(
+            "{}: warps {:?}",
+            level.id,
+            warps
+                .iter()
+                .map(|w| format!(
+                    "{} at {:.0} {:.0} {:.0}",
+                    w.title, w.position.x, w.position.y, w.position.z
+                ))
+                .collect::<Vec<_>>()
+        );
+        if level.id == "HUB" {
+            assert_eq!(warps.len(), 9, "the Hub's portals");
+        } else if level.id != "SkateShop" {
+            assert_eq!(warps.len(), 1, "{}: the way back", level.id);
+        }
         let mut objects = built;
         for step in 0..600 {
             behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false);
