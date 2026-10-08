@@ -174,6 +174,24 @@ struct Globals {
     bind_group: wgpu::BindGroup,
 }
 
+/// A particle quad's corner: where, its texture coordinate, and its tint.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ParticleVertex {
+    pub position: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: [u8; 4],
+}
+
+/// Particles to draw with one texture: its index (in
+/// [`Renderer::set_particle_textures`]'s list), whether they add light or
+/// blend over, and their quads' triangles.
+pub struct ParticleBatch {
+    pub texture: usize,
+    pub additive: bool,
+    pub vertices: Vec<ParticleVertex>,
+}
+
 pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -196,6 +214,12 @@ pub struct Renderer {
     shadow: Option<(wgpu::Buffer, u32)>,
     color_overlay: wgpu::RenderPipeline,
     color_solid: wgpu::RenderPipeline,
+    /// Particles: their pipelines (additive, blended), texture layout and
+    /// textures, and this frame's draws.
+    particle_pipelines: [wgpu::RenderPipeline; 2],
+    particle_layout: wgpu::BindGroupLayout,
+    particle_textures: Vec<wgpu::BindGroup>,
+    particles: Vec<(wgpu::Buffer, u32, usize, bool)>,
     pub collision_view: CollisionView,
     pub show_sky: bool,
     /// When set, frames are drawn from this camera instead of the one
@@ -277,6 +301,36 @@ impl Renderer {
         let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
         let color_overlay = make_collision_pipeline(&device, &globals_layout, color_format, true);
         let color_solid = make_collision_pipeline(&device, &globals_layout, color_format, false);
+        let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("particle"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let particle_pipelines = [true, false].map(|additive| {
+            make_particle_pipeline(
+                &device,
+                &globals_layout,
+                &particle_layout,
+                color_format,
+                additive,
+            )
+        });
 
         Self {
             device,
@@ -296,6 +350,10 @@ impl Renderer {
             shadow: None,
             color_overlay,
             color_solid,
+            particle_pipelines,
+            particle_layout,
+            particle_textures: Vec::new(),
+            particles: Vec::new(),
             collision_view: CollisionView::Hidden,
             show_sky: true,
             scripted_camera: None,
@@ -311,6 +369,49 @@ impl Renderer {
     /// Replaces the rail and spawn geometry (empty hides it).
     pub fn set_markers(&mut self, vertices: &[ColorVertex]) {
         self.markers = color_buffer(&self.device, "markers", vertices);
+    }
+
+    /// The particles' textures, by index (the first is used where one's
+    /// missing).
+    pub fn set_particle_textures(&mut self, textures: &[TextureData]) {
+        self.particle_textures = textures
+            .iter()
+            .map(|data| {
+                let view = upload_texture(&self.device, &self.queue, data);
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("particle"),
+                    layout: &self.particle_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                })
+            })
+            .collect();
+    }
+
+    /// This frame's particles.
+    pub fn set_particles(&mut self, batches: &[ParticleBatch]) {
+        self.particles = batches
+            .iter()
+            .filter(|b| !b.vertices.is_empty())
+            .map(|b| {
+                let buffer = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("particles"),
+                        contents: bytemuck::cast_slice(&b.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                (buffer, b.vertices.len() as u32, b.texture, b.additive)
+            })
+            .collect();
     }
 
     /// The character's shadow (translucent, drawn over the level), or
@@ -541,6 +642,20 @@ impl Renderer {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
             }
+            // Particles, over everything else, without hiding what's
+            // behind them.
+            if !only_collision && !self.particle_textures.is_empty() {
+                for (buffer, count, texture, additive) in &self.particles {
+                    let group = self
+                        .particle_textures
+                        .get(*texture)
+                        .unwrap_or(&self.particle_textures[0]);
+                    pass.set_pipeline(&self.particle_pipelines[usize::from(!*additive)]);
+                    pass.set_bind_group(1, group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..*count, 0..1);
+                }
+            }
             if let Some((buffer, count)) = &self.markers {
                 pass.set_pipeline(&self.color_solid);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -584,6 +699,71 @@ fn color_buffer(
 
 /// Draws colored triangles: translucent over the level (`overlay`), or
 /// solid on their own.
+fn make_particle_pipeline(
+    device: &wgpu::Device,
+    globals_layout: &wgpu::BindGroupLayout,
+    particle_layout: &wgpu::BindGroupLayout,
+    color_format: wgpu::TextureFormat,
+    additive: bool,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("particle.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("particle"),
+        bind_group_layouts: &[globals_layout, particle_layout],
+        push_constant_ranges: &[],
+    });
+    let blend = if additive {
+        wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        }
+    } else {
+        wgpu::BlendState::ALPHA_BLENDING
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("particle"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<ParticleVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Unorm8x4],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::GreaterEqual,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn make_collision_pipeline(
     device: &wgpu::Device,
     globals_layout: &wgpu::BindGroupLayout,

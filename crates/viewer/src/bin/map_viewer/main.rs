@@ -15,7 +15,7 @@ mod settings;
 mod sparks;
 mod ui;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -248,8 +248,10 @@ struct LoadedLevel {
     portals: Vec<Portal>,
     /// The level from above, for the map in the corner.
     minimap: Option<minimap::Minimap>,
-    /// The level's particle effects (steam, sparks, dust).
+    /// The level's particle effects (steam, sparks, dust), and their
+    /// textures' places in the renderer's list by name.
     particles: desa_viewer::particles::Particles,
+    particle_textures: HashMap<u32, usize>,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -395,6 +397,23 @@ fn load_level(
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     let particles = desa_viewer::particles::Particles::new(behaviour.program(), &nodes);
+    // The particles' textures: a soft round one first (for those missing),
+    // then the level's.
+    let mut particle_list = vec![soft_disc()];
+    let mut particle_textures = HashMap::new();
+    for (name, data) in &files.particle_images {
+        let image = ngc_texture::img::ImgFile::parse(data).and_then(|f| f.decode());
+        if let Ok(image) = image {
+            particle_textures.insert(*name, particle_list.len());
+            particle_list.push(desa_viewer::level::TextureData {
+                checksum: *name,
+                width: image.width,
+                height: image.height,
+                levels: vec![image.rgba],
+            });
+        }
+    }
+    renderer.set_particle_textures(&particle_list);
     Ok((
         LoadedLevel {
             id: info.id.clone(),
@@ -412,6 +431,7 @@ fn load_level(
             portals,
             minimap,
             particles,
+            particle_textures,
             markers: (false, false),
         },
         stats,
@@ -671,6 +691,42 @@ fn photo_path() -> PathBuf {
     pictures
         .join("DESA Map Viewer")
         .join(format!("desa_{stamp}.png"))
+}
+
+/// A soft round particle texture: white, fading out from the middle.
+fn soft_disc() -> desa_viewer::level::TextureData {
+    const SIZE: u32 = 32;
+    let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let d = Vec3::new(x as f32 + 0.5 - 16.0, y as f32 + 0.5 - 16.0, 0.0).length() / 16.0;
+            let a = ((1.0 - d).clamp(0.0, 1.0) * 255.0) as u8;
+            pixels.extend([255, 255, 255, a]);
+        }
+    }
+    desa_viewer::level::TextureData {
+        checksum: 0,
+        width: SIZE,
+        height: SIZE,
+        levels: vec![pixels],
+    }
+}
+
+/// The particles' quads for the renderer, their textures by place.
+fn particle_batches(
+    particles: &desa_viewer::particles::Particles,
+    textures: &HashMap<u32, usize>,
+    eye: Vec3,
+) -> Vec<renderer::ParticleBatch> {
+    particles
+        .quads(eye)
+        .into_iter()
+        .map(|(texture, additive, vertices)| renderer::ParticleBatch {
+            texture: textures.get(&texture).copied().unwrap_or(0),
+            additive,
+            vertices,
+        })
+        .collect()
 }
 
 /// How far away objects' sounds fade out (units).
@@ -2823,7 +2879,6 @@ impl<'a> App<'a> {
                 .map(|world| skater_shadow(skater, world))
                 .unwrap_or_default();
             shadow.extend(self.sparks.vertices(self.camera.position));
-            shadow.extend(level.particles.vertices(self.camera.position));
             // The way back to the Hub, glowing.
             // (Our own ring where the level has no particles for it.)
             for portal in level.portals.iter().filter(|p| {
@@ -2849,10 +2904,7 @@ impl<'a> App<'a> {
             }
             return;
         }
-        // Not skating: the level's particle effects all the same.
-        level
-            .renderer
-            .set_shadow(&level.particles.vertices(self.camera.position));
+        level.renderer.set_shadow(&[]);
         if model.playing && model.duration > 0.0 {
             // Everything loops here, even one-off moves like an ollie.
             model.time = (model.time + dt * model.speed) % model.duration;
@@ -3050,6 +3102,12 @@ impl<'a> App<'a> {
             level
                 .particles
                 .update(level.behaviour.program(), dt, self.camera.position);
+            let batches = particle_batches(
+                &level.particles,
+                &level.particle_textures,
+                self.camera.position,
+            );
+            level.renderer.set_particles(&batches);
             // The sounds they played, quieter further from the skater.
             let sounds = std::mem::take(&mut level.behaviour.sounds);
             if let (Some(audio), Some(skater)) = (
@@ -3695,6 +3753,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         let LoadedLevel {
             behaviour,
             particles,
+            particle_textures,
             world,
             renderer,
             ..
@@ -3702,7 +3761,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         for _ in 0..(args.time.max(2.0) * 60.0) as usize {
             particles.update(behaviour.program(), 1.0 / 60.0, camera.position);
         }
-        let mut overlay = particles.vertices(camera.position);
+        let batches = particle_batches(particles, particle_textures, camera.position);
+        renderer.set_particles(&batches);
+        let mut overlay = Vec::new();
         if let (Some((skater, ..)), Some(world)) = (&app.skating, world.as_ref()) {
             overlay.extend(skater_shadow(skater, world));
             overlay.extend(app.sparks.vertices(camera.position));

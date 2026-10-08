@@ -66,6 +66,9 @@ pub struct LevelFiles {
     pub key_tables: Option<(Vec<u8>, Vec<u8>)>,
     /// The level's own scripts (every `.qb` in `X.prg`).
     pub scripts: Vec<Vec<u8>>,
+    /// Particle textures (`images/particles/NAME.img.ngc`) by name's
+    /// checksum, as `CreateParticleSystem ... texture = NAME` names them.
+    pub particle_images: HashMap<u32, Vec<u8>>,
 }
 
 /// The raw files for one playable character.
@@ -277,6 +280,7 @@ impl GameData {
         let mut models = HashMap::new();
         let mut animations: HashMap<String, Vec<u8>> = HashMap::new();
         let mut scripts = Vec::new();
+        let mut particle_images = HashMap::new();
         let (nodes, cameras) = match self.read_archive(&format!("{id}.prg"))? {
             Some(data) => {
                 let archive =
@@ -284,8 +288,16 @@ impl GameData {
                 let nodes = entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?;
                 collect_models(&archive, &mut models)?;
                 for e in archive.entries() {
-                    if e.path().to_ascii_lowercase().ends_with(".qb") {
+                    let path = e.path().replace('\\', "/").to_ascii_lowercase();
+                    if path.ends_with(".qb") {
                         scripts.push(e.contents()?.into_owned());
+                    }
+                    if let Some(name) = path
+                        .split("images/particles/")
+                        .nth(1)
+                        .and_then(|n| n.strip_suffix(".img.ngc"))
+                    {
+                        particle_images.insert(qb::checksum(name), e.contents()?.into_owned());
                     }
                 }
                 let mut cameras = Vec::new();
@@ -331,6 +343,7 @@ impl GameData {
             skeletons,
             key_tables,
             scripts,
+            particle_images,
         })
     }
 

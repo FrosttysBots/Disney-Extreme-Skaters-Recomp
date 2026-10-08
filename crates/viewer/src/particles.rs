@@ -21,13 +21,14 @@
 //!
 //! Units and scales are this module's reading of the values (speeds in
 //! units a frame, at 60 frames a second), not checked against the game.
-//! They're drawn as soft round blobs facing the camera.
+//! They're drawn as quads facing the camera with the level's particle
+//! textures (`images/particles`), adding light or blending over as the
+//! system's `blendmode` says.
 
 use glam::Vec3;
 use qb::vm::{Host, Outcome, Program, Thread};
 use qb::{Value, checksum};
 
-use crate::collision::ColorVertex;
 use crate::nodes::LevelNodes;
 
 /// Frames a second (speeds and forces are per frame).
@@ -61,6 +62,9 @@ struct Particle {
 struct System {
     /// The emitter's node name.
     name: u32,
+    /// Its texture's name (checksum) and whether it adds light.
+    texture: u32,
+    additive: bool,
     emitter: Vec3,
     thread: Thread,
     settings: Settings,
@@ -79,7 +83,8 @@ pub struct Particles {
 /// Catches `CreateParticleSystem`: the emit script and the most particles.
 #[derive(Default)]
 struct Create {
-    made: Option<(u32, usize)>,
+    /// The emit script, most particles, texture and whether they add.
+    made: Option<(u32, usize, u32, bool)>,
 }
 
 impl Host for Create {
@@ -91,7 +96,15 @@ impl Host for Create {
                     .and_then(Value::as_int)
                     .unwrap_or(100)
                     .max(1) as usize;
-                self.made = Some((script, max.min(MOST)));
+                let texture = args
+                    .get(checksum("texture"))
+                    .and_then(Value::as_name)
+                    .unwrap_or(0);
+                let additive = args
+                    .get(checksum("blendmode"))
+                    .and_then(Value::as_name)
+                    .is_none_or(|b| b == checksum("Add") || b == checksum("FixAdd"));
+                self.made = Some((script, max.min(MOST), texture, additive));
             }
         }
         Outcome::Done(false)
@@ -254,7 +267,7 @@ impl Particles {
             let mut host = Create::default();
             let mut thread = Thread::new(emitter.script, Vec::new());
             thread.run(program, &mut host, 0.0);
-            let Some((script, max)) = host.made else {
+            let Some((script, max, texture, additive)) = host.made else {
                 return;
             };
             if !program.has_script(script) {
@@ -262,6 +275,8 @@ impl Particles {
             }
             self.systems.push(System {
                 name: emitter.name,
+                texture,
+                additive,
                 emitter: emitter.position,
                 thread: Thread::new(script, Vec::new()),
                 settings: Settings {
@@ -326,11 +341,26 @@ impl Particles {
         }
     }
 
-    /// The particles as soft round blobs facing `eye`.
-    pub fn vertices(&self, eye: Vec3) -> Vec<ColorVertex> {
-        let mut out = Vec::new();
+    /// The particles as textured quads facing `eye`, by texture (checksum)
+    /// and blending.
+    pub fn quads(&self, eye: Vec3) -> Vec<(u32, bool, Vec<crate::renderer::ParticleVertex>)> {
+        let mut out: Vec<(u32, bool, Vec<crate::renderer::ParticleVertex>)> = Vec::new();
         for system in &self.systems {
+            if system.particles.is_empty() {
+                continue;
+            }
+            let at = match out
+                .iter()
+                .position(|(t, a, _)| *t == system.texture && *a == system.additive)
+            {
+                Some(i) => i,
+                None => {
+                    out.push((system.texture, system.additive, Vec::new()));
+                    out.len() - 1
+                }
+            };
             let s = &system.settings;
+            let vertices = &mut out[at].2;
             for p in &system.particles {
                 let t = p.age / p.life;
                 let (from, to, k) = if t < s.midtime {
@@ -338,35 +368,29 @@ impl Particles {
                 } else {
                     (s.color[1], s.color[2], (t - s.midtime) / (1.0 - s.midtime))
                 };
-                let mix = |i: usize| (from[i] + (to[i] - from[i]) * k).clamp(0.0, 1.0);
-                let alpha = (mix(3) * 255.0) as u8;
-                if alpha == 0 {
+                let mix =
+                    |i: usize| ((from[i] + (to[i] - from[i]) * k).clamp(0.0, 1.0) * 255.0) as u8;
+                let color = [mix(0), mix(1), mix(2), mix(3)];
+                if color[3] == 0 {
                     continue;
                 }
-                let color = [
-                    (mix(0) * 255.0) as u8,
-                    (mix(1) * 255.0) as u8,
-                    (mix(2) * 255.0) as u8,
-                ];
                 let size = (s.size.0 + (s.size.1 - s.size.0) * t) * 0.5;
+                // Upright to the screen: right across the view, up from it.
                 let to_eye = (eye - p.position).normalize_or(Vec3::Z);
-                let side = to_eye.any_orthonormal_vector() * size;
-                let up = to_eye.cross(side.normalize_or(Vec3::X)) * size;
-                let centre = ColorVertex {
-                    position: p.position.to_array(),
-                    color: [color[0], color[1], color[2], alpha],
+                let right = Vec3::Y.cross(to_eye).normalize_or(Vec3::X) * size;
+                let up = to_eye.cross(right.normalize_or(Vec3::X)) * size;
+                let corner = |x: f32, y: f32, u: f32, v: f32| crate::renderer::ParticleVertex {
+                    position: (p.position + right * x + up * y).to_array(),
+                    uv: [u, v],
+                    color,
                 };
-                const SIDES: usize = 6;
-                let rim = |i: usize| {
-                    let a = i as f32 / SIDES as f32 * std::f32::consts::TAU;
-                    ColorVertex {
-                        position: (p.position + side * a.cos() + up * a.sin()).to_array(),
-                        color: [color[0], color[1], color[2], 0],
-                    }
-                };
-                for i in 0..SIDES {
-                    out.extend([centre, rim(i), rim(i + 1)]);
-                }
+                let (a, b, c, d) = (
+                    corner(-1.0, 1.0, 0.0, 0.0),
+                    corner(1.0, 1.0, 1.0, 0.0),
+                    corner(1.0, -1.0, 1.0, 1.0),
+                    corner(-1.0, -1.0, 0.0, 1.0),
+                );
+                vertices.extend([a, b, c, a, c, d]);
             }
         }
         out
