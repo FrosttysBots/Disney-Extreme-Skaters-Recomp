@@ -70,6 +70,9 @@ pub struct CharacterModel {
     /// The skater's sounds (and the level's ambience) on, and the songs.
     pub sound: bool,
     pub music: bool,
+    /// Their volumes, 0 to 1.
+    pub effects_volume: f32,
+    pub music_volume: f32,
     /// The gamepad rumbles where the game's does.
     pub rumble: bool,
     /// In a two-minute run: the seconds left, and once it's over the
@@ -986,6 +989,16 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         );
         ui.checkbox(&mut model.music, "Music")
             .on_hover_text("The game's soundtrack, one song after another.");
+        ui.add(
+            egui::Slider::new(&mut model.effects_volume, 0.0..=1.0)
+                .text("sound")
+                .show_value(false),
+        );
+        ui.add(
+            egui::Slider::new(&mut model.music_volume, 0.0..=1.0)
+                .text("music")
+                .show_value(false),
+        );
         ui.checkbox(&mut model.show_map, "Map")
             .on_hover_text("The level from above round the skater, with what's to find (M).");
         ui.checkbox(&mut model.collect, "Collectibles").on_hover_text(

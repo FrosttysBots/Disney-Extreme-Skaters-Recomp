@@ -99,6 +99,10 @@ pub struct Audio {
     /// The character's voice lines by kind (`bail`, `trick`), the line
     /// playing, and a little randomness for which and whether.
     voices: HashMap<String, Vec<Clip>>,
+    /// The panel's volumes, 0 to 1: the effects (and ambience and voices)
+    /// and the music.
+    effects: f32,
+    music_level: f32,
     voice: Option<Player>,
     seed: u64,
 }
@@ -119,6 +123,8 @@ impl Audio {
             music: None,
             ambience: None,
             voices: HashMap::new(),
+            effects: 1.0,
+            music_level: 1.0,
             voice: None,
             seed: 0x9E37_79B9_7F4A_7C15,
         })
@@ -193,9 +199,25 @@ impl Audio {
             return;
         };
         let player = Player::connect_new(self.sink.mixer());
-        player.set_volume(MASTER * 1.2);
+        player.set_volume(MASTER * 1.2 * self.effects);
         player.append(clip.buffer());
         self.voice = Some(player);
+    }
+
+    /// The panel's volumes, 0 to 1: the effects and the music (playing
+    /// ones follow at once).
+    pub fn set_volumes(&mut self, effects: f32, music: f32) {
+        if (effects, music) == (self.effects, self.music_level) {
+            return;
+        }
+        self.effects = effects;
+        self.music_level = music;
+        if let Some(player) = &self.music {
+            player.set_volume(MUSIC_VOLUME * music);
+        }
+        if let Some((player, _)) = &self.ambience {
+            player.set_volume(AMBIENCE_VOLUME * effects);
+        }
     }
 
     /// Silences the loops and the music (skating stopped).
@@ -209,7 +231,7 @@ impl Audio {
     /// Plays a song (a `.dtk` track) in place of the last.
     pub fn play_music(&mut self, track: Vec<u8>) {
         let player = Player::connect_new(self.sink.mixer());
-        player.set_volume(MUSIC_VOLUME);
+        player.set_volume(MUSIC_VOLUME * self.music_level);
         player.append(Stream(Dtk::new(track)));
         self.music = Some(player);
     }
@@ -227,7 +249,7 @@ impl Audio {
     pub fn set_ambience(&mut self, track: Option<Vec<u8>>) {
         self.ambience = track.map(|track| {
             let player = Player::connect_new(self.sink.mixer());
-            player.set_volume(AMBIENCE_VOLUME);
+            player.set_volume(AMBIENCE_VOLUME * self.effects);
             player.append(Stream(Dtk::new(track.clone())));
             (player, track)
         });
@@ -259,7 +281,7 @@ impl Audio {
             return;
         };
         let player = Player::connect_new(self.sink.mixer());
-        player.set_volume(volume * MASTER);
+        player.set_volume(volume * MASTER * self.effects);
         player.set_speed(speed.max(0.05));
         player.append(clip.buffer());
         player.detach();
@@ -338,10 +360,24 @@ impl Audio {
         let roll = rolling
             .then(|| self.terrain_sound(skater.terrain, Moment::Roll))
             .flatten();
-        Self::keep_looping(&self.clips, &self.sink, &mut self.roll, roll, speed);
+        Self::keep_looping(
+            &self.clips,
+            &self.sink,
+            &mut self.roll,
+            roll,
+            speed,
+            self.effects,
+        );
         let grind = rail.and_then(|t| self.terrain_sound(t, Moment::Grind));
         let grind_speed = skater.grind.map_or(0.0, |g| g.speed);
-        Self::keep_looping(&self.clips, &self.sink, &mut self.grind, grind, grind_speed);
+        Self::keep_looping(
+            &self.clips,
+            &self.sink,
+            &mut self.grind,
+            grind,
+            grind_speed,
+            self.effects,
+        );
     }
 
     /// Keeps `slot` playing `wanted` (starting it or changing it over),
@@ -352,6 +388,7 @@ impl Audio {
         slot: &mut Option<Loop>,
         wanted: Option<TerrainSound>,
         speed: f32,
+        effects: f32,
     ) {
         let Some(sound) = wanted else {
             *slot = None;
@@ -375,7 +412,7 @@ impl Audio {
         if let Some(l) = slot {
             l.player.set_speed(pitch.max(0.05));
             l.player
-                .set_volume(sound.volume * loudness * MASTER * (0.3 + 0.7 * f));
+                .set_volume(sound.volume * loudness * MASTER * effects * (0.3 + 0.7 * f));
         }
     }
 }

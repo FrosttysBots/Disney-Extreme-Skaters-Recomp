@@ -894,6 +894,8 @@ impl<'a> App<'a> {
     fn new(settings: &'a mut Settings) -> Self {
         let speed = settings.speed.unwrap_or(DEFAULT_SPEED);
         let camera = settings.best.get("camera").map_or(1, |c| *c as usize);
+        let volume = |key: &str| settings.best.get(key).map_or(1.0, |v| *v as f32 / 100.0);
+        let (effects_volume, music_volume) = (volume("volume.effects"), volume("volume.music"));
         App {
             settings,
             gpu: None,
@@ -944,6 +946,8 @@ impl<'a> App<'a> {
                     auto_kick: true,
                     sound: true,
                     music: true,
+                    effects_volume,
+                    music_volume,
                     rumble: true,
                     run_clock: None,
                     run_result: None,
@@ -1247,6 +1251,21 @@ impl<'a> App<'a> {
     /// Keeps the music going while skating: the next song when one ends
     /// (with Music on), and the level's ambience (with Sound on).
     fn update_music(&mut self) {
+        // The panel's volumes, kept when changed.
+        let volumes = (
+            self.model.character.effects_volume,
+            self.model.character.music_volume,
+        );
+        if let Some(audio) = &mut self.audio {
+            audio.set_volumes(volumes.0, volumes.1);
+        }
+        for (key, value) in [("volume.effects", volumes.0), ("volume.music", volumes.1)] {
+            let value = (value * 100.0).round() as u32;
+            if self.settings.best.get(key) != Some(&value) {
+                self.settings.best.insert(key.into(), value);
+                self.settings.save();
+            }
+        }
         let skating = self.skating.is_some();
         let (Some(audio), Some(data)) = (&mut self.audio, &mut self.data) else {
             return;
