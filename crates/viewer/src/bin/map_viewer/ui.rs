@@ -92,6 +92,10 @@ pub struct CharacterModel {
     pub trick_list: Vec<String>,
     /// The level's gaps (name, points) and whether each has been landed.
     pub gap_list: Vec<(String, u32, bool)>,
+    /// The level's records for the character (shown in the panel), and a
+    /// new one being announced.
+    pub records: Vec<String>,
+    pub record_message: Option<String>,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -483,6 +487,20 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
         }
         special_meter(ctx, model.character.special);
+        if let Some(text) = &model.character.record_message {
+            egui::Area::new(egui::Id::new("record"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 130.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(text)
+                            .size(22.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(110, 230, 110))
+                            .background_color(egui::Color32::from_black_alpha(140)),
+                    );
+                });
+        }
         if let Some((got, of)) = model.character.collected {
             egui::Area::new(egui::Id::new("collected"))
                 .anchor(egui::Align2::RIGHT_TOP, [-16.0, 74.0])
@@ -785,6 +803,15 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     );
                     for line in &model.trick_list {
                         ui.label(egui::RichText::new(line).small().monospace());
+                    }
+                });
+        }
+        if !model.records.is_empty() {
+            egui::CollapsingHeader::new("Records")
+                .id_salt("records")
+                .show(ui, |ui| {
+                    for line in &model.records {
+                        ui.label(egui::RichText::new(line).small());
                     }
                 });
         }

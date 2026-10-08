@@ -424,6 +424,8 @@ pub struct Skater {
     /// The combo so far, the last one finished, and the points banked.
     pub combo_tricks: Combo,
     pub last_combo: Option<Landed>,
+    /// How many combos have ended (landed or bailed), to tell a new one.
+    pub combos_ended: u32,
     /// Degrees turned in the air since leaving the ground or a rail, and
     /// the way of the last turn.
     air_spin: f32,
@@ -518,6 +520,7 @@ impl Skater {
             pressed: (false, false),
             combo_tricks: Combo::default(),
             last_combo: None,
+            combos_ended: 0,
             air_spin: 0.0,
             air_spin_sign: 1.0,
             special_meter: 0.0,
@@ -600,6 +603,7 @@ impl Skater {
             total,
             bailed: !landed,
         });
+        self.combos_ended += 1;
     }
 
     /// Air tricks: start one on a button press (when none is playing, or

@@ -57,6 +57,10 @@ skater is and what it's doing.
 - Birds: skate up to a perched seagull (Beach's ship deck), crow
   (Graveyard) or bird and it takes off. Bumping into an animal (Scar on
   Pride Rock, the hyenas) knocks the skater into a flail.
+- Records: your best combo, longest grind, manual and lip trick, and
+  most tricks in a combo on each level, in the panel's Records list; a
+  new one past the game's mark (10,000 points, 10 seconds, 5 tricks) is
+  announced as the game does ("Record Combo Score!").
 - The Gaps list in the panel while skating: every gap the level names,
   ticked off as you land each one (kept between sessions).
 - Teleporters and water: falling in the Hub's harbour puts you back on

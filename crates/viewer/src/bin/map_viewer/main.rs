@@ -547,6 +547,28 @@ const COLLECT_SPIN: f32 = 250.0;
 /// The special item's bit in what's collected.
 const SPECIAL_BIT: u32 = 1 << 25;
 
+/// The records kept, and how the panel names them.
+const RECORDS: [(&str, &str); 5] = [
+    ("combo", "Best combo"),
+    ("grind", "Longest grind"),
+    ("manual", "Longest manual"),
+    ("lip", "Longest lip trick"),
+    ("tricks", "Most tricks in a combo"),
+];
+
+/// How long each record announcement shows (`time = 2000`).
+const RECORD_TIME: f32 = 2.0;
+
+/// A record's value as the game words it: points, "12.34 seconds", "7
+/// Tricks".
+fn record_value(kind: &str, value: u32) -> String {
+    match kind {
+        "combo" => format!("{value}"),
+        "tricks" => format!("{value} Tricks"),
+        _ => format!("{}.{:02} seconds", value / 100, value % 100),
+    }
+}
+
 /// How near the skater picks a letter up: `Obj_SetInnerRadius 8` (feet).
 const LETTER_RADIUS: f32 = 8.0 * 12.0;
 /// How fast the letters spin (`Obj_RotY speed = 200`, degrees a second).
@@ -650,6 +672,14 @@ struct App<'a> {
     letters: Option<LetterRun>,
     /// The character's collectibles on the level, while skating.
     collecting: Option<Collecting>,
+    /// The combo under way's longest grind, manual and lip trick (seconds)
+    /// and those going on, the combos ended so far, and new records
+    /// waiting to be announced (with how long the one shown has had).
+    combo_lengths: [f32; 3],
+    running_lengths: [f32; 3],
+    combos_seen: u32,
+    record_queue: std::collections::VecDeque<String>,
+    record_shown: f32,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -736,6 +766,8 @@ impl<'a> App<'a> {
                     skate_status: String::new(),
                     trick_list: Vec::new(),
                     gap_list: Vec::new(),
+                    records: Vec::new(),
+                    record_message: None,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -755,6 +787,11 @@ impl<'a> App<'a> {
             replay: None,
             letters: None,
             collecting: None,
+            combo_lengths: [0.0; 3],
+            running_lengths: [0.0; 3],
+            combos_seen: 0,
+            record_queue: Default::default(),
+            record_shown: 0.0,
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -1145,6 +1182,12 @@ impl<'a> App<'a> {
         let chase = ChaseCamera::behind(&skater, &physics);
         self.skating = Some((skater, physics, chase));
         self.start_collecting();
+        self.combo_lengths = [0.0; 3];
+        self.running_lengths = [0.0; 3];
+        self.combos_seen = 0;
+        self.record_queue.clear();
+        self.model.character.record_message = None;
+        self.show_records();
         self.model.character.skating = true;
         self.model.character.playing = false;
         self.set_looking(false);
@@ -1320,6 +1363,113 @@ impl<'a> App<'a> {
             .best
             .insert(collecting.key.clone(), collecting.got);
         self.settings.save();
+    }
+
+    /// The settings key for one of the level's records for the character.
+    fn record_key(&self, kind: &str) -> String {
+        let character = self
+            .model
+            .character
+            .current
+            .map_or("", |i| self.model.character.characters[i].id.as_str());
+        let level = self.level.as_ref().map_or("", |l| l.id.as_str());
+        format!("record.{kind}.{level}.{character}")
+    }
+
+    /// The records in the panel.
+    fn show_records(&mut self) {
+        let get = |app: &Self, kind: &str| app.settings.best.get(&app.record_key(kind)).copied();
+        let mut lines = Vec::new();
+        for (kind, label) in RECORDS {
+            if let Some(value) = get(self, kind) {
+                let value = if kind == "tricks" {
+                    value.to_string()
+                } else {
+                    record_value(kind, value)
+                };
+                lines.push(format!("{label}: {value}"));
+            }
+        }
+        self.model.character.records = lines;
+    }
+
+    /// The game's records (`CheckAndDisplayRecordScore`, after each combo
+    /// lands): the best combo score, the longest grind, manual and lip
+    /// trick, and the most tricks in a combo, each kept for the level and
+    /// character. A new one is announced ("Record Combo Score!", then the
+    /// value) when it's past the game's showing mark (10,000 points, 10
+    /// seconds, 5 tricks), one message after another with the gap sound.
+    fn update_records(&mut self, dt: f32) {
+        // The announcement showing, then the next.
+        self.record_shown += dt;
+        if self.model.character.record_message.is_some() && self.record_shown > RECORD_TIME {
+            self.model.character.record_message = None;
+        }
+        if self.model.character.record_message.is_none() {
+            if let Some(text) = self.record_queue.pop_front() {
+                self.model.character.record_message = Some(text);
+                self.record_shown = 0.0;
+                if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                    audio.play_named(qb::checksum("gapsound"), 1.0);
+                }
+            }
+        }
+        if self.replay.is_some() {
+            return;
+        }
+        let Some((skater, ..)) = &self.skating else {
+            return;
+        };
+        // How long each balance trick has gone on, the longest kept.
+        let now = [skater.grind.is_some(), skater.manual, skater.lip.is_some()];
+        for i in 0..3 {
+            self.running_lengths[i] = if now[i] {
+                self.running_lengths[i] + dt
+            } else {
+                0.0
+            };
+            self.combo_lengths[i] = self.combo_lengths[i].max(self.running_lengths[i]);
+        }
+        if skater.combos_ended == self.combos_seen {
+            return;
+        }
+        self.combos_seen = skater.combos_ended;
+        let lengths = std::mem::take(&mut self.combo_lengths);
+        let Some(landed) = skater.last_combo.as_ref().filter(|l| !l.bailed) else {
+            return;
+        };
+        let values = [
+            ("combo", landed.total),
+            ("grind", (lengths[0] * 100.0) as u32),
+            ("manual", (lengths[1] * 100.0) as u32),
+            ("lip", (lengths[2] * 100.0) as u32),
+            ("tricks", landed.combo.tricks.len() as u32),
+        ];
+        let mut changed = false;
+        for (kind, value) in values {
+            let key = self.record_key(kind);
+            if value == 0 || self.settings.best.get(&key).is_some_and(|b| *b >= value) {
+                continue;
+            }
+            self.settings.best.insert(key, value);
+            changed = true;
+            let (text, mark) = match kind {
+                "combo" => ("Record Combo Score!", 10_000),
+                "grind" => ("Record Grind Length!", 1000),
+                "manual" => ("Record Manual Length!", 1000),
+                "lip" => ("Record Liptrick Length!", 1000),
+                _ => ("Record Trick Combo!", 5),
+            };
+            if value >= mark {
+                self.record_queue.push_back(text.to_string());
+                self.record_queue
+                    .push_back(format!("{}!", record_value(kind, value)));
+            }
+        }
+        if changed {
+            self.settings.save();
+            self.show_records();
+        }
     }
 
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
@@ -2152,6 +2302,7 @@ impl<'a> App<'a> {
         self.update_run(dt);
         self.update_letters(dt);
         self.update_collecting();
+        self.update_records(dt);
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -2668,6 +2819,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
                 app.update_collecting();
+                app.update_records(1.0 / 60.0);
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
                 if let Some(level) = &mut app.level {
