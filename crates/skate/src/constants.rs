@@ -177,6 +177,14 @@ pub struct Physics {
     pub grind_balance: BalanceParams,
     /// Balancing lip tricks (`LipParams`, by the lip balance stat).
     pub lip_balance: BalanceParams,
+    /// Skitching (`SkitchParams`): balancing on the car, how far behind a
+    /// car it can start (`Skitch_Max_Distance`), how far behind its back
+    /// the skater hangs (`Skitch_Offset`), and how long up has to be held
+    /// (`skitch_hold_time`, seconds).
+    pub skitch_balance: BalanceParams,
+    pub skitch_max_distance: f32,
+    pub skitch_offset: f32,
+    pub skitch_hold_time: f32,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -267,6 +275,10 @@ impl Physics {
             manual_balance: BalanceParams::new(program, "ManualParams", stats),
             grind_balance: BalanceParams::new(program, "GrindParams", stats),
             lip_balance: BalanceParams::new(program, "LipParams", stats),
+            skitch_balance: BalanceParams::new(program, "SkitchParams", stats),
+            skitch_max_distance: plain("Skitch_Max_Distance", 120.0),
+            skitch_offset: plain("Skitch_Offset", 27.0),
+            skitch_hold_time: plain("skitch_hold_time", 200.0) / 1000.0,
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),

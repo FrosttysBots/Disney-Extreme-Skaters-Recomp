@@ -218,6 +218,33 @@ impl Behaviour {
         self.threads.retain(|(o, _)| *o != object);
     }
 
+    /// A vehicle the skater's skitching on: no more stopping for the
+    /// skater, off at its `SkitchSpeed` (the car script's header default,
+    /// in miles an hour).
+    pub fn skitch(&mut self, object: usize) {
+        let speed = self.scripts[object]
+            .and_then(|s| self.program.script(s))
+            .and_then(|body| {
+                body.iter().find_map(|t| match t {
+                    qb::Token::Name(n) if self.program.has_script(*n) => Some(*n),
+                    _ => None,
+                })
+            })
+            .and_then(|called| self.program.default_param(called, checksum("SkitchSpeed")))
+            .and_then(Value::as_f32)
+            .unwrap_or(30.0);
+        let state = &mut self.states[object];
+        state.exceptions.clear();
+        state.path.top_speed = speed * MPH;
+    }
+
+    /// Lets the vehicle go back to what its own script has it do.
+    pub fn unskitch(&mut self, object: usize) {
+        if let Some(script) = self.scripts[object] {
+            self.start(object, Thread::new(script, Vec::new()));
+        }
+    }
+
     /// Runs `script` as the object's script.
     pub fn run_script(&mut self, object: usize, script: u32) {
         self.start(object, Thread::new(script, Vec::new()));
@@ -345,6 +372,18 @@ impl Behaviour {
     /// Where an object is now (in mesh space).
     pub fn position(&self, object: usize) -> Vec3 {
         self.states[object].position
+    }
+
+    /// Which way an object faces (models face +Z) and how fast it's going
+    /// (along a path or straight to a spot).
+    pub fn motion(&self, object: usize) -> (Vec3, f32) {
+        let state = &self.states[object];
+        let speed = match state.moving {
+            Some((_, speed, _)) => speed,
+            None if state.path.target.is_some() => state.path.speed,
+            None => 0.0,
+        };
+        (state.rotation * Vec3::Z, speed)
     }
 
     /// Whether an object exists now (created and not killed).

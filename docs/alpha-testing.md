@@ -70,6 +70,10 @@ skater is and what it's doing.
   tricks landed, points, best combo, gaps and bails since you started.
 - The Gaps list in the panel while skating: every gap the level names,
   ticked off as you land each one (kept between sessions).
+- Skitching (Andy's Room): roll up behind one of the toy cars and hold W
+  (up): you hitch on ("Skitchin'", balance with A / D) and it sets off at
+  its skitch speed towing you; let go of W, fall off the meter or ollie
+  to come off.
 - Teleporters and water: falling in the Hub's harbour puts you back on
   the dock, as in the game.
 - Coming down a quarter pipe or landing a 180: you turn round and ride
@@ -112,7 +116,7 @@ skater is and what it's doing.
 
 ## Known differences from the game
 
-- Not yet: wall rides (the game barely uses them), skitching, the
+- Not yet: wall rides (the game barely uses them), the
   Simplified controls, goals besides the letters and scores and the other gameplay
   modes, and the level's
   other triggers (breakables, goal pickups).

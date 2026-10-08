@@ -865,6 +865,10 @@ struct App<'a> {
     splash_hold: Option<(FlyCamera, f32)>,
     /// Frames drawn (for things done now and then).
     frame: u32,
+    /// The level objects of the world's vehicles, in order, and the one
+    /// the skater's skitching on.
+    vehicle_objects: Vec<usize>,
+    skitched: Option<usize>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
@@ -1005,6 +1009,8 @@ impl<'a> App<'a> {
             replay: None,
             letters: None,
             photo: false,
+            vehicle_objects: Vec::new(),
+            skitched: None,
             frame: 0,
             splash_hold: None,
             camera_shown: usize::MAX,
@@ -1634,6 +1640,28 @@ impl<'a> App<'a> {
             .best
             .insert(collecting.key.clone(), collecting.got);
         self.settings.save();
+    }
+
+    /// A car the skater's started or stopped skitching on: off at its
+    /// skitch speed, or back to its own script.
+    fn update_skitch(&mut self) {
+        let now = self
+            .skating
+            .as_ref()
+            .and_then(|(s, ..)| s.skitch)
+            .and_then(|i| self.vehicle_objects.get(i).copied());
+        if now == self.skitched {
+            return;
+        }
+        if let Some(level) = &mut self.level {
+            if let Some(old) = self.skitched {
+                level.behaviour.unskitch(old);
+            }
+            if let Some(car) = now {
+                level.behaviour.skitch(car);
+            }
+        }
+        self.skitched = now;
     }
 
     /// The settings key for one of the level's records for the character.
@@ -2340,7 +2368,41 @@ impl<'a> App<'a> {
                     height: height + 24.0,
                 })
                 .collect();
+            // The vehicles going round, to skitch on.
+            let vehicles: Vec<(usize, skate::world::Vehicle)> = level
+                .nodes
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(i, o)| {
+                    o.kind == desa_viewer::nodes::ObjectKind::Vehicle && level.behaviour.alive(*i)
+                })
+                .filter_map(|(i, _)| {
+                    let Some(Some(objects::Placed::Prop { goal, copy })) =
+                        level.objects.placed.get(i)
+                    else {
+                        return None;
+                    };
+                    let props = if *goal {
+                        &level.objects.goal_props
+                    } else {
+                        &level.objects.props
+                    };
+                    let (facing, speed) = level.behaviour.motion(i);
+                    Some((
+                        i,
+                        skate::world::Vehicle {
+                            position: level.behaviour.position(i),
+                            forward: facing.with_y(0.0).normalize_or(Vec3::Z),
+                            speed,
+                            half_length: props.half_length(*copy),
+                        },
+                    ))
+                })
+                .collect();
+            self.vehicle_objects = vehicles.iter().map(|(i, _)| *i).collect();
             if let Some(world) = &mut level.world {
+                world.vehicles = vehicles.into_iter().map(|(_, v)| v).collect();
                 world.set_obstacles(obstacles);
             }
         }
@@ -2941,6 +3003,7 @@ impl<'a> App<'a> {
             self.update_run(dt);
             self.update_letters(dt);
             self.update_collecting();
+            self.update_skitch();
             self.update_records(dt);
             self.update_portals(dt);
         }
@@ -3572,6 +3635,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
                 app.update_collecting();
+                app.update_skitch();
                 app.update_records(1.0 / 60.0);
                 app.update_portals(1.0 / 60.0);
                 app.update_map();

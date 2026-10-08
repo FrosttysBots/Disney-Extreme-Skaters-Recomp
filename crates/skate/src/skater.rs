@@ -119,6 +119,8 @@ pub enum Action {
     FlailRight,
     /// On a rail.
     Grinding,
+    /// Towed along behind a vehicle (`Skitch`).
+    Skitching,
     /// Balancing on two wheels.
     Manual,
     /// Fallen off a manual (the game's `BailManual`) or a rail
@@ -236,6 +238,11 @@ const BAIL_TIME: f32 = 1.5;
 /// (`DoBalanceTrick ... Tweak = 1`, 5 for specials).
 const GRIND_TWEAK: u32 = 7;
 
+/// Skitching's points (`SetTrickScore 500`) and each frame's tweak
+/// (`Tweak = 5`).
+const SKITCH_SCORE: u32 = 500;
+const SKITCH_TWEAK: u32 = 5;
+
 /// How long a press of the grind button keeps looking for a rail.
 const GRIND_WINDOW: f32 = 0.5;
 const MANUAL_TWEAK: u32 = 1;
@@ -334,6 +341,10 @@ pub struct Skater {
     /// How long the skater has been crouched (tensing for an ollie).
     crouch_time: f32,
     pub grind: Option<Grind>,
+    /// Skitching: the vehicle (in [`World::vehicles`]) towing the skater,
+    /// and how long up has been held behind one.
+    pub skitch: Option<usize>,
+    skitch_hold: f32,
     /// Seconds since it last left a rail.
     since_rail: f32,
     /// Where it last stood on the ground: the nearest spawn to it is where
@@ -465,6 +476,8 @@ impl Skater {
             action: Action::Standing,
             action_time: 0.0,
             crouched: false,
+            skitch: None,
+            skitch_hold: 0.0,
             slope: 0.0,
             bump: None,
             flipped: false,
@@ -850,7 +863,7 @@ impl Skater {
 
     /// The balance meter from -1 to 1 while balancing a manual or a grind.
     pub fn balance_meter(&self) -> Option<f32> {
-        (self.manual || self.grind.is_some() || self.lip.is_some())
+        (self.manual || self.grind.is_some() || self.lip.is_some() || self.skitch.is_some())
             .then(|| (self.balance.angle / METER).clamp(-1.0, 1.0))
     }
 
@@ -1008,7 +1021,9 @@ impl Skater {
             self.velocity = limit_speed(self.velocity, p);
         }
         let before = self.position;
-        if self.lip.is_some() {
+        if self.skitch.is_some() {
+            self.skitch_step(input, p, world);
+        } else if self.lip.is_some() {
             self.lip_step(input, p);
         } else if self.grind.is_some() {
             self.grind_step(input, p, world);
@@ -1041,6 +1056,7 @@ impl Skater {
                 }
             }
         }
+        self.check_skitch(input, p, world);
         self.check_triggers(before, world, p);
         self.update_special();
         let anim = anims::choose(self);
@@ -1117,6 +1133,106 @@ impl Skater {
         self.balance_trick = trick;
         self.balance_time = 0.0;
         self.set_action(Action::Manual);
+    }
+
+    /// Starts skitching (the game's `Skitched`): rolling on the ground,
+    /// up held for `skitch_hold_time` within `Skitch_Max_Distance` behind a
+    /// moving vehicle and roughly in line with it.
+    fn check_skitch(&mut self, input: Input, p: &Physics, world: &World) {
+        let free = self.on_ground
+            && self.skitch.is_none()
+            && !self.manual
+            && self.grind.is_none()
+            && self.lip.is_none()
+            && matches!(
+                self.action,
+                Action::Rolling | Action::Pushing | Action::Crouching | Action::Standing
+            );
+        if !free || !input.push {
+            self.skitch_hold = 0.0;
+            return;
+        }
+        let behind = world.vehicles.iter().position(|v| {
+            let to = self.position - v.position;
+            let back = -to.dot(v.forward);
+            let across = (to - v.forward * to.dot(v.forward)).with_y(0.0).length();
+            back > v.half_length
+                && back < v.half_length + p.skitch_max_distance
+                && across < 40.0
+                && to.y.abs() < 60.0
+        });
+        let Some(vehicle) = behind else {
+            self.skitch_hold = 0.0;
+            return;
+        };
+        self.skitch_hold += STEP;
+        if self.skitch_hold < p.skitch_hold_time {
+            return;
+        }
+        // `Skitch`: a balance trick, "Skitchin'" for 500.
+        self.skitch = Some(vehicle);
+        self.skitch_hold = 0.0;
+        self.balance.start(&p.skitch_balance, !self.combo);
+        self.combo = true;
+        self.balance_trick = None;
+        self.balance_time = 0.0;
+        self.credit(Some(("Skitchin'".to_string(), SKITCH_SCORE)), true);
+        self.sounds.push(SkateSound::Gap);
+        self.set_action(Action::Skitching);
+    }
+
+    /// Towed behind the vehicle `Skitch_Offset` past its back, balancing
+    /// with left and right (`DoBalanceTrick ButtonA = Right ButtonB =
+    /// Left Type = Skitch Tweak = 5`); letting go of up or falling off the
+    /// meter lets go (`SkitchOut`, no bail), and an ollie jumps off with
+    /// the car's speed.
+    fn skitch_step(&mut self, input: Input, p: &Physics, world: &World) {
+        let Some(car) = self.skitch.and_then(|i| world.vehicles.get(i)).copied() else {
+            self.let_go_skitch(Vec3::ZERO);
+            return;
+        };
+        let velocity = car.forward * car.speed;
+        if self.crouched && !input.crouch {
+            self.crouched = false;
+            self.skitch = None;
+            self.velocity = velocity + Vec3::Y * self.jump_speed(p);
+            self.on_ground = false;
+            self.ollied = true;
+            self.position += Vec3::Y;
+            self.up = Vec3::Y;
+            self.air_time = 0.0;
+            self.sounds.push(SkateSound::Jump { from_rail: false });
+            self.set_action(Action::Air);
+            return;
+        }
+        self.crouched = input.crouch;
+        let lean = self
+            .balance
+            .update(input.turn > 0.0, input.turn < 0.0, &p.skitch_balance, STEP);
+        self.combo_tricks.tweak(SKITCH_TWEAK);
+        if !input.push || lean != Lean::Balanced {
+            self.let_go_skitch(velocity);
+            return;
+        }
+        // Behind the car, on the ground there.
+        let spot = car.position - car.forward * (car.half_length + p.skitch_offset);
+        let ground = world
+            .ray(spot + Vec3::Y * 50.0, spot - Vec3::Y * 150.0)
+            .filter(|hit| !is_wall(hit, p));
+        self.position = ground.map_or(spot, |hit| hit.point);
+        self.up = ground.map_or(Vec3::Y, |hit| hit.normal);
+        self.velocity = velocity;
+        self.heading = car.forward.x.atan2(car.forward.z);
+        self.on_ground = true;
+    }
+
+    /// Lets go of the car (`SkitchOut`): rolling on at its speed, and the
+    /// combo lands.
+    fn let_go_skitch(&mut self, velocity: Vec3) {
+        self.skitch = None;
+        self.velocity = velocity;
+        self.end_combo(true);
+        self.set_action(Action::Rolling);
     }
 
     /// Whether `press` came within the last `window` seconds (this step

@@ -32,6 +32,16 @@ pub struct Obstacle {
     pub height: f32,
 }
 
+/// A vehicle going round the level, to skitch on: where it is, which way
+/// it faces (flat), how fast it goes along that, and half its length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Vehicle {
+    pub position: Vec3,
+    pub forward: Vec3,
+    pub speed: f32,
+    pub half_length: f32,
+}
+
 /// [`Hit::object`] for an [`Obstacle`].
 pub const OBSTACLE: u32 = u32::MAX;
 
@@ -41,6 +51,8 @@ pub struct World {
     pub rails: Rails,
     /// What moves about (pedestrians), where it is now.
     obstacles: Vec<Obstacle>,
+    /// The vehicles going round, where they are now.
+    pub vehicles: Vec<Vehicle>,
 }
 
 impl World {
@@ -49,6 +61,7 @@ impl World {
             collision,
             rails: Rails::default(),
             obstacles: Vec::new(),
+            vehicles: Vec::new(),
         }
     }
 
