@@ -2356,7 +2356,7 @@ impl<'a> App<'a> {
         if let Some(level) = &mut self.level {
             let crowd = &level.objects.crowd;
             let goal_crowd = &level.objects.goal_crowd;
-            let obstacles = crowd
+            let mut obstacles: Vec<skate::world::Obstacle> = crowd
                 .footprints()
                 .filter(|_| objects)
                 .chain(goal_crowd.footprints().filter(|_| goal_objects))
@@ -2401,6 +2401,15 @@ impl<'a> App<'a> {
                 })
                 .collect();
             self.vehicle_objects = vehicles.iter().map(|(i, _)| *i).collect();
+            // Small vehicles (the toy cars, not the Hub's plane or Zurg's
+            // platform) are solid too: the skater bumps off them.
+            obstacles.extend(vehicles.iter().filter(|(_, v)| v.half_length < 60.0).map(
+                |(_, v)| skate::world::Obstacle {
+                    base: v.position - Vec3::Y * 24.0,
+                    radius: v.half_length * 0.8,
+                    height: 64.0,
+                },
+            ));
             if let Some(world) = &mut level.world {
                 world.vehicles = vehicles.into_iter().map(|(_, v)| v).collect();
                 world.set_obstacles(obstacles);
