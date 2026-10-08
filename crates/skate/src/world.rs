@@ -53,6 +53,8 @@ pub struct World {
     obstacles: Vec<Obstacle>,
     /// The vehicles going round, where they are now.
     pub vehicles: Vec<Vehicle>,
+    /// Collision objects gone (broken): passed through, triggers and all.
+    disabled: std::collections::HashSet<u32>,
 }
 
 impl World {
@@ -62,6 +64,7 @@ impl World {
             rails: Rails::default(),
             obstacles: Vec::new(),
             vehicles: Vec::new(),
+            disabled: Default::default(),
         }
     }
 
@@ -74,6 +77,11 @@ impl World {
             .map(|o| o.bbox[1])
             .reduce(f32::min)
             .unwrap_or(f32::NEG_INFINITY)
+    }
+
+    /// Takes a collision object out (a breakable that's been broken).
+    pub fn disable(&mut self, object: u32) {
+        self.disabled.insert(object);
     }
 
     /// What moves about, where it is now.
@@ -157,6 +165,9 @@ impl World {
         let direction = to - from;
         let mut out = Vec::new();
         for object in &self.collision.objects {
+            if self.disabled.contains(&object.checksum) {
+                continue;
+            }
             let [x0, y0, z0, x1, y1, z1] = object.bbox;
             if max.x < x0 || min.x > x1 || max.y < y0 || min.y > y1 || max.z < z0 || min.z > z1 {
                 continue;
@@ -191,6 +202,9 @@ impl World {
         let direction = to - from;
         let mut best: Option<Hit> = None;
         for object in &self.collision.objects {
+            if self.disabled.contains(&object.checksum) {
+                continue;
+            }
             let [x0, y0, z0, x1, y1, z1] = object.bbox;
             if max.x < x0 || min.x > x1 || max.y < y0 || min.y > y1 || max.z < z0 || min.z > z1 {
                 continue;

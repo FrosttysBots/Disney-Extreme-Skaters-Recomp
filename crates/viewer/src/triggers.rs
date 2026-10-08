@@ -115,6 +115,60 @@ pub fn teleport_effects(nodes: &LevelNodes, program: &Program) -> HashMap<u32, T
         .collect()
 }
 
+/// Catches what a trigger script shatters (`ShatterAndDie Name = Box03`:
+/// `kill` and `Shatter` the box).
+#[derive(Default)]
+struct Breaks {
+    killed: Vec<u32>,
+    sound: Option<u32>,
+}
+
+impl Host for Breaks {
+    fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if (name == checksum("playsound") || name == checksum("obj_playsound"))
+            && self.sound.is_none()
+        {
+            if let Value::Struct(items) = args {
+                self.sound = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                });
+            }
+        }
+        if name == checksum("Shatter") {
+            if let Some(n) = args.get(checksum("Name")).and_then(Value::as_name) {
+                if !self.killed.contains(&n) {
+                    self.killed.push(n);
+                }
+            }
+        }
+        Outcome::Done(false)
+    }
+}
+
+/// The level's breakables: for each trigger object (not a teleporter or a
+/// gap) whose script shatters things when the skater touches it, its
+/// script, what it shatters (sector or object names) and the sound it
+/// plays.
+pub fn breakables(
+    nodes: &LevelNodes,
+    program: &Program,
+) -> HashMap<u32, (u32, Vec<u32>, Option<u32>)> {
+    let teleports = teleports(nodes, program);
+    let gaps = gaps(nodes, program);
+    nodes
+        .geometry_scripts
+        .iter()
+        .filter(|(object, _)| !teleports.contains_key(object) && !gaps.contains_key(object))
+        .filter_map(|&(object, script)| {
+            let mut host = Breaks::default();
+            let mut thread = Thread::new(script, Vec::new());
+            thread.run(program, &mut host, 0.0);
+            (!host.killed.is_empty()).then_some((object, (script, host.killed, host.sound)))
+        })
+        .collect()
+}
+
 /// For each collision object whose trigger script starts or ends a gap:
 /// what it does. (`EndGap`s without a name and score belong to goals.)
 pub fn gaps(nodes: &LevelNodes, program: &Program) -> HashMap<u32, GapTrigger> {

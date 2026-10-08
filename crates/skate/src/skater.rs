@@ -364,6 +364,9 @@ pub struct Skater {
     pub teleports: HashMap<u32, (Vec3, f32)>,
     /// The teleporter (its collision object) last gone through.
     pub last_teleport: Option<u32>,
+    /// The trigger objects touched this step (for the viewer's own
+    /// triggers: breakables).
+    pub touched: Vec<u32>,
     /// Trigger faces that start or end gaps, by collision object, and the
     /// gaps under way.
     pub gap_triggers: HashMap<u32, GapTrigger>,
@@ -496,6 +499,7 @@ impl Skater {
             terrain: 0,
             teleports: HashMap::new(),
             last_teleport: None,
+            touched: Vec::new(),
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
             last_gap: None,
@@ -752,15 +756,19 @@ impl Skater {
         };
         let across = (self.position - before) * Vec3::new(1.0, 0.0, 1.0);
         self.gaps.update(surface, across.length());
+        // The trigger faces touched: crossed along the way at knee height
+        // (planes stood up across a passage, a crate's sides), or at the
+        // feet (water and floors).
+        let knee = Vec3::Y * 10.0;
+        let mut touched = world.triggers(before + knee, self.position + knee);
+        touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
+        touched.dedup();
+        self.touched = touched.clone();
         if self.teleports.is_empty() && self.gap_triggers.is_empty() {
             return;
         }
-        // Teleporters: crossed along the way at knee height (planes stood
-        // up across a passage), or touched at the feet (water and floors).
-        let knee = Vec3::Y * 10.0;
+        // Teleporters.
         if !self.teleports.is_empty() {
-            let mut touched = world.triggers(before + knee, self.position + knee);
-            touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
             if let Some((object, &(position, heading))) = touched
                 .iter()
                 .find_map(|o| Some((*o, self.teleports.get(o)?)))

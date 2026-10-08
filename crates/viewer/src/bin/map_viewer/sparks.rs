@@ -18,8 +18,9 @@ const NEAR: f32 = 60.0;
 /// A streak's length (seconds of its travel) and width (inches).
 const STREAK: f32 = 0.025;
 const WIDTH: f32 = 0.8;
-/// Droplets in a splash.
+/// Droplets in a splash, and chunks when something's smashed.
 const SPLASH: usize = 90;
+const SHATTER: usize = 50;
 
 struct Spark {
     position: Vec3,
@@ -30,6 +31,8 @@ struct Spark {
     life: f32,
     /// A water droplet, not a spark.
     water: bool,
+    /// A chunk of something broken.
+    debris: bool,
 }
 
 pub struct Sparks {
@@ -84,6 +87,7 @@ impl Sparks {
                     age: start * dt,
                     life,
                     water: false,
+                    debris: false,
                 });
             }
         } else {
@@ -113,6 +117,26 @@ impl Sparks {
                 age: 0.0,
                 life,
                 water: true,
+                debris: false,
+            });
+        }
+    }
+
+    /// Something smashed: chunks thrown out and up, falling back.
+    pub fn shatter(&mut self, at: Vec3) {
+        for _ in 0..SHATTER {
+            let angle = self.random() * std::f32::consts::TAU;
+            let out = 60.0 + 200.0 * self.random();
+            let up = 120.0 + 220.0 * self.random();
+            let life = 0.7 + 0.6 * self.random();
+            self.sparks.push(Spark {
+                position: at,
+                velocity: Vec3::new(angle.cos() * out, up, angle.sin() * out),
+                carried: Vec3::ZERO,
+                age: 0.0,
+                life,
+                water: false,
+                debris: true,
             });
         }
     }
@@ -139,7 +163,9 @@ impl Sparks {
             let tail = head - (spark.velocity - spark.carried) * STREAK;
             let along = head - tail;
             let across = along.cross(eye - head).normalize_or_zero() * WIDTH;
-            let color = if spark.water {
+            let color = if spark.debris {
+                [200, 185, 160, (255.0 * (1.0 - t * t) * near) as u8]
+            } else if spark.water {
                 [
                     (190.0 + 50.0 * (1.0 - t)) as u8,
                     (225.0 + 30.0 * (1.0 - t)) as u8,

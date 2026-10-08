@@ -256,6 +256,12 @@ struct LoadedLevel {
     scene: Vec<u8>,
     scene_textures: Option<Vec<u8>>,
     sector_layers: HashMap<u32, Option<usize>>,
+    /// Where each breakable sector is.
+    sector_centres: HashMap<u32, Vec3>,
+    /// The breakables (trigger object: its script, what it shatters, its
+    /// sound) and the triggers already broken.
+    breakables: HashMap<u32, (u32, Vec<u32>, Option<u32>)>,
+    broken: HashSet<u32>,
     /// The level from above, for the map in the corner.
     minimap: Option<minimap::Minimap>,
     /// The level's particle effects (steam, sparks, dust), and their
@@ -282,10 +288,25 @@ fn load_level(
         .as_deref()
         .and_then(|n| LevelNodes::from_bytes(n).ok())
         .unwrap_or_default();
+    // Objects' scripts: the game's shared scripts, then the level's own.
+    let mut scripts = data.global_scripts().unwrap_or_else(|e| {
+        eprintln!("warning: no shared scripts: {e:#}");
+        Vec::new()
+    });
+    scripts.extend(files.scripts.iter().cloned());
+    let behaviour = Behaviour::new(&nodes, &scripts);
+    // Breakables (what touching a trigger shatters): those that are sectors
+    // there at the start get layers of their own, to take away.
+    let breakables = desa_viewer::triggers::breakables(&nodes, behaviour.program());
+    let breakable_sectors: HashSet<u32> = breakables
+        .values()
+        .flat_map(|(_, names, _)| names.iter().copied())
+        .filter(|n| !nodes.hidden_sectors.contains(n) && behaviour.object(*n).is_none())
+        .collect();
     // Sectors that aren't there at the start go in their own layer.
     let hidden = &nodes.hidden_sectors;
     let world = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
-        !hidden.contains(&s)
+        !hidden.contains(&s) && !breakable_sectors.contains(&s)
     })?;
     let goal_geometry = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
         hidden.contains(&s)
@@ -299,13 +320,6 @@ fn load_level(
     for missing in &objects.missing {
         eprintln!("{}: couldn't load {missing}", info.id);
     }
-    // Objects' scripts: the game's shared scripts, then the level's own.
-    let mut scripts = data.global_scripts().unwrap_or_else(|e| {
-        eprintln!("warning: no shared scripts: {e:#}");
-        Vec::new()
-    });
-    scripts.extend(files.scripts.iter().cloned());
-    let behaviour = Behaviour::new(&nodes, &scripts);
     let skate_world = files
         .collision
         .as_deref()
@@ -407,6 +421,23 @@ fn load_level(
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
+    // The breakable sectors, shown until broken, and where each is.
+    let mut sector_layers = HashMap::new();
+    let mut sector_centres = HashMap::new();
+    for &name in &breakable_sectors {
+        let Ok(mesh) =
+            Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == name)
+        else {
+            continue;
+        };
+        if mesh.vertices.is_empty() {
+            continue;
+        }
+        sector_centres.insert(name, mesh.focus.0);
+        let layer = renderer.add_layer(&mesh, false);
+        renderer.show_layer(layer, true);
+        sector_layers.insert(name, layer);
+    }
     let particles = desa_viewer::particles::Particles::new(behaviour.program(), &nodes);
     // The particles' textures: a soft round one first (for those missing),
     // then the level's.
@@ -443,7 +474,10 @@ fn load_level(
             portals,
             scene: files.scene.clone(),
             scene_textures: files.textures.clone(),
-            sector_layers: HashMap::new(),
+            sector_layers,
+            sector_centres,
+            breakables,
+            broken: HashSet::new(),
             minimap,
             particles,
             particle_textures,
@@ -2141,6 +2175,50 @@ impl<'a> App<'a> {
         self.model.character.warp_prompt = None;
     }
 
+    /// Breaks what the skater's touched (the trigger scripts' `Shatter`):
+    /// the pieces gone (and their collision), chunks thrown, and the sound
+    /// the script plays.
+    fn update_breakables(&mut self) {
+        let (Some((skater, ..)), Some(level)) = (&self.skating, &mut self.level) else {
+            return;
+        };
+        for trigger in &skater.touched {
+            let Some((_, names, sound)) = level.breakables.get(trigger) else {
+                continue;
+            };
+            if !level.broken.insert(*trigger) {
+                continue;
+            }
+            let (names, sound) = (names.clone(), *sound);
+            for name in names {
+                let at = if let Some(object) = level.behaviour.object(name) {
+                    level.behaviour.set_alive(object, false);
+                    Some(level.behaviour.position(object))
+                } else {
+                    if let Some(layer) = level.sector_layers.get(&name) {
+                        level.renderer.show_layer(*layer, false);
+                    }
+                    level.sector_centres.get(&name).copied()
+                };
+                if let Some(world) = &mut level.world {
+                    world.disable(name);
+                }
+                if let Some(at) = at {
+                    self.sparks.shatter(at);
+                }
+            }
+            if let Some(world) = &mut level.world {
+                world.disable(*trigger);
+            }
+            if let (Some(sound), Some(audio)) = (
+                sound,
+                self.audio.as_ref().filter(|_| self.model.character.sound),
+            ) {
+                audio.play_named(sound, 1.0);
+            }
+        }
+    }
+
     /// Starts the level's race (`AddGoal_Race`) from its restart node: the
     /// goal's start script runs (the racing cars come out), then the first
     /// waypoint's script (its gate), with the first waypoint's time on the
@@ -3316,6 +3394,7 @@ impl<'a> App<'a> {
             self.update_run(dt);
             self.update_letters(dt);
             self.update_race(dt);
+            self.update_breakables();
             self.update_collecting();
             self.update_skitch();
             self.update_records(dt);
@@ -3949,6 +4028,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
                 app.update_race(1.0 / 60.0);
+                app.update_breakables();
                 app.update_collecting();
                 app.update_skitch();
                 app.update_records(1.0 / 60.0);

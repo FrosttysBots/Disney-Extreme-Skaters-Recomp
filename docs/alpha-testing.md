@@ -113,6 +113,9 @@ skater is and what it's doing.
 - The Goals list in the panel: every goal the level has in the career,
   by the game's own words ("Push 10 Henchmen into the ocean"), with Play
   on those the viewer runs so far (the letters and the score goals).
+- Breakables: skate into the crates on Tarzan's Treehouse's walkways or
+  the plants in Scar's Canyon and they smash, with the game's sound.
+  (The Hub's grocery items need the store's own scripts, not yet run.)
 - Particle effects there from the start, like Camp's campfires and the
   steam off Clayton's ship, run from the levels' own emit scripts.
 - Every level, and a few characters (each has its own tricks and stats).
@@ -120,9 +123,8 @@ skater is and what it's doing.
 ## Known differences from the game
 
 - Not yet: wall rides (the game barely uses them), the
-  Simplified controls, goals besides the letters and scores and the other gameplay
-  modes, and the level's
-  other triggers (breakables, goal pickups).
+  Simplified controls, goals besides the letters, scores and races and the
+  other gameplay modes, and goal pickups.
 - Approximations of our own: the camera follows the game's camera
   update (a lagging focus, turning, the quick swing after vert, zooming
   for big air tricks, grinds and lips) but sees past walls its own way

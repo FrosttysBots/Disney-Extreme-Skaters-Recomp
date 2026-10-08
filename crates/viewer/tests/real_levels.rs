@@ -163,6 +163,31 @@ fn real_level_camera_paths() {
                     .any(|e| e.sound == Some(qb::checksum("bigsplash")))
             );
         }
+        let breaks = desa_viewer::triggers::breakables(&nodes, behaviour.program());
+        let killed: std::collections::HashSet<u32> = breaks
+            .values()
+            .flat_map(|(_, k, _)| k.iter().copied())
+            .collect();
+        for k in killed.iter().take(3) {
+            if let Some(p) = nodes
+                .nodes
+                .iter()
+                .find(|n| n.name == *k)
+                .and_then(|n| n.position)
+            {
+                println!("{} breakable at {:.0} {:.0} {:.0}", level.id, p.x, p.y, p.z);
+            }
+        }
+        let sectors = killed
+            .iter()
+            .filter(|k| !nodes.hidden_sectors.contains(k) && behaviour.object(**k).is_none())
+            .count();
+        println!(
+            "{}: {} breaking triggers, {} things broken ({sectors} sectors there at the start)",
+            level.id,
+            breaks.len(),
+            killed.len()
+        );
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         println!(
             "{}: warps {:?}",
