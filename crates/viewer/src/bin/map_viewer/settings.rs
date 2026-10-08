@@ -1,7 +1,7 @@
 //! Remembered choices (`%APPDATA%\desa-map-viewer\settings.txt`) and
 //! finding the game data on first run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +16,8 @@ pub struct Settings {
     pub speed: Option<f32>,
     /// The best two-minute run scores, by `level.character`.
     pub best: BTreeMap<String, u32>,
+    /// The gaps landed on each level, by name.
+    pub gaps: BTreeMap<String, BTreeSet<String>>,
     /// Never saved (screenshots).
     pub read_only: bool,
 }
@@ -45,6 +47,16 @@ impl Settings {
                     settings.last_character = Some(value.to_string())
                 }
                 "speed" => settings.speed = value.parse().ok(),
+                key if key.starts_with("gaps.") => {
+                    settings.gaps.insert(
+                        key["gaps.".len()..].to_string(),
+                        value
+                            .split('|')
+                            .filter(|g| !g.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                    );
+                }
                 key if key.starts_with("best.") => {
                     if let Ok(score) = value.parse() {
                         settings
@@ -79,6 +91,10 @@ impl Settings {
         }
         if let Some(speed) = self.speed {
             text += &format!("speed={speed}\n");
+        }
+        for (level, gaps) in &self.gaps {
+            let names: Vec<&str> = gaps.iter().map(String::as_str).collect();
+            text += &format!("gaps.{level}={}\n", names.join("|"));
         }
         for (key, score) in &self.best {
             text += &format!("best.{key}={score}\n");

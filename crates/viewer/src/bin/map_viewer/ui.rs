@@ -90,6 +90,8 @@ pub struct CharacterModel {
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
     pub trick_list: Vec<String>,
+    /// The level's gaps (name, points) and whether each has been landed.
+    pub gap_list: Vec<(String, u32, bool)>,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -783,6 +785,22 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     );
                     for line in &model.trick_list {
                         ui.label(egui::RichText::new(line).small().monospace());
+                    }
+                });
+        }
+        if !model.gap_list.is_empty() {
+            let found = model.gap_list.iter().filter(|g| g.2).count();
+            egui::CollapsingHeader::new(format!("Gaps ({found}/{})", model.gap_list.len()))
+                .id_salt("gap_list")
+                .show(ui, |ui| {
+                    for (name, score, got) in &model.gap_list {
+                        let text = format!("{} {name} ({score})", if *got { "✔" } else { "  " });
+                        let text = egui::RichText::new(text).small();
+                        ui.label(if *got {
+                            text.color(egui::Color32::from_rgb(120, 220, 120))
+                        } else {
+                            text.weak()
+                        });
                     }
                 });
         }

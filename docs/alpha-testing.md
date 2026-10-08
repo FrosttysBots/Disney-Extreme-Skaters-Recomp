@@ -57,6 +57,8 @@ skater is and what it's doing.
 - Birds: skate up to a perched seagull (Beach's ship deck), crow
   (Graveyard) or bird and it takes off. Bumping into an animal (Scar on
   Pride Rock, the hyenas) knocks the skater into a flail.
+- The Gaps list in the panel while skating: every gap the level names,
+  ticked off as you land each one (kept between sessions).
 - Teleporters and water: falling in the Hub's harbour puts you back on
   the dock, as in the game.
 - Coming down a quarter pipe or landing a 180: you turn round and ride

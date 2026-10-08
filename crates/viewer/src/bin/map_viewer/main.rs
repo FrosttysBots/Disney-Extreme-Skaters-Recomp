@@ -735,6 +735,7 @@ impl<'a> App<'a> {
                     letters_result: None,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
+                    gap_list: Vec::new(),
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -1126,6 +1127,19 @@ impl<'a> App<'a> {
             })
             .collect();
         skater.gap_triggers = desa_viewer::triggers::gaps(&level.nodes, program);
+        // The level's gaps, as a checklist of those landed before.
+        let landed = self.settings.gaps.get(&level.id);
+        let mut gap_list: Vec<(String, u32, bool)> = Vec::new();
+        for trigger in skater.gap_triggers.values() {
+            if let skate::gaps::GapTrigger::End { text, score, .. } = trigger {
+                if !gap_list.iter().any(|g| &g.0 == text) {
+                    let got = landed.is_some_and(|l| l.contains(text));
+                    gap_list.push((text.clone(), *score, got));
+                }
+            }
+        }
+        gap_list.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        self.model.character.gap_list = gap_list;
         self.start_audio();
         self.stop_camera_path();
         let chase = ChaseCamera::behind(&skater, &physics);
@@ -1646,6 +1660,26 @@ impl<'a> App<'a> {
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
         skater.update(input, physics, world, dt);
+        // A gap landed: ticked off on the level's list, and kept.
+        if let Some((name, _)) = skater.last_gap.take() {
+            if let Some(entry) = self
+                .model
+                .character
+                .gap_list
+                .iter_mut()
+                .find(|g| g.0 == name)
+            {
+                if !entry.2 {
+                    entry.2 = true;
+                    self.settings
+                        .gaps
+                        .entry(level.id.clone())
+                        .or_default()
+                        .insert(name);
+                    self.settings.save();
+                }
+            }
+        }
         self.sparks.update(skater, dt);
         if let Some(gilrs) = self.gamepads.as_mut() {
             if self.model.character.rumble {
