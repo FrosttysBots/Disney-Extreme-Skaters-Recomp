@@ -2469,17 +2469,11 @@ impl<'a> App<'a> {
     /// Shows character `index` (in the panel's list), or none.
     fn load_character(&mut self, index: Option<usize>) {
         // A different character: stop skating the old one (its tricks and
-        // stats belong to it).
-        if self.skating.take().is_some() {
-            self.model.character.skating = false;
-            self.sparks.clear();
-            self.rumble.stop();
-            if let Some(audio) = &mut self.audio {
-                audio.stop();
-            }
-            self.model.character.playing = true;
-            self.model.character.balance = None;
-            self.model.character.combo = None;
+        // stats belong to it), and go on skating with the new one from
+        // where it was.
+        let was_skating = self.skating.is_some();
+        if was_skating {
+            self.toggle_skate();
         }
         self.character = None;
         self.skating = None;
@@ -2541,6 +2535,9 @@ impl<'a> App<'a> {
                 self.character = Some(character);
                 self.settings.last_character = Some(info.id);
                 self.settings.save();
+                if was_skating && skateable {
+                    self.toggle_skate();
+                }
             }
             Err(err) => self.model.message = Some(format!("{err:#}")),
         }
