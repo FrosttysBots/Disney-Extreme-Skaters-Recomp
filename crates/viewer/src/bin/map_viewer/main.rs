@@ -3105,10 +3105,21 @@ impl<'a> App<'a> {
                     audio.play_named(qb::checksum("GoalDone"), 1.0);
                 }
             }
-            if let Some(script) = run.goal.deactivate.take() {
-                level.behaviour.run_level_script(script, Vec::new());
+            // Its own scripts for the end: won, the game's success (the
+            // goal's outro: Beach's cargo doors open), then its deactivate
+            // told so (`just_won_goal`); lost, just the deactivate.
+            let b = &mut level.behaviour;
+            let mut params = b.goal_params.clone();
+            if won {
+                if let Some(script) = run.goal.success {
+                    b.run_level_script(script, params.clone());
+                }
+                params.push((None, qb::Value::Name(qb::checksum("just_won_goal"))));
             }
-            level.behaviour.active_goal = None;
+            if let Some(script) = run.goal.deactivate.take() {
+                b.run_level_script(script, params);
+            }
+            b.ended_goal = b.active_goal.take();
         }
     }
 
@@ -3116,11 +3127,12 @@ impl<'a> App<'a> {
     /// hasn't run, and the goal manager told it's off.
     fn end_goal_run(&mut self, run: GoalRun) {
         let Some(level) = &mut self.level else { return };
+        let b = &mut level.behaviour;
         if let Some(script) = run.goal.deactivate {
-            level.behaviour.run_level_script(script, Vec::new());
+            b.run_level_script(script, b.goal_params.clone());
         }
-        level.behaviour.active_goal = None;
-        level.behaviour.goal_flags.clear();
+        b.ended_goal = b.active_goal.take();
+        b.goal_flags.clear();
     }
 
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the

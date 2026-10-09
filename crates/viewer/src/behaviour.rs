@@ -161,6 +161,8 @@ pub struct Behaviour {
     /// set (`GoalManager_SetGoalFlag`), how many win it, and whether a
     /// script has won it (`GoalManager_WinGoal`).
     pub active_goal: Option<u32>,
+    /// The goal just ended, whose end scripts still ask for its settings.
+    pub ended_goal: Option<u32>,
     pub goal_flags: std::collections::HashSet<u32>,
     /// A counter goal's things got (`GoalManager_GotCounterObject`).
     pub goal_count: usize,
@@ -263,6 +265,7 @@ impl Behaviour {
                 .map(|(n, l)| (*n, l.to_ascii_lowercase()))
                 .collect(),
             active_goal: None,
+            ended_goal: None,
             goal_flags: Default::default(),
             goal_count: 0,
             goal_needed: 0,
@@ -1082,7 +1085,8 @@ impl Host for Commands<'_> {
             || name == c("GoalManager_GetNumberCollected")
         {
             // The goal on's settings, with how far it's got.
-            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            let ours = named("Name").is_some()
+                && (named("Name") == b.active_goal || named("Name") == b.ended_goal);
             if !ours {
                 return Outcome::Done(false);
             }
@@ -1097,7 +1101,8 @@ impl Host for Commands<'_> {
             ));
             return Outcome::Params(params);
         } else if name == c("GoalManager_EditGoal") {
-            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            let ours = named("Name").is_some()
+                && (named("Name") == b.active_goal || named("Name") == b.ended_goal);
             if let (true, Some(Value::Struct(items))) = (ours, args.get(c("params"))) {
                 for (k, v) in items.iter().filter(|(k, _)| k.is_some()) {
                     b.goal_params.retain(|(o, _)| o != k);

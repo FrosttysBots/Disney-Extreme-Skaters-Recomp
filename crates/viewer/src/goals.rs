@@ -269,10 +269,13 @@ pub struct GenericGoal {
     pub restart: Option<u32>,
     /// Its pro, who offers it (`trigger_obj_id`).
     pub pro: Option<u32>,
-    /// Scripts: run as it starts (`activate`, `goal_start_script`) and as
-    /// it ends (`goal_deactivate_script`).
+    /// Scripts: run as it starts (`activate`, `goal_start_script`), when
+    /// it's won (`success`: the game's goal_success, which runs the goal's
+    /// `goal_outro_script`), and as it ends (`deactivate`, which runs its
+    /// `goal_deactivate_script`).
     pub activate: Option<u32>,
     pub start_script: Option<u32>,
+    pub success: Option<u32>,
     pub deactivate: Option<u32>,
     /// What it says when won (`win_message_text`).
     pub win: String,
@@ -317,7 +320,8 @@ pub fn generic_goal(program: &Program, level: &str, kind: &str) -> Option<Generi
         pro: name("trigger_obj_id"),
         activate: name("activate"),
         start_script: name("goal_start_script"),
-        deactivate: name("goal_deactivate_script"),
+        success: name("success"),
+        deactivate: name("deactivate"),
         win: text("win_message_text").unwrap_or_else(|| "Goal complete!".to_string()),
         params,
     })
