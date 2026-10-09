@@ -325,3 +325,31 @@ fn real_main_menu() {
         render(&screen, &images, "main_menu_chosen");
     }
 }
+
+/// A goal's panel message in its style (`create_panel_block ... style =
+/// panel_message_actiontext`): moved into place by the style's script.
+#[test]
+#[ignore = "needs the game data"]
+fn real_panel_message() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, program, _images) = screen_from_disc(&mut data);
+    screen.run(
+        qb::checksum("create_panel_block"),
+        vec![
+            (
+                Some(qb::checksum("text")),
+                qb::Value::String("Strength Grind Complete!".into()),
+            ),
+            (
+                Some(qb::checksum("style")),
+                qb::Value::Name(qb::checksum("panel_message_actiontext")),
+            ),
+        ],
+    );
+    for _ in 0..60 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    println!("{}", screen.describe());
+}

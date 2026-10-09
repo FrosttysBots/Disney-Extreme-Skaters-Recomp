@@ -151,8 +151,10 @@ struct Args {
     /// For --skate: bring up the game's pause menu at the end
     #[arg(long, requires = "skate")]
     pause: bool,
-    /// For --pause: menu presses, in order (u up, d down, c choose, b back)
-    #[arg(long, requires = "pause", default_value = "")]
+    /// For --skate: presses to the game's screen at the end, in order (u up,
+    /// d down, c choose, b back): its pause menu with --pause, else
+    /// whatever it shows (a goal's speech box)
+    #[arg(long, requires = "skate", default_value = "")]
     pause_keys: String,
     /// For --skate: play another of the level's goals from its own
     /// scripts, by its type (`Gaps`, `Gaps2`...)
@@ -3497,7 +3499,9 @@ impl<'a> App<'a> {
             }
         }
         // What the scripts put on screen, as the skater's message.
-        if let Some(text) = std::mem::take(&mut level.behaviour.messages).pop() {
+        // (The game's own screen shows them when it's up.)
+        let messages = std::mem::take(&mut level.behaviour.messages);
+        if let (Some(text), false) = (messages.last().cloned(), self.model.character.game_hud) {
             skater.message = Some((text, 2.5));
         }
         // And touched trigger geometry's.
@@ -3931,6 +3935,16 @@ impl<'a> App<'a> {
     /// to date as the game's code does; or, not skating, none.
     fn update_game_hud(&mut self) {
         use qb::Value;
+        let (screen_calls, screen_scripts) = self
+            .level
+            .as_mut()
+            .map(|l| {
+                (
+                    std::mem::take(&mut l.behaviour.screen_calls),
+                    std::mem::take(&mut l.behaviour.screen_scripts),
+                )
+            })
+            .unwrap_or_default();
         let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
             return;
         };
@@ -3960,6 +3974,20 @@ impl<'a> App<'a> {
             return;
         }
         self.model.character.game_hud = true;
+        // The level's scripts' screen commands (a goal's messages, text,
+        // counters) onto the game's screen.
+        for (name, args) in screen_calls {
+            s.command(name, &args, program);
+        }
+        for (script, params) in screen_scripts {
+            s.run(script, params);
+        }
+        // The goal on, for the UI's scripts that ask after it.
+        let b = &level.behaviour;
+        s.goal = b
+            .active_goal
+            .or(b.ended_goal)
+            .map(|id| (id, b.goal_params.clone()));
         let props = |items: Vec<(&str, Value)>| {
             Value::Struct(
                 items
@@ -4087,6 +4115,20 @@ impl<'a> App<'a> {
         s.set(
             "the_time",
             &props(vec![("text", Value::String(clock))]),
+            program,
+        );
+        // The goal on, and how far it's got, in the game's goal text.
+        let goal = match &self.model.character.goal_progress {
+            Some((name, _, got, needed)) if *needed > 0 => format!(
+                "{name}
+{got} of {needed}"
+            ),
+            Some((name, ..)) => name.clone(),
+            None => " ".to_string(),
+        };
+        s.set(
+            "current_goal",
+            &props(vec![("text", Value::String(goal))]),
             program,
         );
         // The trick text: the combo going (its tricks, and its points times
@@ -4275,7 +4317,7 @@ impl<'a> App<'a> {
         screen.screen.update(level.behaviour.program(), dt);
         let sounds = std::mem::take(&mut screen.screen.sounds);
         let requests = std::mem::take(&mut screen.screen.requests);
-        self.model.character.game_menu = !screen.screen.is_empty();
+        self.model.character.game_menu = screen.screen.takes_pad();
         if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
             for sound in sounds {
                 audio.play_named(sound, 1.0);
@@ -5954,8 +5996,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             }
             // The game's pause menu brought up, and the pad's presses
             // given to it (--pause-keys: up, down, choose, back).
-            if args.pause {
-                app.toggle_pause();
+            if args.pause || !args.pause_keys.is_empty() {
+                if args.pause {
+                    app.toggle_pause();
+                }
                 for _ in 0..30 {
                     app.update_screen(1.0 / 60.0);
                 }
@@ -5980,6 +6024,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             if std::env::var_os("DESA_SCREEN_DUMP").is_some() {
                 if let Some(screen) = &app.screen {
                     eprintln!("{}", screen.screen.describe());
+                    eprintln!("unknown {:x?}", screen.screen.unknown);
                 }
             }
             if let Some(at) = args.replay_at {

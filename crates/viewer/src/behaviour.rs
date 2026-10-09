@@ -154,6 +154,15 @@ pub struct Behaviour {
     /// Text scripts put on screen (`Create_Panel_Message`,
     /// `create_panel_block`: a goal's messages), for the viewer to show.
     pub messages: Vec<String>,
+    /// The scripts' screen-element commands (a goal's panel messages, its
+    /// text and counters), for the viewer to pass to the game's screen:
+    /// (command, its arguments).
+    pub screen_calls: Vec<(u32, Value)>,
+    /// The game's UI scripts the level's called (`create_speech_box`,
+    /// `create_panel_block`...), for the viewer to run on the game's
+    /// screen, where they can see what they've made.
+    pub screen_scripts: Vec<(u32, Params)>,
+    next_screen_id: u32,
     /// Camera paths scripts asked to play (`PlaySkaterCamAnim Name =
     /// path`), for the viewer.
     pub cameras: Vec<u32>,
@@ -338,6 +347,9 @@ impl Behaviour {
             other_creates: Vec::new(),
             voice_lines: Vec::new(),
             messages: Vec::new(),
+            screen_calls: Vec::new(),
+            screen_scripts: Vec::new(),
+            next_screen_id: 0,
             cameras: Vec::new(),
             won_goals: Default::default(),
         }
@@ -769,6 +781,24 @@ impl Behaviour {
 }
 
 /// The host commands for one object's script.
+/// The game's UI scripts, run on its screen rather than by the level's
+/// scripts (they look at what they've made: `GetScreenElementDims`).
+const UI_SCRIPTS: &[&str] = &[
+    "create_speech_box",
+    "speech_box_exit",
+    "create_panel_block",
+    "Create_Panel_Message",
+    "create_panel_sprite",
+    "goal_create_counter",
+    "goal_update_counter",
+    "Goal_Destroy_Counter",
+    "destroy_goal_panel_messages",
+    "create_dialog_box",
+    "Dialog_Box_Exit",
+    "kill_panel_message_if_it_exists",
+    "hide_panel_message",
+];
+
 struct Commands<'a> {
     behaviour: &'a mut Behaviour,
     objects: &'a mut LevelObjects,
@@ -817,6 +847,28 @@ impl Commands<'_> {
 impl Host for Commands<'_> {
     fn is_self(&self, target: u32) -> bool {
         self.behaviour.object_named(target) == Some(self.object)
+    }
+
+    /// The game's UI scripts go to its screen, whole.
+    fn calling(&mut self, script: u32, args: &Value) -> bool {
+        if !UI_SCRIPTS.iter().any(|s| checksum(s) == script) {
+            return false;
+        }
+        let b = &mut *self.behaviour;
+        if b.screen_scripts.len() < 64 {
+            // (A struct passed whole gives its fields, as for any call.)
+            let mut params = Vec::new();
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Struct(fields)) => params.extend(fields.iter().cloned()),
+                        item => params.push((*item.0, item.1.clone())),
+                    }
+                }
+            }
+            b.screen_scripts.push((script, params));
+        }
+        true
     }
 
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
@@ -1188,7 +1240,49 @@ impl Host for Commands<'_> {
         } else if name == c("SkaterCamAnimFinished") {
             // (The viewer plays them as cutscenes; scripts needn't wait.)
             return Outcome::Done(true);
+        } else if [
+            "SetScreenElementProps",
+            "DoScreenElementMorph",
+            "DestroyScreenElement",
+            "RunScriptOnScreenElement",
+            "AssignAlias",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            // For the game's screen.
+            if b.screen_calls.len() < 256 {
+                b.screen_calls.push((name, args.clone()));
+            }
         } else if name == c("CreateScreenElement") {
+            // Passed on with an id (one made up if it has none), handed
+            // back as the game does, for the script's next steps (its
+            // style run on it).
+            let mut forwarded = args.clone();
+            let given = args
+                .get(c("id"))
+                .or_else(|| match args {
+                    Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                        (None, inner @ Value::Struct(_)) => inner.get(c("id")),
+                        _ => None,
+                    }),
+                    _ => None,
+                })
+                .and_then(Value::as_name)
+                .filter(|id| *id != 0);
+            let id = given.unwrap_or_else(|| {
+                b.next_screen_id += 1;
+                checksum(&format!("level_screen_element_{}", b.next_screen_id))
+            });
+            if given.is_none() {
+                if let Value::Struct(items) = &mut forwarded {
+                    items.push((Some(c("id")), Value::Name(id)));
+                }
+            }
+            if b.screen_calls.len() < 256 {
+                b.screen_calls.push((name, forwarded));
+            }
+            let made = id;
             // Text put on screen (a panel message): its words, the goal's
             // own text block aside (the viewer shows that already). (Its
             // settings come in a struct of their own.)
@@ -1223,6 +1317,7 @@ impl Host for Commands<'_> {
                     b.messages.push(text);
                 }
             }
+            return Outcome::Params(vec![(Some(c("id")), Value::Name(made))]);
         } else if name == c("SendFlag") || name == c("QueryFlag") || name == c("ClearFlag") {
             // An object's flags, by `Name = object`: `SendFlag Name = obj
             // flag` sets one, `QueryFlag flag Name = obj` asks.

@@ -788,7 +788,9 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     });
                 });
         }
-        if let Some((name, text, got, needed)) = &model.character.goal_progress {
+        if let (Some((name, text, got, needed)), false) =
+            (&model.character.goal_progress, model.character.game_hud)
+        {
             egui::Area::new(egui::Id::new("goal_progress"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
                 .interactable(false)

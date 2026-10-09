@@ -215,6 +215,9 @@ pub struct Screen {
     pub unknown: HashMap<u32, usize>,
     /// The level on, as `LevelIs` asks (`load_skateshop`).
     pub level: Option<u32>,
+    /// The goal on (its id) and its settings, as
+    /// `GoalManager_GetGoalParams` gives them to the UI's scripts.
+    pub goal: Option<(u32, Params)>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -250,6 +253,7 @@ impl Screen {
             listening: Vec::new(),
             unknown: HashMap::new(),
             level: None,
+            goal: None,
             stopping: Vec::new(),
         }
     }
@@ -287,6 +291,18 @@ impl Screen {
         }
     }
 
+    /// A screen command from scripts run elsewhere (the level's: a goal's
+    /// `CreateScreenElement`, `RunScriptOnScreenElement`...), done here
+    /// as if from the root.
+    pub fn command(&mut self, name: u32, args: &Value, program: &Program) {
+        let mut host = Ui {
+            screen: self,
+            element: ROOT,
+            program,
+        };
+        host.command(None, name, args);
+    }
+
     /// Sets an element's properties (as `SetScreenElementProps`), by id
     /// or alias; false if it isn't there.
     pub fn set(&mut self, id: &str, props: &Value, program: &Program) -> bool {
@@ -321,6 +337,16 @@ impl Screen {
     /// A sprite's size, by name.
     pub fn image_size(&self, name: &str) -> Option<Vec2> {
         self.images.get(&checksum(name)).copied()
+    }
+
+    /// Whether something on the screen has the focus (a menu, a speech
+    /// box waiting for a press): the pad's for it, not the skater.
+    pub fn takes_pad(&self) -> bool {
+        self.el(ROOT).is_some_and(|r| {
+            r.children
+                .iter()
+                .any(|c| self.el(*c).is_some_and(|c| c.focused && !c.hidden))
+        })
     }
 
     /// Whether anything's on the screen.
@@ -1522,6 +1548,13 @@ impl Host for Ui<'_> {
             if let (Some(event), Some(to)) = (event, to) {
                 s.fire(to, event, data);
             }
+        } else if name == c("GoalManager_GetGoalParams") {
+            return match (&s.goal, named("Name").and_then(|v| v.as_name())) {
+                (Some((id, params)), Some(asked)) if *id == asked => {
+                    Outcome::Params(params.clone())
+                }
+                _ => Outcome::Done(false),
+            };
         } else if name == c("LevelIs") {
             let asked = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {

@@ -643,6 +643,18 @@ impl Thread {
             );
             return true;
         }
+        // Built in: whether a value is an array (`IsArray <x>`, a global
+        // named by it too).
+        if target.is_none() && name == checksum("IsArray") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            return match items.iter().find(|(k, _)| k.is_none()).map(|(_, v)| v) {
+                Some(Value::Array(_)) => true,
+                Some(Value::Name(n)) => matches!(program.value(*n), Some(Value::Array(_))),
+                _ => false,
+            };
+        }
         // Built in: an array's length (`GetArraySize name`, giving
         // `array_size`), and a script run for each item of one
         // (`ForEachIn array do = script params = {...}`).
@@ -848,6 +860,42 @@ fn skip_branch(body: &[Token], mut at: usize, stop_at_else: bool) -> usize {
 }
 
 /// After the `repeat` that closes the loop containing `at`.
+/// `array [ index ]` (then `.field`s) alone: the array a global's, or a
+/// parameter holding one or naming a global that is. The item, if it's
+/// all the tokens are.
+fn indexed(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
+    let (array, mut i) = match tokens {
+        [Token::Arg, Token::Name(n), ..] => {
+            let v = params
+                .iter()
+                .find(|(k, _)| *k == Some(*n))
+                .map(|(_, v)| v)?;
+            let v = match v {
+                Value::Name(g) => program.value(*g)?,
+                v => v,
+            };
+            (v, 2)
+        }
+        [Token::Name(n), ..] => (program.value(*n)?, 1),
+        _ => return None,
+    };
+    if tokens.get(i) != Some(&Token::StartArray) {
+        return None;
+    }
+    let close = i + tokens[i..].iter().position(|t| *t == Token::EndArray)?;
+    let index = evaluate_num(&tokens[i + 1..close], params, program)?.scalar();
+    let Value::Array(items) = array else {
+        return None;
+    };
+    let mut value = items.get(index.max(0.0) as usize)?.clone();
+    i = close + 1;
+    while let (Some(Token::Dot), Some(Token::Name(field))) = (tokens.get(i), tokens.get(i + 1)) {
+        value = value.get(*field)?.clone();
+        i += 2;
+    }
+    (i == tokens.len()).then_some(value)
+}
+
 /// Past the `endswitch` closing the switch `at` is inside.
 fn after_switch(body: &[Token], mut at: usize) -> usize {
     let mut depth = 0;
@@ -905,17 +953,31 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
         match &tokens[i] {
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
+                // `(<array> [ i ].field)`: the item itself (text too).
+                if let Some(item) = indexed(&tokens[i + 1..close], params, program) {
+                    flat.extend(value_tokens(&item));
+                    i = close + 1;
+                    continue;
+                }
                 let value = evaluate_num(&tokens[i + 1..close], params, program);
                 flat.push(value.map_or(Token::Integer(0), Num::token));
                 i = close + 1;
             }
             Token::AllArgs => {
+                // `key = <...>`: all of them as one struct; alone, each.
+                let as_value = matches!(flat.last(), Some(Token::Equals));
+                if as_value {
+                    flat.push(Token::StartStruct);
+                }
                 for (k, v) in params {
                     if let Some(k) = k {
                         flat.push(Token::Name(*k));
                         flat.push(Token::Equals);
                     }
                     flat.extend(value_tokens(v));
+                }
+                if as_value {
+                    flat.push(Token::EndStruct);
                 }
                 i += 1;
             }
