@@ -1,7 +1,7 @@
 //! Ray casts against a level's collision, using each object's BSP tree to
 //! test only the faces near the ray.
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use ngc_collision::{Collision, face_flags};
 
 use crate::rails::Rails;
@@ -55,6 +55,10 @@ pub struct World {
     pub vehicles: Vec<Vehicle>,
     /// Collision objects gone (broken): passed through, triggers and all.
     disabled: std::collections::HashSet<u32>,
+    /// Collision objects moved from where they're stored (the level's
+    /// pieces scripts move: a door swung open): stored space to where
+    /// they are, and back.
+    placed: std::collections::HashMap<u32, (Mat4, Mat4)>,
 }
 
 impl World {
@@ -65,6 +69,28 @@ impl World {
             obstacles: Vec::new(),
             vehicles: Vec::new(),
             disabled: Default::default(),
+            placed: Default::default(),
+        }
+    }
+
+    /// Puts a collision object somewhere else: `transform` takes it from
+    /// where it's stored to where it is now (`None`: back where it was).
+    pub fn place(&mut self, object: u32, transform: Option<Mat4>) {
+        match transform {
+            Some(m) => {
+                self.placed.insert(object, (m, m.inverse()));
+            }
+            None => {
+                self.placed.remove(&object);
+            }
+        }
+    }
+
+    /// A line in an object's own (stored) space, if it's been moved.
+    fn local(&self, object: u32, from: Vec3, to: Vec3) -> (Vec3, Vec3) {
+        match self.placed.get(&object) {
+            Some((_, back)) => (back.transform_point3(from), back.transform_point3(to)),
+            None => (from, to),
         }
     }
 
@@ -164,15 +190,16 @@ impl World {
     /// The collision objects with trigger faces (flagged to run a script
     /// when the skater touches them) that the line from `from` to `to`
     /// crosses, solid or not.
-    pub fn triggers(&self, from: Vec3, to: Vec3) -> Vec<u32> {
-        let min = from.min(to) - Vec3::splat(0.5);
-        let max = from.max(to) + Vec3::splat(0.5);
-        let direction = to - from;
+    pub fn triggers(&self, world_from: Vec3, world_to: Vec3) -> Vec<u32> {
         let mut out = Vec::new();
         for object in &self.collision.objects {
             if self.disabled.contains(&object.checksum) {
                 continue;
             }
+            let (from, to) = self.local(object.checksum, world_from, world_to);
+            let min = from.min(to) - Vec3::splat(0.5);
+            let max = from.max(to) + Vec3::splat(0.5);
+            let direction = to - from;
             let [x0, y0, z0, x1, y1, z1] = object.bbox;
             if max.x < x0 || min.x > x1 || max.y < y0 || min.y > y1 || max.z < z0 || min.z > z1 {
                 continue;
@@ -201,15 +228,19 @@ impl World {
 
     /// Like [`World::ray`], hitting only faces with all of `flags` (the
     /// camera's line only meets camera-collidable faces, 0x80).
-    pub fn ray_requiring(&self, from: Vec3, to: Vec3, flags: u16) -> Option<Hit> {
-        let min = from.min(to) - Vec3::splat(0.5);
-        let max = from.max(to) + Vec3::splat(0.5);
-        let direction = to - from;
+    pub fn ray_requiring(&self, world_from: Vec3, world_to: Vec3, flags: u16) -> Option<Hit> {
         let mut best: Option<Hit> = None;
         for object in &self.collision.objects {
             if self.disabled.contains(&object.checksum) {
                 continue;
             }
+            // (A moved object's met in its own space: the fraction along
+            // the line is the same, the point and normal go back.)
+            let (from, to) = self.local(object.checksum, world_from, world_to);
+            let placed = self.placed.get(&object.checksum).map(|(m, _)| *m);
+            let min = from.min(to) - Vec3::splat(0.5);
+            let max = from.max(to) + Vec3::splat(0.5);
+            let direction = to - from;
             let [x0, y0, z0, x1, y1, z1] = object.bbox;
             if max.x < x0 || min.x > x1 || max.y < y0 || min.y > y1 || max.z < z0 || min.z > z1 {
                 continue;
@@ -228,8 +259,15 @@ impl World {
                         if normal.dot(direction) > 0.0 {
                             normal = -normal;
                         }
+                        let (point, normal) = match placed {
+                            Some(m) => (
+                                m.transform_point3(from + direction * t),
+                                m.transform_vector3(normal).normalize_or_zero(),
+                            ),
+                            None => (from + direction * t, normal),
+                        };
                         best = Some(Hit {
-                            point: from + direction * t,
+                            point,
                             normal,
                             fraction: t,
                             flags: face.flags,
@@ -242,7 +280,7 @@ impl World {
         }
         // Obstacles are solid to everything but the camera.
         if flags == 0 {
-            if let Some(hit) = self.obstacle_hit(from, direction) {
+            if let Some(hit) = self.obstacle_hit(world_from, world_to - world_from) {
                 if best.is_none_or(|h| hit.fraction < h.fraction) {
                     best = Some(hit);
                 }
@@ -279,6 +317,59 @@ fn intersect(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ngc_collision::{BspNode, BspTree, CollisionObject, Face};
+
+    /// A world of one floor triangle round the origin, object 7.
+    fn floor() -> World {
+        World::new(Collision {
+            objects: vec![CollisionObject {
+                checksum: 7,
+                flags: 0,
+                bbox: [-10.0, 0.0, -10.0, 10.0, 0.0, 10.0],
+                vertices: vec![[-10.0, 0.0, -10.0], [10.0, 0.0, -10.0], [0.0, 0.0, 10.0]],
+                intensities: Vec::new(),
+                faces: vec![Face {
+                    flags: 0,
+                    terrain: 0,
+                    indices: [0, 1, 2],
+                }],
+                skipped_faces: 0,
+                bsp: BspTree {
+                    nodes: vec![BspNode::Leaf { first: 0, count: 1 }],
+                    faces: vec![0],
+                },
+            }],
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        })
+    }
+
+    #[test]
+    fn moved_objects_are_met_where_they_are() {
+        let mut world = floor();
+        let down = |x: f32, z: f32| world_ray(&world, Vec3::new(x, 50.0, z));
+        fn world_ray(world: &World, from: Vec3) -> Option<Vec3> {
+            world.ray(from, from - Vec3::Y * 100.0).map(|h| h.point)
+        }
+        assert!(down(0.0, 0.0).is_some());
+        // Moved 100 along x and up 5: met there, not where it was.
+        world.place(7, Some(Mat4::from_translation(Vec3::new(100.0, 5.0, 0.0))));
+        let down = |x: f32, z: f32| world_ray(&world, Vec3::new(x, 50.0, z));
+        assert!(down(0.0, 0.0).is_none());
+        let hit = down(100.0, 0.0).unwrap();
+        assert!((hit.y - 5.0).abs() < 1e-4);
+        // Turned on its side (about z): a ray down misses, one across hits,
+        // with the normal turned too.
+        world.place(7, Some(Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2)));
+        assert!(world_ray(&world, Vec3::new(2.0, 50.0, 0.0)).is_none());
+        let hit = world
+            .ray(Vec3::new(30.0, 0.0, 0.0), Vec3::new(-30.0, 0.0, 0.0))
+            .unwrap();
+        assert!(hit.point.x.abs() < 1e-3 && hit.normal.x > 0.99);
+        // Put back.
+        world.place(7, None);
+        assert!(world_ray(&world, Vec3::new(0.0, 50.0, 0.0)).is_some());
+    }
 
     #[test]
     fn rays_hit_triangles_within_the_segment() {
