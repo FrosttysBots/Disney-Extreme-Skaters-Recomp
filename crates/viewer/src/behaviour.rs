@@ -29,6 +29,11 @@
 //!   on the ground below as it goes, tipped with the slope.
 //! - Object flags: `Obj_SetFlag`, `Obj_ClearFlag`, `Obj_FlagSet`,
 //!   `Obj_FlagNotSet`.
+//! - Looking at the skater: `Obj_ObjectInRadius radius = n feet Type =
+//!   skater`, `Obj_AngleToNearestSkaterGreaterThan degrees`,
+//!   `Obj_LookAtObject Type = skater time = seconds` (turning smoothly)
+//!   and `Obj_WaitRotate`.
+//! - `GoalManager_HasWonGoal Name = goal`, from the goals won.
 //! - `LocalSkaterExists` (skating), `Obj_LookAtObject Name = object`.
 //! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
 //!   `Obj_Hover Amp = units Freq = hertz`.
@@ -82,6 +87,8 @@ struct State {
     hover: Option<(f32, f32)>,
     /// Its flags (`Obj_SetFlag`, `Obj_ClearFlag`; `Obj_FlagSet` asks).
     flags: Vec<u32>,
+    /// Turning to face something: from, to, seconds in and how long.
+    turn: Option<(Quat, Quat, f32, f32)>,
     /// Kept on the ground below as it moves (`Obj_StickToGround distAbove
     /// distBelow [pitch]`): how far up and down to look (units), and
     /// whether to tip with the slope.
@@ -135,6 +142,8 @@ pub struct Behaviour {
     pub other_creates: Vec<(u32, bool)>,
     /// Voice lines scripts asked for (`midgoalvoiceover stream = name`).
     pub voice_lines: Vec<u32>,
+    /// The goals won (their ids), for `GoalManager_HasWonGoal`.
+    pub won_goals: std::collections::HashSet<u32>,
 }
 
 impl Behaviour {
@@ -169,6 +178,7 @@ impl Behaviour {
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
+                turn: None,
             })
             .collect();
         let threads = nodes
@@ -206,6 +216,7 @@ impl Behaviour {
             sounds: Vec::new(),
             other_creates: Vec::new(),
             voice_lines: Vec::new(),
+            won_goals: Default::default(),
         }
     }
 
@@ -257,6 +268,16 @@ impl Behaviour {
     /// Runs `script` as the object's script.
     pub fn run_script(&mut self, object: usize, script: u32) {
         self.start(object, Thread::new(script, Vec::new()));
+    }
+
+    /// Turns an object to face `at` (across), over `seconds`.
+    pub fn look_at(&mut self, object: usize, at: Vec3, seconds: f32) {
+        let state = &mut self.states[object];
+        let flat = (at - state.position).with_y(0.0).normalize_or_zero();
+        if flat != Vec3::ZERO {
+            let to = Quat::from_rotation_arc(Vec3::Z, flat);
+            state.turn = Some((state.rotation, to, 0.0, seconds.max(1e-3)));
+        }
     }
 
     /// Sets an object bobbing up and down so far, so often a second.
@@ -346,6 +367,15 @@ impl Behaviour {
     /// Moves objects heading straight for a spot.
     fn move_straight(&mut self, i: usize, dt: f32) {
         let state = &mut self.states[i];
+        if let Some((from, to, t, length)) = &mut state.turn {
+            *t += dt;
+            let k = (*t / length.max(1e-3)).min(1.0);
+            state.rotation = from.slerp(*to, k);
+            state.dirty = true;
+            if k >= 1.0 {
+                state.turn = None;
+            }
+        }
         if state.hover.is_some() && state.alive {
             state.dirty = true;
         }
@@ -805,16 +835,58 @@ impl Host for Commands<'_> {
         } else if name == c("LocalSkaterExists") {
             return Outcome::Done(b.skater.is_some());
         } else if name == c("Obj_LookAtObject") {
-            let other = named("Name").and_then(|n| b.object_named(n));
-            if let Some(other) = other {
-                let at = b.states[other].position;
+            // At another object, or the skater (`Type = skater`), over
+            // `time` seconds.
+            let at = if named("Type") == Some(c("skater")) {
+                b.skater
+            } else {
+                named("Name")
+                    .and_then(|n| b.object_named(n))
+                    .map(|o| b.states[o].position)
+            };
+            if let Some(at) = at {
+                let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
                 let state = &mut b.states[object];
                 let flat = (at - state.position).with_y(0.0).normalize_or_zero();
                 if flat != Vec3::ZERO {
-                    state.rotation = Quat::from_rotation_arc(Vec3::Z, flat);
-                    state.dirty = true;
+                    let to = Quat::from_rotation_arc(Vec3::Z, flat);
+                    if time > 0.0 {
+                        state.turn = Some((state.rotation, to, 0.0, time));
+                    } else {
+                        state.rotation = to;
+                        state.dirty = true;
+                    }
                 }
             }
+        } else if name == c("Obj_WaitRotate") {
+            if let Some((_, _, t, length)) = b.states[object].turn {
+                return Outcome::Wait((length - t).max(0.0));
+            }
+        } else if name == c("Obj_ObjectInRadius") {
+            // `radius = 80 feet Type = skater`: the skater that near.
+            let radius = args.get(c("radius")).and_then(Value::as_f32).unwrap_or(0.0);
+            let radius = if args.has_flag(c("feet")) {
+                radius * FOOT
+            } else {
+                radius
+            };
+            let near = b
+                .skater
+                .is_some_and(|s| s.distance(b.states[object].position) < radius);
+            return Outcome::Done(near);
+        } else if name == c("Obj_AngleToNearestSkaterGreaterThan") {
+            let Some(skater) = b.skater else {
+                return Outcome::Done(false);
+            };
+            let degrees = Self::number(args).unwrap_or(0.0);
+            let state = &b.states[object];
+            let facing = (state.rotation * Vec3::Z).with_y(0.0).normalize_or_zero();
+            let to = (skater - state.position).with_y(0.0).normalize_or_zero();
+            let angle = facing.dot(to).clamp(-1.0, 1.0).acos().to_degrees();
+            return Outcome::Done(angle > degrees);
+        } else if name == c("GoalManager_HasWonGoal") {
+            let won = named("Name").is_some_and(|g| b.won_goals.contains(&g));
+            return Outcome::Done(won);
         } else if [
             "Obj_SetPathTurnDist",
             "Obj_SetPathMinStopVel",

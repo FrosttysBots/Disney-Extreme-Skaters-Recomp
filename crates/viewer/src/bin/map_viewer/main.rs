@@ -447,7 +447,13 @@ fn load_level(
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
+    let mut behaviour = behaviour;
     let pros = goal_pros(behaviour.program(), &info.id, &behaviour);
+    // The pros are there from the start, as in the career (the scripts of
+    // those around them look for them).
+    for pro in &pros {
+        behaviour.set_alive(pro.object, true);
+    }
     // The bouncy objects, each in a layer of its own.
     let mut bouncies = Vec::new();
     for b in nodes.bouncies.iter().filter(|b| b.created_at_start) {
@@ -1204,6 +1210,8 @@ struct App<'a> {
     /// skipped), the one asked for next, and the goal on's success path.
     cutscene: bool,
     cutscene_request: Option<u32>,
+    /// A goal just won (its kind), to keep.
+    goal_won: Option<&'static str>,
     /// A warp's level, to load when its camera path's over.
     load_after_cutscene: Option<usize>,
     success_camera: Option<u32>,
@@ -1370,6 +1378,7 @@ impl<'a> App<'a> {
             lines_to_say: Vec::new(),
             cutscene: false,
             cutscene_request: None,
+            goal_won: None,
             load_after_cutscene: None,
             success_camera: None,
             replay_camera: 0,
@@ -1508,6 +1517,15 @@ impl<'a> App<'a> {
                 self.model.message = None;
                 self.next_spawn = 0;
                 self.level = Some(level);
+                // The goals won here before, for the scripts that ask.
+                if let Some(level) = &mut self.level {
+                    for kind in ["HighScore", "ProScore", "SKATE", "Race"] {
+                        let id = desa_viewer::goals::goal_id(&info.id, kind);
+                        if self.settings.best.contains_key(&format!("won.{id:08x}")) {
+                            level.behaviour.won_goals.insert(id);
+                        }
+                    }
+                }
                 self.settings.last_level = Some(info.id);
                 self.settings.save();
                 // Arrived through a warp: skating on.
@@ -1542,6 +1560,9 @@ impl<'a> App<'a> {
     /// The cutscene asked for, started; and when one's over, the chase
     /// camera back.
     fn update_cutscene(&mut self) {
+        if let Some(kind) = self.goal_won.take() {
+            self.won_goal(kind);
+        }
         if let Some(name) = self.cutscene_request.take() {
             self.play_cutscene(name);
         }
@@ -1585,6 +1606,15 @@ impl<'a> App<'a> {
                 audio.say_line(&sound);
             }
         }
+    }
+
+    /// A goal won: kept, and the level's scripts told.
+    fn won_goal(&mut self, kind: &str) {
+        let Some(level) = &mut self.level else { return };
+        let id = desa_viewer::goals::goal_id(&level.id, kind);
+        level.behaviour.won_goals.insert(id);
+        self.settings.best.insert(format!("won.{id:08x}"), 1);
+        self.settings.save();
     }
 
     /// The goal on's camera paths (`kind` as in `<level>_AddGoal_<kind>`):
@@ -2428,10 +2458,6 @@ impl<'a> App<'a> {
         let busy = self.run.is_some() || self.letters.is_some() || self.racing.is_some();
         let Some(level) = &mut self.level else { return };
         for (i, pro) in level.pros.iter_mut().enumerate() {
-            let shown = skating.is_some();
-            if level.behaviour.alive(pro.object) != shown {
-                level.behaviour.set_alive(pro.object, shown);
-            }
             let Some(at) = skating else {
                 pro.declined = false;
                 continue;
@@ -2444,6 +2470,8 @@ impl<'a> App<'a> {
             if !busy && self.goal_offer.is_none() && self.warp_offer.is_none() && near < PRO_NEAR {
                 self.goal_offer = Some(i);
                 self.model.character.goal_prompt = Some(pro.title.clone());
+                // They turn to the skater (`Obj_LookAtObject Type = skater`).
+                level.behaviour.look_at(pro.object, at, 0.4);
                 self.lines_to_say.extend(pro.line);
             }
         }
@@ -2803,6 +2831,7 @@ impl<'a> App<'a> {
         let won = race.next >= race.points.len();
         if won {
             self.cutscene_request = self.success_camera.take();
+            self.goal_won = Some("Race");
         }
         if won || race.left == 0.0 {
             race.over = true;
@@ -2905,6 +2934,7 @@ impl<'a> App<'a> {
         let won = run.got.iter().all(|g| *g);
         if won {
             self.cutscene_request = self.success_camera.take();
+            self.goal_won = Some("SKATE");
         }
         if won || run.left == 0.0 {
             run.over = true;
@@ -2952,6 +2982,10 @@ impl<'a> App<'a> {
             if skater.score >= *score {
                 run.won = true;
                 self.cutscene_request = self.success_camera.take();
+                self.goal_won = Some(match self.model.character.run_goal {
+                    Some((true, ..)) => "ProScore",
+                    _ => "HighScore",
+                });
                 run.ending.get_or_insert(0.0);
                 self.model.character.run_goal_won = Some(true);
                 if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {

@@ -290,6 +290,17 @@ pub fn race(program: &Program, level: &str) -> Option<Race> {
     })
 }
 
+/// A goal's id as the scripts ask after it (`GoalManager_HasWonGoal Name =
+/// hub_Goal_Race`): `<level>_goal_<type>`, by its checksum. `kind` as in
+/// `<level>_AddGoal_<kind>`.
+pub fn goal_id(level: &str, kind: &str) -> u32 {
+    let kind = match kind {
+        "SKATE" => "Skate",
+        other => other,
+    };
+    checksum(&format!("{}_goal_{kind}", level_names(level)[1]))
+}
+
 /// The goal's pro (`trigger_obj_id`, like `TRG_G_HS_Pro`): the pedestrian
 /// who stands where the goal's offered. `kind` as in `<level>_AddGoal_<kind>`.
 pub fn goal_pro(program: &Program, level: &str, kind: &str) -> Option<u32> {
