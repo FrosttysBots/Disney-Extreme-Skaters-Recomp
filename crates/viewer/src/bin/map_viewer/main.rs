@@ -781,6 +781,8 @@ fn blob_shadow(at: Vec3, radius: f32, world: &skate::World) -> Vec<collision::Co
 struct GoalPro {
     object: usize,
     title: String,
+    /// What they say offering it.
+    line: Option<u32>,
     start: ui::Action,
     declined: bool,
 }
@@ -801,6 +803,7 @@ fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> V
         Some(GoalPro {
             object,
             title,
+            line: desa_viewer::goals::goal_intro_line(program, level, script),
             start,
             declined: false,
         })
@@ -2415,6 +2418,7 @@ impl<'a> App<'a> {
             if !busy && self.goal_offer.is_none() && self.warp_offer.is_none() && near < PRO_NEAR {
                 self.goal_offer = Some(i);
                 self.model.character.goal_prompt = Some(pro.title.clone());
+                self.lines_to_say.extend(pro.line);
             }
         }
     }

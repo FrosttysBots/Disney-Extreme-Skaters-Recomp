@@ -217,6 +217,18 @@ fn real_level_camera_paths() {
             })
             .collect();
         println!("{}: pros {pros:?}", level.id);
+        let streams = data.goal_streams().unwrap();
+        let intros: Vec<&str> = ["HighScore", "ProScore", "SKATE", "Race"]
+            .into_iter()
+            .filter(|kind| {
+                desa_viewer::goals::goal_intro_line(behaviour.program(), &level.id, kind)
+                    .is_some_and(|l| streams.contains_key(&l))
+            })
+            .collect();
+        println!("{}: intro lines for {intros:?}", level.id);
+        if level.id != "SkateShop" {
+            assert!(intros.len() >= 3, "{}: goal intro lines", level.id);
+        }
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         // Each warp's camera path is the level's.
         for warp in &warps {

@@ -297,6 +297,22 @@ pub fn goal_pro(program: &Program, level: &str, kind: &str) -> Option<u32> {
     param(&params, program, "trigger_obj_id").and_then(Value::as_name)
 }
 
+/// What the goal's pro says offering it: `<pro>_<level>_goal_<kind>` in
+/// the goal pedestrians' lines (`pro = "Henchly"` on Beach's high score:
+/// `henchly_beach_goal_highscore`), by the name's checksum.
+pub fn goal_intro_line(program: &Program, level: &str, kind: &str) -> Option<u32> {
+    let params = goal_params(program, level, kind)?;
+    let pro = match param(&params, program, "pro")? {
+        Value::String(s) | Value::LocalString(s) => s.to_ascii_lowercase(),
+        _ => return None,
+    };
+    let short = level_names(level)[1].to_ascii_lowercase();
+    Some(checksum(&format!(
+        "{pro}_{short}_goal_{}",
+        kind.to_ascii_lowercase()
+    )))
+}
+
 /// The goal's camera paths: the one played as it starts
 /// (`start_cam_anim`) and the one when it's won (`success_cam_anim`).
 pub fn goal_cameras(program: &Program, level: &str, kind: &str) -> (Option<u32>, Option<u32>) {
