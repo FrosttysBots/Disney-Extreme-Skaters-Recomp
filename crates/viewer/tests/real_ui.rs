@@ -246,3 +246,44 @@ fn real_pause_menu() {
     }
     render(&screen, &images, "pause_menu_down");
 }
+
+/// The main menu as the Skate Shop makes it (`create_main_menu`).
+#[test]
+#[ignore = "needs the game data"]
+fn real_main_menu() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, images) = screen_from_disc(&mut data);
+    let shop = data.load_level("SkateShop").unwrap();
+    for file in &shop.scripts {
+        let _ = program.add(file);
+    }
+    for key in ["parent", "Dims", "font", "text_pos"] {
+        println!(
+            "default {key}: {:?}",
+            program.default_param(qb::checksum("main_menu_add_item"), qb::checksum(key))
+        );
+    }
+    screen.level = Some(qb::checksum("load_skateshop"));
+    screen.run(qb::checksum("create_main_menu"), Vec::new());
+    for _ in 0..60 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    let mut symbols = qb::Symbols::new();
+    for file in data.global_scripts().unwrap().iter().chain(&shop.scripts) {
+        if let Ok(t) = qb::tokenize(file) {
+            symbols.add_tokens(&t);
+        }
+    }
+    let mut unknown: Vec<_> = screen
+        .unknown
+        .iter()
+        .map(|(n, c)| (symbols.name(*n), *c))
+        .collect();
+    unknown.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    println!("unknown {unknown:?}");
+    assert!(screen.exists("main_menu"));
+    println!("{}", screen.describe());
+    render(&screen, &images, "main_menu");
+}

@@ -86,7 +86,15 @@ impl Program {
                         );
                         items.push((0, Token::EndStruct));
                         let mut at = 0;
-                        if let Ok(Value::Struct(defaults)) = parse_value(&items, &mut at) {
+                        if let Ok(Value::Struct(parsed)) = parse_value(&items, &mut at) {
+                            // A header written as a struct gives its fields.
+                            let mut defaults = Vec::new();
+                            for (k, v) in parsed {
+                                match (k, v) {
+                                    (None, Value::Struct(fields)) => defaults.extend(fields),
+                                    item => defaults.push(item),
+                                }
+                            }
                             self.defaults.insert(name, defaults);
                         }
                         body.drain(..header);
@@ -299,6 +307,43 @@ impl Thread {
                 frame.pc = skip_branch(body, frame.pc + 1, false);
             }
             Token::EndIf => frame.pc = line_end,
+            // `switch <x>` / `case a` / `default` / `endswitch`: on to the
+            // case that matches (or the default), and from the end of a
+            // case's body out past the endswitch.
+            Token::Switch => {
+                let value = first_value(
+                    frame_line(body, frame.pc + 1, line_end),
+                    &frame.params,
+                    program,
+                );
+                let mut at = line_end;
+                let mut depth = 0;
+                let mut default = None;
+                let target = loop {
+                    let Some(t) = body.get(at) else {
+                        break body.len();
+                    };
+                    match t {
+                        Token::Switch => depth += 1,
+                        Token::EndSwitch if depth > 0 => depth -= 1,
+                        Token::EndSwitch => break default.unwrap_or(self::line_end(body, at)),
+                        Token::Case if depth == 0 => {
+                            let end = self::line_end(body, at);
+                            let case =
+                                first_value(frame_line(body, at + 1, end), &frame.params, program);
+                            if case == value {
+                                break end;
+                            }
+                        }
+                        Token::Default if depth == 0 => default = Some(self::line_end(body, at)),
+                        _ => {}
+                    }
+                    at += 1;
+                };
+                frame.pc = target;
+            }
+            Token::Case | Token::Default => frame.pc = after_switch(body, frame.pc + 1),
+            Token::EndSwitch => frame.pc = line_end,
             Token::Begin => {
                 frame.pc = line_end;
                 frame.loops.push((frame.pc, None));
@@ -405,9 +450,26 @@ impl Thread {
         let own = target.is_none_or(|t| host.is_self(t));
         if own && program.has_script(name) {
             if self.frames.len() < MAX_DEPTH {
-                let Value::Struct(params) = args else {
+                let Value::Struct(items) = args else {
                     return false;
                 };
+                // A struct passed whole (`script { a = 1 b = 2 }`) gives
+                // its fields as the script's parameters.
+                let mut params = Vec::with_capacity(items.len());
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Struct(fields)) => {
+                            for (fk, fv) in fields {
+                                match fk {
+                                    Some(fk) => set_param(&mut params, fk, fv),
+                                    None => params.push((None, fv)),
+                                }
+                            }
+                        }
+                        (Some(k), v) => set_param(&mut params, k, v),
+                        (None, v) => params.push((None, v)),
+                    }
+                }
                 self.frames.push(Frame {
                     script: name,
                     pc: 0,
@@ -643,11 +705,44 @@ impl Thread {
 
     /// Evaluates an `if` line: `[NOT] call` or `(expression)`.
     fn condition(&mut self, program: &Program, host: &mut dyn Host, line: &[Token]) -> bool {
+        // `a OR b`, `a AND b` (left to right) at the top level.
+        let mut depth = 0;
+        let mut split = None;
+        for (i, t) in line.iter().enumerate() {
+            match t {
+                Token::OpenParen => depth += 1,
+                Token::CloseParen => depth -= 1,
+                Token::Or | Token::And if depth == 0 => split = Some(i),
+                _ => {}
+            }
+        }
+        if let Some(i) = split {
+            let left = self.condition(program, host, &line[..i]);
+            return match line[i] {
+                Token::Or => left || self.condition(program, host, &line[i + 1..]),
+                _ => left && self.condition(program, host, &line[i + 1..]),
+            };
+        }
         let (negate, rest) = match line {
             [Token::Not, rest @ ..] => (true, rest),
             _ => (false, line),
         };
         let value = match rest.first() {
+            // One group in parentheses: a condition of its own if it holds
+            // a command or AND/OR (`((LevelIs a) OR (LevelIs b))`), else
+            // arithmetic (`(<n> > 3)`).
+            Some(Token::OpenParen) if matching_paren(rest, 0) == rest.len() - 1 => {
+                let inner = &rest[1..rest.len() - 1];
+                let logic = inner.iter().any(|t| matches!(t, Token::Or | Token::And))
+                    || matches!(inner.first(), Some(Token::OpenParen | Token::Not))
+                    || is_command(inner, program);
+                if logic {
+                    self.condition(program, host, inner)
+                } else {
+                    let params = &self.frames.last().unwrap().params;
+                    first_number(rest, params, program).is_some_and(|v| v != 0.0)
+                }
+            }
             Some(Token::OpenParen) => {
                 let params = &self.frames.last().unwrap().params;
                 first_number(rest, params, program).is_some_and(|v| v != 0.0)
@@ -666,6 +761,32 @@ impl Thread {
             }
         };
         value != negate
+    }
+}
+
+/// Whether tokens are a command (a name not followed by an operator, nor
+/// a global value): `LevelIs load_skateshop`, `skater:IsAlive`.
+fn is_command(tokens: &[Token], program: &Program) -> bool {
+    match tokens {
+        [Token::Name(_), Token::Colon, Token::Name(_), ..] => true,
+        [Token::Name(n), rest @ ..] => {
+            program.value(*n).is_none()
+                && !matches!(
+                    rest.first(),
+                    Some(
+                        Token::Equals
+                            | Token::LessThan
+                            | Token::LessThanEqual
+                            | Token::GreaterThan
+                            | Token::GreaterThanEqual
+                            | Token::Add
+                            | Token::Minus
+                            | Token::Multiply
+                            | Token::Divide
+                    )
+                )
+        }
+        _ => false,
     }
 }
 
@@ -711,6 +832,32 @@ fn skip_branch(body: &[Token], mut at: usize, stop_at_else: bool) -> usize {
 }
 
 /// After the `repeat` that closes the loop containing `at`.
+/// Past the `endswitch` closing the switch `at` is inside.
+fn after_switch(body: &[Token], mut at: usize) -> usize {
+    let mut depth = 0;
+    while let Some(t) = body.get(at) {
+        match t {
+            Token::Switch => depth += 1,
+            Token::EndSwitch if depth == 0 => return line_end(body, at),
+            Token::EndSwitch => depth -= 1,
+            _ => {}
+        }
+        at += 1;
+    }
+    body.len()
+}
+
+/// The first value on a line, `<params>` and arithmetic resolved.
+fn first_value(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
+    let mut wrapped = vec![Token::StartStruct];
+    wrapped.extend_from_slice(tokens);
+    wrapped.push(Token::EndStruct);
+    match resolve(&wrapped, params, program) {
+        Value::Struct(mut items) if !items.is_empty() => Some(items.remove(0).1),
+        _ => None,
+    }
+}
+
 fn after_repeat(body: &[Token], mut at: usize) -> usize {
     let mut depth = 0;
     while let Some(t) = body.get(at) {
@@ -758,12 +905,16 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
             }
             Token::Arg => {
                 if let Some(Token::Name(n)) = tokens.get(i + 1) {
-                    let value = params
-                        .iter()
-                        .find(|(k, _)| *k == Some(*n))
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Name(0));
-                    flat.extend(value_tokens(&value));
+                    match params.iter().find(|(k, _)| *k == Some(*n)) {
+                        Some((_, value)) => flat.extend(value_tokens(value)),
+                        // Not given: nothing passed (`num_items = <num_items>`
+                        // leaves the script its default), a bare one too.
+                        None => {
+                            if matches!(flat.as_slice(), [.., Token::Name(_), Token::Equals]) {
+                                flat.truncate(flat.len() - 2);
+                            }
+                        }
+                    }
                     i += 2;
                 } else {
                     i += 1;
@@ -1169,6 +1320,50 @@ mod tests {
                 .find(|c| c.1 == checksum("Report"))
                 .unwrap();
             assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
+        }
+    }
+
+    #[test]
+    fn switch_takes_the_matching_case() {
+        let mut program = Program::new();
+        // switch <kind> / case apple / Report 1 / case pear / Report 2 /
+        // default / Report 3 / endswitch / Report 4
+        let line = |t: Vec<Token>| {
+            let mut t = t;
+            t.push(Token::EndOfLine);
+            t
+        };
+        let body: Vec<Token> = [
+            line(vec![Token::Switch, Token::Arg, n("kind")]),
+            line(vec![Token::Case, n("apple")]),
+            line(vec![n("Report"), Token::Integer(1)]),
+            line(vec![Token::Case, n("pear")]),
+            line(vec![n("Report"), Token::Integer(2)]),
+            line(vec![Token::Default]),
+            line(vec![n("Report"), Token::Integer(3)]),
+            line(vec![Token::EndSwitch]),
+            line(vec![n("Report"), Token::Integer(4)]),
+        ]
+        .concat();
+        program.add_script(checksum("Pick"), body);
+        for (kind, want) in [
+            ("pear", vec![2, 4]),
+            ("apple", vec![1, 4]),
+            ("plum", vec![3, 4]),
+        ] {
+            let mut log = Log::default();
+            let params = vec![(Some(checksum("kind")), Value::Name(checksum(kind)))];
+            Thread::new(checksum("Pick"), params).run(&program, &mut log, 0.0);
+            let got: Vec<i32> = log
+                .calls
+                .iter()
+                .filter(|c| c.1 == checksum("Report"))
+                .filter_map(|c| match &c.2 {
+                    Value::Struct(items) => items.first().and_then(|(_, v)| v.as_int()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got, want, "{kind}");
         }
     }
 

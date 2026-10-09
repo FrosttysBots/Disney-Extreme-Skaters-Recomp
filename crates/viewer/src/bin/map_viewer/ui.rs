@@ -47,6 +47,10 @@ pub enum Action {
     PlayMovie(usize),
     SkipMovie,
     SetIntro(bool),
+    /// The game's main menu (in the Skate Shop), and whether it's where
+    /// the viewer starts.
+    MainMenu,
+    SetStartMenu(bool),
     /// The goal offered by its pro, or not now.
     TakeGoal,
     NotNow,
@@ -184,6 +188,7 @@ pub struct Model {
     /// the start.
     pub movies: Vec<String>,
     pub intro: bool,
+    pub start_menu: bool,
     /// Each level's progress for the character shown (collectibles got,
     /// gaps landed), beside its name.
     pub level_progress: Vec<String>,
@@ -958,6 +963,21 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 }
             }
 
+            if !model.levels.is_empty() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Main menu")
+                        .on_hover_text("The game's own main menu, in the Skate Shop. Arrows choose, Enter picks, Esc goes back.")
+                        .clicked()
+                    {
+                        actions.push(Action::MainMenu);
+                    }
+                    let mut start = model.start_menu;
+                    if ui.checkbox(&mut start, "at the start").changed() {
+                        actions.push(Action::SetStartMenu(start));
+                    }
+                });
+            }
             if !model.movies.is_empty() {
                 egui::CollapsingHeader::new(format!("Movies ({})", model.movies.len()))
                     .id_salt("movies")

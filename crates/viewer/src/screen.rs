@@ -202,6 +202,8 @@ pub struct Screen {
     listening: Vec<u32>,
     /// Commands scripts used that aren't understood, with counts.
     pub unknown: HashMap<u32, usize>,
+    /// The level on, as `LevelIs` asks (`load_skateshop`).
+    pub level: Option<u32>,
 }
 
 const ROOT: usize = 0;
@@ -233,6 +235,7 @@ impl Screen {
             requests: Vec::new(),
             listening: Vec::new(),
             unknown: HashMap::new(),
+            level: None,
         }
     }
 
@@ -344,6 +347,43 @@ impl Screen {
                 break;
             }
             el = self.el(i).and_then(|e| e.parent);
+        }
+    }
+
+    /// The element tree, one per line, indented (for looking into what
+    /// a script made): kind, id, where, size, colour, and any text or
+    /// sprite.
+    pub fn describe(&self) -> String {
+        let mut out = String::new();
+        self.describe_element(ROOT, 0, &mut out);
+        out
+    }
+
+    fn describe_element(&self, i: usize, depth: usize, out: &mut String) {
+        let Some(e) = self.el(i) else { return };
+        let (top_left, size) = self.local_rect(i);
+        out.push_str(&format!(
+            "{:indent$}{:?} {:08x} at ({:.0}, {:.0}) size ({:.0}, {:.0}) scale ({:.2}, {:.2}) rgba {:?} alpha {:.2}{}{}{}{}
+",
+            "",
+            e.kind,
+            e.id,
+            top_left.x,
+            top_left.y,
+            size.x,
+            size.y,
+            e.look.scale.x,
+            e.look.scale.y,
+            e.look.rgba.map(|c| (c * 128.0).round() as i32),
+            e.look.alpha,
+            if e.text.is_empty() { String::new() } else { format!(" {:?}", e.text) },
+            e.texture.map_or(String::new(), |t| format!(" texture {t:08x}")),
+            if e.hidden { " hidden" } else { "" },
+            if e.focused { " focused" } else { "" },
+            indent = depth * 2
+        ));
+        for &c in &e.children {
+            self.describe_element(c, depth + 1, out);
         }
     }
 
@@ -779,27 +819,19 @@ impl Screen {
                             }
                         }
                     } else if k == checksum("event_handlers") {
+                        let new: Vec<(u32, u32, Params)> = match v {
+                            Value::Array(list) => list.iter().filter_map(handler).collect(),
+                            _ => Vec::new(),
+                        };
+                        // Replacing: those for the events named go, the
+                        // rest stay (an item's focus handlers outlive
+                        // replacing its pad_choose ones).
                         if replace && !handlers_set {
-                            e.handlers.clear();
+                            e.handlers
+                                .retain(|(ev, ..)| !new.iter().any(|h| h.0 == *ev));
                         }
                         handlers_set = true;
-                        if let Value::Array(list) = v {
-                            for h in list {
-                                if let Some(handler) = handler(h) {
-                                    // Replacing: those of the same event go.
-                                    if replace {
-                                        e.handlers.retain(|(ev, ..)| {
-                                            *ev != handler.0
-                                                || list
-                                                    .iter()
-                                                    .filter_map(self::handler)
-                                                    .any(|o| o.0 == *ev)
-                                        });
-                                    }
-                                    e.handlers.push(handler);
-                                }
-                            }
-                        }
+                        e.handlers.extend(new);
                     }
                 }
                 _ => {}
@@ -1245,6 +1277,30 @@ impl Host for Ui<'_> {
             if let (Some(event), Some(to)) = (event, to) {
                 s.fire(to, event, data);
             }
+        } else if name == c("LevelIs") {
+            let asked = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            return Outcome::Done(asked.is_some() && asked == s.level);
+        } else if name == c("IsTrue") {
+            // A global flag's value (`IsTrue Bootstrap_Build`).
+            let set = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => self.program.value(*n).and_then(Value::as_int),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            return Outcome::Done(set.is_some_and(|v| v != 0));
+        } else if name == c("isngc") || name == c("CD") {
+            // The GameCube disc's.
+            return Outcome::Done(true);
+        } else if name == c("isxbox") || name == c("IsPs2") || name == c("IsPC") {
+            return Outcome::Done(false);
         } else if name == c("playsound") {
             if let Some(sound) = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {

@@ -234,8 +234,13 @@ fn main() -> Result<()> {
             app.load_character(Some(i));
         }
     }
-    // Open the requested level, else the last one viewed, else the hub.
-    if let Some(level) = args
+    // As the game boots: the Skate Shop and its main menu (unless a level
+    // was asked for, or the panel says not to). Else the last level
+    // viewed, else the hub.
+    let main_menu = args.level.is_none() && app.model.start_menu;
+    if main_menu {
+        app.open_main_menu();
+    } else if let Some(level) = args
         .level
         .or_else(|| app.settings.last_level.clone())
         .or_else(|| Some("HUB".into()))
@@ -1600,8 +1605,10 @@ struct App<'a> {
     moon_gravity: f32,
     slomo_speed: f32,
     /// The game's own menus (its screen elements), when the data has
-    /// their sprites and fonts.
+    /// their sprites and fonts; and the main menu waiting on the Skate
+    /// Shop loading.
     screen: Option<ScreenUi>,
+    main_menu_pending: bool,
     /// The movie playing, and those to play after it (by name).
     movie: Option<MoviePlaying>,
     movie_queue: std::collections::VecDeque<String>,
@@ -1648,6 +1655,7 @@ impl<'a> App<'a> {
         let volume = |key: &str| settings.best.get(key).map_or(1.0, |v| *v as f32 / 100.0);
         let (effects_volume, music_volume) = (volume("volume.effects"), volume("volume.music"));
         let intro = settings.best.get("intro") != Some(&0);
+        let start_menu = settings.best.get("start_menu") != Some(&0);
         App {
             settings,
             gpu: None,
@@ -1658,6 +1666,7 @@ impl<'a> App<'a> {
                 levels: Vec::new(),
                 movies: Vec::new(),
                 intro,
+                start_menu,
                 level_progress: Vec::new(),
                 current: None,
                 loading: None,
@@ -1766,6 +1775,7 @@ impl<'a> App<'a> {
             movie: None,
             movie_queue: Default::default(),
             screen: None,
+            main_menu_pending: false,
             moon_gravity: 0.5,
             slomo_speed: 0.5,
             goal_streams: None,
@@ -1920,6 +1930,18 @@ impl<'a> App<'a> {
                         if self.settings.best.contains_key(&format!("won.{id:08x}")) {
                             level.behaviour.won_goals.insert(id);
                         }
+                    }
+                }
+                // The game's menus know the level (`LevelIs load_skateshop`),
+                // and the main menu comes up if it was waiting on it.
+                let shop = info.id.eq_ignore_ascii_case("SkateShop");
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                    screen.screen.level = Some(qb::checksum(&format!("load_{}", info.id)));
+                    if std::mem::take(&mut self.main_menu_pending) && shop {
+                        screen
+                            .screen
+                            .run(qb::checksum("launch_main_menu"), Vec::new());
                     }
                 }
                 self.settings.last_level = Some(info.id);
@@ -3861,6 +3883,37 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The game's main menu (`launch_main_menu`), in the Skate Shop as the
+    /// game has it: there now, or once the shop's loaded.
+    fn open_main_menu(&mut self) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(i) = self
+            .model
+            .levels
+            .iter()
+            .position(|l| l.id.eq_ignore_ascii_case("SkateShop"))
+        else {
+            return;
+        };
+        let here = self
+            .level
+            .as_ref()
+            .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"));
+        if here {
+            if let Some(screen) = &mut self.screen {
+                screen.screen.clear();
+                screen
+                    .screen
+                    .run(qb::checksum("launch_main_menu"), Vec::new());
+            }
+        } else {
+            self.main_menu_pending = true;
+            self.start_load(i);
+        }
+    }
+
     /// The game's menus run on: their scripts (with the level's), sounds,
     /// and what they ask of the viewer (`unpausegame`: resume).
     fn update_screen(&mut self, dt: f32) {
@@ -4883,6 +4936,14 @@ impl<'a> App<'a> {
                     }
                 }
                 ui::Action::SkipMovie => self.stop_movie(),
+                ui::Action::MainMenu => self.open_main_menu(),
+                ui::Action::SetStartMenu(on) => {
+                    self.model.start_menu = on;
+                    self.settings
+                        .best
+                        .insert("start_menu".into(), u32::from(on));
+                    self.settings.save();
+                }
                 ui::Action::SetIntro(on) => {
                     self.model.intro = on;
                     self.settings.best.insert("intro".into(), u32::from(on));
