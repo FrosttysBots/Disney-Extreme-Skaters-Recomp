@@ -3152,6 +3152,13 @@ impl<'a> App<'a> {
         for script in std::mem::take(&mut skater.gap_scripts) {
             level.behaviour.run_level_script(script, Vec::new());
         }
+        // Camera paths the scripts play (a goal's cutscenes: each arcade
+        // machine coming on), one at a time.
+        for path in std::mem::take(&mut level.behaviour.cameras) {
+            if !self.cutscene && self.cutscene_request.is_none() {
+                self.cutscene_request = Some(path);
+            }
+        }
         // What the scripts put on screen, as the skater's message.
         if let Some(text) = std::mem::take(&mut level.behaviour.messages).pop() {
             skater.message = Some((text, 2.5));

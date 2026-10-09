@@ -154,6 +154,9 @@ pub struct Behaviour {
     /// Text scripts put on screen (`Create_Panel_Message`,
     /// `create_panel_block`: a goal's messages), for the viewer to show.
     pub messages: Vec<String>,
+    /// Camera paths scripts asked to play (`PlaySkaterCamAnim Name =
+    /// path`), for the viewer.
+    pub cameras: Vec<u32>,
     /// The goals won (their ids), for `GoalManager_HasWonGoal`.
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
@@ -335,6 +338,7 @@ impl Behaviour {
             other_creates: Vec::new(),
             voice_lines: Vec::new(),
             messages: Vec::new(),
+            cameras: Vec::new(),
             won_goals: Default::default(),
         }
     }
@@ -1165,6 +1169,22 @@ impl Host for Commands<'_> {
             if ours {
                 b.goal_count += 1;
             }
+        } else if name == c("PlaySkaterCamAnim") {
+            // A camera path played (not `STOP`ped), unless it's the goal's
+            // own (`virtual_cam`, made up round the pro).
+            let path = named("Name");
+            if let (Some(path), false, false) = (
+                path,
+                args.has_flag(c("STOP")),
+                args.has_flag(c("virtual_cam")),
+            ) {
+                if b.cameras.len() < 8 {
+                    b.cameras.push(path);
+                }
+            }
+        } else if name == c("SkaterCamAnimFinished") {
+            // (The viewer plays them as cutscenes; scripts needn't wait.)
+            return Outcome::Done(true);
         } else if name == c("CreateScreenElement") {
             // Text put on screen (a panel message): its words, the goal's
             // own text block aside (the viewer shows that already). (Its
@@ -1227,8 +1247,13 @@ impl Host for Commands<'_> {
                 flags.retain(|f| *f != flag);
             }
         } else if name == c("GoalManager_CanStartGoal") {
-            // The goal on starts (`goal_start` then makes its things).
-            return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
+            // The goal on starts (`goal_start` then makes its things); with
+            // no goal named, whether a goal's cutscene can play now (yes:
+            // Graveyard's happy skulls wait on it).
+            return Outcome::Done(match named("Name") {
+                Some(goal) => Some(goal) == b.active_goal,
+                None => true,
+            });
         } else if name == c("GoalManager_GetGoalParams")
             || name == c("GoalManager_GetNumberCollected")
         {

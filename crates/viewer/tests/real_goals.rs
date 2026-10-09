@@ -8,8 +8,9 @@ use glam::Vec3;
 
 /// Every level's goals that its own scripts play (not the score, letters
 /// and race goals): started as the viewer starts them, then the skater
-/// taken to each thing that does something when it's near, in turn. The
-/// goals that are only that much get done.
+/// taken to each thing that does something when it's near, in turn
+/// (following what moves off), then every gap landed and trick spot done.
+/// The goals that are only that much get done.
 /// Run with `cargo test --release -p desa_viewer -- --ignored`; the game
 /// data is a disc image or folder in `DESA_GAME_DATA`, by default `extracted`.
 #[test]
@@ -20,6 +21,7 @@ fn real_goal_scripts() {
     let mut data = GameData::open(Path::new(&path)).unwrap();
     let sets = data.animation_sets().unwrap();
     let mut done = Vec::new();
+    let mut gapped = Vec::new();
     for level in data.levels() {
         let mut files = data.load_level(&level.id).unwrap();
         let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
@@ -93,6 +95,25 @@ fn real_goal_scripts() {
             }
             // (What the last one set off finishes.)
             run(&mut b, 300);
+            let near = b.goal_progress();
+            // Then every gap landed and trick spot done: their scripts.
+            let gap_scripts: Vec<u32> = desa_viewer::triggers::gaps(&nodes, first.program())
+                .values()
+                .filter_map(|g| match g {
+                    skate::GapTrigger::End { script, .. } => *script,
+                    skate::GapTrigger::Start { trick, .. } => trick.as_ref().map(|t| t.script),
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            for script in gap_scripts {
+                b.run_level_script(script, Vec::new());
+                run(&mut b, 120);
+            }
+            run(&mut b, 300);
+            if g.needed > 0 && b.goal_progress() >= g.needed && near < g.needed {
+                gapped.push(format!("{} {}", level.id, goal.kind));
+            }
             println!(
                 "{} {} \"{}\": {}/{} after {} visits",
                 level.id,
@@ -102,12 +123,23 @@ fn real_goal_scripts() {
                 g.needed,
                 visited.len()
             );
-            if g.needed > 0 && b.goal_progress() >= g.needed {
+            if g.needed > 0 && near >= g.needed {
                 done.push(format!("{} {}", level.id, goal.kind));
             }
         }
     }
     println!("done by going near things: {done:?}");
+    println!("then by landing every gap: {gapped:?}");
+    for goal in [
+        "camp Gaps3",
+        "camp Gaps2",
+        "canyon Gaps",
+        "graveyard Trickspot",
+        "HUB Gaps2",
+        "PrideRock Gaps",
+    ] {
+        assert!(gapped.contains(&goal.to_string()), "{goal}");
+    }
     for goal in [
         "beach Counter",
         "pizza Collect2",
