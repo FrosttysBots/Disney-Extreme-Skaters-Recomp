@@ -27,6 +27,8 @@
 //!   `Obj_WaitMove` and `Obj_IsMoving`.
 //! - `Obj_StickToGround distAbove distBelow [pitch]` (feet; `off`): kept
 //!   on the ground below as it goes, tipped with the slope.
+//! - Object flags: `Obj_SetFlag`, `Obj_ClearFlag`, `Obj_FlagSet`,
+//!   `Obj_FlagNotSet`.
 //! - `LocalSkaterExists` (skating), `Obj_LookAtObject Name = object`.
 //! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
 //!   `Obj_Hover Amp = units Freq = hertz`.
@@ -78,6 +80,8 @@ struct State {
     /// Bobbing up and down (`Obj_Hover Amp = units Freq = hertz`), shown
     /// only: where it is stays put.
     hover: Option<(f32, f32)>,
+    /// Its flags (`Obj_SetFlag`, `Obj_ClearFlag`; `Obj_FlagSet` asks).
+    flags: Vec<u32>,
     /// Kept on the ground below as it moves (`Obj_StickToGround distAbove
     /// distBelow [pitch]`): how far up and down to look (units), and
     /// whether to tip with the slope.
@@ -164,6 +168,7 @@ impl Behaviour {
                 spin: 0.0,
                 hover: None,
                 stick: None,
+                flags: Vec::new(),
             })
             .collect();
         let threads = nodes
@@ -753,6 +758,38 @@ impl Host for Commands<'_> {
             };
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
+        } else if [
+            "Obj_SetFlag",
+            "Obj_ClearFlag",
+            "Obj_FlagSet",
+            "Obj_FlagNotSet",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            // The flag's the first bare name (`Obj_FlagSet Expired`).
+            let flag = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    (Some(k), Value::Name(n)) if *k == c("flag") => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(flag) = flag else {
+                return Outcome::Done(false);
+            };
+            let flags = &mut b.states[object].flags;
+            if name == c("Obj_SetFlag") {
+                if !flags.contains(&flag) {
+                    flags.push(flag);
+                }
+            } else if name == c("Obj_ClearFlag") {
+                flags.retain(|f| *f != flag);
+            } else {
+                let set = flags.contains(&flag);
+                return Outcome::Done(if name == c("Obj_FlagSet") { set } else { !set });
+            }
         } else if name == c("midgoalvoiceover") || name == c("obj_playstream") {
             // `midgoalvoiceover stream = name`, `obj_playstream name`.
             let stream = named("stream").or_else(|| match args {
