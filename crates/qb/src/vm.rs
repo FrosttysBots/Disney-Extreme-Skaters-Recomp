@@ -179,6 +179,13 @@ pub trait Host {
         false
     }
 
+    /// A script about to be called: true if the host takes the call
+    /// itself (the script isn't run), as a viewer does for the game's
+    /// screens it doesn't have.
+    fn calling(&mut self, _script: u32, _args: &Value) -> bool {
+        false
+    }
+
     /// The tags `SetTags` and `GetTags` work on, if the host keeps them
     /// (a screen element's own); else the thread's.
     fn tags(&mut self) -> Option<&mut Params> {
@@ -448,6 +455,9 @@ impl Thread {
         tokens.push(Token::EndStruct);
         let args = resolve(&tokens, &frame.params, program);
         let own = target.is_none_or(|t| host.is_self(t));
+        if own && program.has_script(name) && host.calling(name, &args) {
+            return true;
+        }
         if own && program.has_script(name) {
             if self.frames.len() < MAX_DEPTH {
                 let Value::Struct(items) = args else {

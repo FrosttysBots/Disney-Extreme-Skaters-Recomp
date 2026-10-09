@@ -301,4 +301,26 @@ fn real_main_menu() {
     assert!(screen.exists("main_menu"));
     println!("{}", screen.describe());
     render(&screen, &images, "main_menu");
+    // Free Skate: down three, choose.
+    if std::env::var("CHOOSE").is_ok() {
+        screen.unknown.clear();
+        let downs: usize = std::env::var("CHOOSE").unwrap().parse().unwrap_or(3);
+        for _ in 0..downs {
+            screen.pad(desa_viewer::screen::Pad::Down);
+            screen.update(&program, 1.0 / 60.0);
+        }
+        screen.pad(desa_viewer::screen::Pad::Choose);
+        for _ in 0..120 {
+            screen.update(&program, 1.0 / 60.0);
+        }
+        let mut unknown: Vec<_> = screen
+            .unknown
+            .iter()
+            .map(|(n, c)| (symbols.name(*n), *c))
+            .collect();
+        unknown.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        println!("after choosing: unknown {unknown:?}");
+        println!("{}", screen.describe());
+        render(&screen, &images, "main_menu_chosen");
+    }
 }

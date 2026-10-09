@@ -1114,7 +1114,16 @@ impl ScreenUi {
             return None;
         }
         let mut screen = desa_viewer::screen::Screen::new(fonts, sizes);
-        screen.listen(&["unpausegame"]);
+        // What the viewer does itself: resuming, and the main menu's
+        // choices whose screens need the career's profiles.
+        screen.listen(&[
+            "unpausegame",
+            "preview_skater_menu",
+            "launch_select_skater_menu",
+            "start_2p",
+            "launch_options_menu_load_game_sequence",
+            "launch_options_menu_save_game_sequence",
+        ]);
         Some(ScreenUi {
             screen,
             images,
@@ -1943,6 +1952,9 @@ impl<'a> App<'a> {
                             .screen
                             .run(qb::checksum("launch_main_menu"), Vec::new());
                     }
+                }
+                if !shop {
+                    self.settings.last_skated = Some(info.id.clone());
                 }
                 self.settings.last_level = Some(info.id);
                 self.settings.save();
@@ -3929,11 +3941,42 @@ impl<'a> App<'a> {
                 audio.play_named(sound, 1.0);
             }
         }
+        let c = qb::checksum;
         for (name, _) in requests {
-            if name == qb::checksum("unpausegame") && self.model.character.paused {
+            if name == c("unpausegame") && self.model.character.paused {
                 self.model.character.paused = false;
                 if let Some(screen) = &mut self.screen {
                     screen.screen.clear();
+                }
+            } else if name == c("preview_skater_menu") || name == c("launch_select_skater_menu") {
+                // Play Game: skating in the Hub, as the career starts.
+                // Free Skate: on the level last skated.
+                let level = if name == c("preview_skater_menu") {
+                    "HUB".to_string()
+                } else {
+                    self.settings
+                        .last_skated
+                        .clone()
+                        .unwrap_or_else(|| "HUB".into())
+                };
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                }
+                if let Some(i) = self
+                    .model
+                    .levels
+                    .iter()
+                    .position(|l| l.id.eq_ignore_ascii_case(&level))
+                {
+                    self.skate_on_load = true;
+                    self.start_load(i);
+                }
+            } else {
+                // Saving, loading and two players aren't the viewer's.
+                self.model.message = Some("That isn't in the viewer.".into());
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                    screen.screen.run(c("launch_main_menu"), Vec::new());
                 }
             }
         }

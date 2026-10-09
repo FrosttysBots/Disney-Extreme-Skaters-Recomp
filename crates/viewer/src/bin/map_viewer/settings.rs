@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     /// The disc image or folder last opened.
     pub data_path: Option<PathBuf>,
-    /// The archive id of the last level viewed.
+    /// The archive id of the last level viewed, and of the last but the
+    /// Skate Shop (the main menu's Free Skate goes there).
     pub last_level: Option<String>,
+    pub last_skated: Option<String>,
     /// The id of the character last shown.
     pub last_character: Option<String>,
     pub speed: Option<f32>,
@@ -43,6 +45,9 @@ impl Settings {
             match key.trim() {
                 "data_path" if !value.is_empty() => settings.data_path = Some(PathBuf::from(value)),
                 "last_level" if !value.is_empty() => settings.last_level = Some(value.to_string()),
+                "last_skated" if !value.is_empty() => {
+                    settings.last_skated = Some(value.to_string())
+                }
                 "last_character" if !value.is_empty() => {
                     settings.last_character = Some(value.to_string())
                 }
@@ -85,6 +90,12 @@ impl Settings {
         }
         if let Some(level) = &self.last_level {
             text += &format!("last_level={level}\n");
+        }
+        if let Some(level) = &self.last_skated {
+            text += &format!(
+                "last_skated={level}
+"
+            );
         }
         if let Some(character) = &self.last_character {
             text += &format!("last_character={character}\n");

@@ -248,8 +248,10 @@ impl Screen {
         self.fonts.get(&name)
     }
 
-    /// Commands (by name) whose calls go to [`Screen::requests`] for the
-    /// viewer (`unpausegame`, `PauseGame`...).
+    /// Commands and scripts (by name) whose calls go to
+    /// [`Screen::requests`] for the viewer (`unpausegame`, or a screen it
+    /// does itself: `launch_select_skater_menu`); listened-for scripts
+    /// aren't run.
     pub fn listen(&mut self, commands: &[&str]) {
         self.listening.extend(commands.iter().map(|c| checksum(c)));
     }
@@ -303,7 +305,9 @@ impl Screen {
         let mut running = std::mem::take(&mut self.running);
         running.append(&mut self.starting);
         for r in &mut running {
-            if r.thread.is_finished() || self.el(r.element).is_none() {
+            // (A script goes on when its element's gone: an item's choice
+            // takes its menu away, then makes the next.)
+            if r.thread.is_finished() {
                 continue;
             }
             let mut host = Ui {
@@ -325,7 +329,7 @@ impl Screen {
                 }
             }
         }
-        running.retain(|r| !r.thread.is_finished() && self.el(r.element).is_some());
+        running.retain(|r| !r.thread.is_finished());
         running.append(&mut self.running);
         self.running = running;
     }
@@ -1201,6 +1205,16 @@ impl Host for Ui<'_> {
 
     fn tags(&mut self) -> Option<&mut Params> {
         self.screen.el_mut(self.element).map(|e| &mut e.tags)
+    }
+
+    /// Scripts the viewer listens for are its to do (the screens it
+    /// does itself), with their arguments.
+    fn calling(&mut self, script: u32, args: &Value) -> bool {
+        if self.screen.listening.contains(&script) {
+            self.screen.requests.push((script, args.clone()));
+            return true;
+        }
+        false
     }
 
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
