@@ -3061,7 +3061,7 @@ impl<'a> App<'a> {
             level.behaviour.run_level_script(script, Vec::new());
         }
         // What the scripts put on screen, as the skater's message.
-        if let Some(text) = level.behaviour.messages.drain(..).last() {
+        if let Some(text) = std::mem::take(&mut level.behaviour.messages).pop() {
             skater.message = Some((text, 2.5));
         }
         // And touched trigger geometry's.

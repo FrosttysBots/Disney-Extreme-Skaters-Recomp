@@ -446,10 +446,11 @@ impl Thread {
                     Some(Value::Integer(i)) => text.push_str(&i.to_string()),
                     Some(Value::Float(f)) => text.push_str(&f.to_string()),
                     Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
-                    Some(Value::Name(n)) => match program.value(*n) {
-                        Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
-                        _ => {}
-                    },
+                    Some(Value::Name(n)) => {
+                        if let Some(Value::String(s) | Value::LocalString(s)) = program.value(*n) {
+                            text.push_str(s);
+                        }
+                    }
                     _ => {}
                 }
             }
