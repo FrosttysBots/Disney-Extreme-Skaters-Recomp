@@ -140,6 +140,10 @@ struct Args {
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
+    /// For --replay-at: which replay camera (0 as played, 1 behind, 2
+    /// front, 3 left, 4 right)
+    #[arg(long, requires = "replay_at")]
+    replay_camera: Option<usize>,
     /// For --run: once skated, show the run's replay this many seconds in
     #[arg(long, requires = "run")]
     replay_at: Option<f32>,
@@ -915,6 +919,16 @@ fn particle_batches(
 /// How near the camera the animals' and cars' shadows are drawn.
 const SHADOW_RANGE: f32 = 3000.0;
 
+/// The replay's cameras: as it was played, then the game's replay
+/// cameras (`Skater_Camera_Replay_*`, `behind` and `above` in feet).
+const REPLAY_CAMERAS: [(&str, Option<&str>); 5] = [
+    ("As played", None),
+    ("Behind", Some("Skater_Camera_Replay_Behind")),
+    ("Front", Some("Skater_Camera_Replay_Front")),
+    ("Left", Some("Skater_Camera_Replay_Left")),
+    ("Right", Some("Skater_Camera_Replay_Right")),
+];
+
 /// How far away objects' sounds fade out (units).
 const OBJECT_SOUND_RANGE: f32 = 2000.0;
 
@@ -1133,6 +1147,9 @@ struct App<'a> {
     /// the skater's skitching on.
     vehicle_objects: Vec<usize>,
     skitched: Option<usize>,
+    /// Which replay camera, and where its eye is (eased).
+    replay_camera: usize,
+    replay_eye: Option<Vec3>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The warp offered (the level's portal) and, once taken, to skate on
@@ -1235,6 +1252,7 @@ impl<'a> App<'a> {
                     collect: true,
                     collected: None,
                     replaying: false,
+                    replay_camera: REPLAY_CAMERAS[0].0.to_string(),
                     goals: Vec::new(),
                     can_letters: false,
                     race_name: None,
@@ -1277,6 +1295,8 @@ impl<'a> App<'a> {
             letters: None,
             racing: None,
             photo: false,
+            replay_camera: 0,
+            replay_eye: None,
             vehicle_objects: Vec::new(),
             skitched: None,
             frame: 0,
@@ -2876,6 +2896,13 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The replay's next camera.
+    fn next_replay_camera(&mut self) {
+        self.replay_camera = (self.replay_camera + 1) % REPLAY_CAMERAS.len();
+        self.replay_eye = None;
+        self.model.character.replay_camera = REPLAY_CAMERAS[self.replay_camera].0.to_string();
+    }
+
     /// Shows the next frame of the replay, and at its end goes back to
     /// how the run finished.
     fn play_replay(&mut self, dt: f32) {
@@ -2896,6 +2923,42 @@ impl<'a> App<'a> {
         self.skate_pose = Some(frame.pose.clone());
         self.blend_from = None;
         self.camera = frame.camera;
+        // One of the game's replay cameras: hung off the skater by its
+        // setting, behind and above, eased after it.
+        let (_, setting) = REPLAY_CAMERAS[self.replay_camera];
+        let setting = setting.and_then(|name| {
+            let program = self.level.as_ref()?.behaviour.program();
+            let camera = program.value(qb::checksum(name))?;
+            let get = |k: &str| camera.get(qb::checksum(k)).and_then(qb::Value::as_f32);
+            Some((get("behind")?, get("above")?, name))
+        });
+        if let Some((behind, above, name)) = setting {
+            let forward = frame
+                .placement
+                .transform_vector3(Vec3::Z)
+                .with_y(0.0)
+                .normalize_or(Vec3::Z);
+            let side = Vec3::Y.cross(forward);
+            let way = if name.contains("Front") {
+                forward
+            } else if name.contains("Left") {
+                side
+            } else if name.contains("Right") {
+                -side
+            } else {
+                -forward
+            };
+            let target = frame.position + Vec3::Y * 40.0;
+            let wanted = target + way * behind * 12.0 + Vec3::Y * above * 12.0;
+            let eye = match self.replay_eye {
+                Some(eye) => eye.lerp(wanted, (dt * 4.0).min(1.0)),
+                None => wanted,
+            };
+            self.replay_eye = Some(eye);
+            self.camera = FlyCamera::looking_at(eye, target);
+        } else {
+            self.replay_eye = None;
+        }
         skater.position = frame.position;
         skater.flipped = frame.flipped;
         let model = &mut self.model.character;
@@ -3785,6 +3848,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ui::Action::StopReplay => self.replay = Some(f32::INFINITY),
+                ui::Action::ReplayCamera => self.next_replay_camera(),
             }
         }
         // Load after the "Loading" message has been on screen for a frame.
@@ -3830,6 +3894,10 @@ impl<'a> App<'a> {
         }
         if code == KeyCode::KeyM && !repeat && self.skating.is_some() {
             self.model.character.show_map = !self.model.character.show_map;
+            return;
+        }
+        if code == KeyCode::KeyC && !repeat && self.replay.is_some() {
+            self.next_replay_camera();
             return;
         }
         if code == KeyCode::KeyC && !repeat && self.skating.is_some() {
@@ -4259,6 +4327,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             if let Some(at) = args.replay_at {
                 app.replay = Some(0.0);
                 app.model.character.replaying = true;
+                for _ in 0..args.replay_camera.unwrap_or(0) % REPLAY_CAMERAS.len() {
+                    app.next_replay_camera();
+                }
                 app.play_replay(at);
             }
             camera = app.camera;

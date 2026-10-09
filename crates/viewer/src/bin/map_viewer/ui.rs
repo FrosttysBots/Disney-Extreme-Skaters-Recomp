@@ -32,6 +32,8 @@ pub enum Action {
     /// Watch the run just skated again, or stop watching.
     Replay,
     StopReplay,
+    /// The replay's next camera.
+    ReplayCamera,
     PlayCameraPath(usize),
     StopCameraPath,
 }
@@ -90,8 +92,9 @@ pub struct CharacterModel {
     /// this level's are got.
     pub collect: bool,
     pub collected: Option<(u32, u32)>,
-    /// Watching the run again.
+    /// Watching the run again, and through which camera.
     pub replaying: bool,
+    pub replay_camera: String,
     /// The level's goals (type, text), for the list in the panel.
     pub goals: Vec<(String, String)>,
     /// The level has S-K-A-T-E letters; while collecting them, which are
@@ -449,7 +452,7 @@ fn letters_result(
 }
 
 /// While a replay plays: a label saying so, and a button to stop it.
-fn replay_banner(ctx: &egui::Context, actions: &mut Vec<Action>) {
+fn replay_banner(ctx: &egui::Context, camera: &str, actions: &mut Vec<Action>) {
     egui::Area::new(egui::Id::new("replay"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
@@ -461,6 +464,13 @@ fn replay_banner(ctx: &egui::Context, actions: &mut Vec<Action>) {
                         .color(egui::Color32::from_rgb(255, 80, 60))
                         .background_color(egui::Color32::from_black_alpha(140)),
                 );
+                if ui
+                    .button(format!("Camera: {camera}"))
+                    .on_hover_text("The game's replay cameras (C)")
+                    .clicked()
+                {
+                    actions.push(Action::ReplayCamera);
+                }
                 if ui.button("Stop").clicked() {
                     actions.push(Action::StopReplay);
                 }
@@ -770,7 +780,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
         }
         if model.character.replaying {
-            replay_banner(ctx, &mut actions);
+            replay_banner(ctx, &model.character.replay_camera, &mut actions);
         } else if let Some(result) = model.character.run_result {
             let goal = model
                 .character

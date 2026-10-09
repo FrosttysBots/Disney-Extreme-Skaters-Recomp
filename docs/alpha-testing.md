@@ -91,7 +91,8 @@ skater is and what it's doing.
   runs out, the combo you're in still counts once it lands, then the
   skater brakes to a stop and the score goes against your best for that
   level and character (kept between runs). Replay watches the run again,
-  through the same camera, with the score and combos as they were.
+  with the score and combos as they were, as played or through the game's
+  replay cameras (behind, front, left, right: C or the Camera button).
 - S-K-A-T-E letters (the panel's button, on every level that has them):
   the level's letters goal, its own time (a minute on Beach and Canyon,
   two elsewhere) to collect the five spinning letters from the goal's
