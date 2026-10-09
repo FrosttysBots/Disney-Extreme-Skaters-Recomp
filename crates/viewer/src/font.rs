@@ -30,6 +30,10 @@ pub struct Glyph {
     pub width: u16,
     pub height: u16,
     pub top: u16,
+    /// The columns of it that show (outline included), from its left:
+    /// the cell has room round the letter, so letters go by these.
+    pub ink_left: u16,
+    pub ink_width: u16,
 }
 
 /// A font: its glyphs and their atlas (RGBA, `atlas_width` wide).
@@ -90,6 +94,8 @@ impl Font {
                 y: u16_at(r + 2)?,
                 width: u16_at(r + 4)?,
                 height: u16_at(r + 6)?,
+                ink_left: 0,
+                ink_width: 0,
             });
         }
         // The palette's colours, then the pixels out of their 8x4 tiles.
@@ -105,6 +111,24 @@ impl Font {
             let y = (tile / tiles_across) * 4 + within / 8;
             let at = (y * width as usize + x) * 4;
             atlas[at..at + 4].copy_from_slice(&colours[usize::from(index)]);
+        }
+        // How much of each cell shows.
+        for g in &mut glyphs {
+            let shows = |x: u32| {
+                (u32::from(g.y)..u32::from(g.y) + u32::from(g.height)).any(|y| {
+                    let at = ((y * width + x) * 4 + 3) as usize;
+                    x < width && y < height && atlas.get(at).is_some_and(|a| *a > 24)
+                })
+            };
+            let cols: Vec<u32> = (u32::from(g.x)..u32::from(g.x) + u32::from(g.width))
+                .filter(|x| shows(*x))
+                .collect();
+            if let (Some(first), Some(last)) = (cols.first(), cols.last()) {
+                g.ink_left = (first - u32::from(g.x)) as u16;
+                g.ink_width = (last - first + 1) as u16;
+            } else {
+                g.ink_width = g.width;
+            }
         }
         Ok(Font {
             line_height,
@@ -122,16 +146,19 @@ impl Font {
         self.glyphs.iter().find(|g| u32::from(g.code) == code)
     }
 
-    /// How wide a line of text is (characters it lacks are left out; a
-    /// space is a third of the line height).
+    /// How far a character moves the pen on: what of it shows, letters'
+    /// outlines just meeting. A space is a third of the line height.
+    pub fn advance(&self, c: char) -> f32 {
+        match (c, self.glyph(c)) {
+            (_, Some(g)) => f32::from(g.ink_width) - 1.0,
+            (' ', None) => self.line_height as f32 / 3.0,
+            _ => 0.0,
+        }
+    }
+
+    /// How wide a line of text is (characters it lacks are left out).
     pub fn width(&self, text: &str) -> f32 {
-        text.chars()
-            .map(|c| match (c, self.glyph(c)) {
-                (_, Some(g)) => f32::from(g.width) + 1.0,
-                (' ', None) => self.line_height as f32 / 3.0,
-                _ => 0.0,
-            })
-            .sum()
+        text.chars().map(|c| self.advance(c)).sum()
     }
 }
 

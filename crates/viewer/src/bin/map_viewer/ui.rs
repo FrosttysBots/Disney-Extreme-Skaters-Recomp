@@ -129,6 +129,8 @@ pub struct CharacterModel {
     /// got and needed; and how it ended (won?).
     pub goal_progress: Option<(String, String, usize, usize)>,
     pub goal_result: Option<(String, bool)>,
+    /// The game's own menu (its screen elements) is up, taking the keys.
+    pub game_menu: bool,
     /// The level has S-K-A-T-E letters; while collecting them, which are
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
@@ -829,7 +831,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if let Some(result) = model.character.letters_result {
             letters_result(ctx, result, &mut actions);
         }
-        if model.character.paused {
+        if model.character.paused && !model.character.game_menu {
             egui::Area::new(egui::Id::new("pause"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
                 .show(ctx, |ui| {

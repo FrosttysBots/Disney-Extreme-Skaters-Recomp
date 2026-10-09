@@ -148,6 +148,12 @@ struct Args {
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
+    /// For --skate: bring up the game's pause menu at the end
+    #[arg(long, requires = "skate")]
+    pause: bool,
+    /// For --pause: menu presses, in order (u up, d down, c choose, b back)
+    #[arg(long, requires = "pause", default_value = "")]
+    pause_keys: String,
     /// For --skate: play another of the level's goals from its own
     /// scripts, by its type (`Gaps`, `Gaps2`...)
     #[arg(long, requires = "skate")]
@@ -1071,6 +1077,135 @@ impl MoviePlaying {
     }
 }
 
+/// The game's screen elements (`desa_viewer::screen`) with what they're
+/// drawn with: the panel sprites and fonts, as egui textures once used.
+struct ScreenUi {
+    screen: desa_viewer::screen::Screen,
+    images: HashMap<u32, ngc_texture::Image>,
+    textures: HashMap<u32, egui::TextureHandle>,
+    font_textures: HashMap<u32, egui::TextureHandle>,
+}
+
+impl ScreenUi {
+    /// The shared panel sprites and fonts, and the hub theme's.
+    fn load(data: &mut GameData) -> Option<ScreenUi> {
+        let ui = data.ui_files(&["panelsprites.prg", "hubpanel.prg"]).ok()?;
+        let mut images = HashMap::new();
+        let mut sizes = HashMap::new();
+        for (name, bytes) in &ui.images {
+            let Ok(file) = ngc_texture::img::ImgFile::parse(bytes) else {
+                continue;
+            };
+            let Ok(image) = file.decode() else { continue };
+            sizes.insert(qb::checksum(name), (file.width, file.height));
+            images.insert(qb::checksum(name), image.cropped(file.width, file.height));
+        }
+        let fonts: HashMap<u32, desa_viewer::font::Font> = ui
+            .fonts
+            .iter()
+            .filter_map(|(n, b)| Some((qb::checksum(n), desa_viewer::font::Font::parse(b).ok()?)))
+            .collect();
+        if fonts.is_empty() {
+            return None;
+        }
+        let mut screen = desa_viewer::screen::Screen::new(fonts, sizes);
+        screen.listen(&["unpausegame"]);
+        Some(ScreenUi {
+            screen,
+            images,
+            textures: HashMap::new(),
+            font_textures: HashMap::new(),
+        })
+    }
+
+    /// Over the 3D view (beside the panel), the game's 640x480 screen
+    /// fitted in.
+    fn paint(&mut self, ctx: &egui::Context) {
+        use desa_viewer::screen::{Draw, HEIGHT, WIDTH};
+        let draws = self.screen.draw();
+        if draws.is_empty() {
+            return;
+        }
+        let area = ctx.available_rect();
+        let k = (area.width() / WIDTH).min(area.height() / HEIGHT);
+        let origin = area.center() - egui::vec2(WIDTH, HEIGHT) * k / 2.0;
+        let to_screen = |r: [f32; 4]| {
+            egui::Rect::from_min_max(
+                origin + egui::vec2(r[0], r[1]) * k,
+                origin + egui::vec2(r[2], r[3]) * k,
+            )
+        };
+        let tint = |c: [f32; 4]| {
+            let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+            egui::Color32::from_rgba_unmultiplied(b(c[0]), b(c[1]), b(c[2]), b(c[3]))
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("game_screen"),
+        ));
+        for d in draws {
+            match d {
+                Draw::Sprite {
+                    texture,
+                    rect,
+                    rgba,
+                } => {
+                    let Some(image) = self.images.get(&texture) else {
+                        continue;
+                    };
+                    let handle = self.textures.entry(texture).or_insert_with(|| {
+                        ctx.load_texture(
+                            format!("sprite_{texture:08x}"),
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [image.width as usize, image.height as usize],
+                                &image.rgba,
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    painter.image(
+                        handle.id(),
+                        to_screen(rect),
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        tint(rgba),
+                    );
+                }
+                Draw::Glyph {
+                    font,
+                    source,
+                    rect,
+                    rgba,
+                } => {
+                    let Some(f) = self.screen.font(font) else {
+                        continue;
+                    };
+                    let (aw, ah) = (f.atlas_width as f32, f.atlas_height as f32);
+                    let handle = self.font_textures.entry(font).or_insert_with(|| {
+                        ctx.load_texture(
+                            format!("font_{font:08x}"),
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [f.atlas_width as usize, f.atlas_height as usize],
+                                &f.atlas,
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    let [x, y, w, h] = source.map(f32::from);
+                    painter.image(
+                        handle.id(),
+                        to_screen(rect),
+                        egui::Rect::from_min_max(
+                            egui::pos2(x / aw, y / ah),
+                            egui::pos2((x + w) / aw, (y + h) / ah),
+                        ),
+                        tint(rgba),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Units a foot (the bouncy objects' settings are in feet).
 const FEET: f32 = 12.0;
 
@@ -1464,6 +1599,9 @@ struct App<'a> {
     /// The Moon Gravity and Slomo cheats' factors.
     moon_gravity: f32,
     slomo_speed: f32,
+    /// The game's own menus (its screen elements), when the data has
+    /// their sprites and fonts.
+    screen: Option<ScreenUi>,
     /// The movie playing, and those to play after it (by name).
     movie: Option<MoviePlaying>,
     movie_queue: std::collections::VecDeque<String>,
@@ -1580,6 +1718,7 @@ impl<'a> App<'a> {
                     goals_won: Vec::new(),
                     goal_progress: None,
                     goal_result: None,
+                    game_menu: false,
                     can_letters: false,
                     race_name: None,
                     race: None,
@@ -1626,6 +1765,7 @@ impl<'a> App<'a> {
             photo: false,
             movie: None,
             movie_queue: Default::default(),
+            screen: None,
             moon_gravity: 0.5,
             slomo_speed: 0.5,
             goal_streams: None,
@@ -1672,9 +1812,10 @@ impl<'a> App<'a> {
 
     fn open_data(&mut self, path: &Path) {
         match GameData::open(path) {
-            Ok(data) => {
+            Ok(mut data) => {
                 self.model.levels = data.levels();
                 self.model.movies = data.movies();
+                self.screen = ScreenUi::load(&mut data);
                 self.model.data_path = Some(path.display().to_string());
                 self.model.message = if self.model.levels.is_empty() {
                     Some("No levels found there.".into())
@@ -3706,6 +3847,42 @@ impl<'a> App<'a> {
     fn toggle_pause(&mut self) {
         if self.skating.is_some() && self.replay.is_none() {
             self.model.character.paused = !self.model.character.paused;
+            // The game's own pause menu (`create_pause_menu`), if it can
+            // be made; taken away again on resuming.
+            let paused = self.model.character.paused;
+            if let Some(screen) = &mut self.screen {
+                screen.screen.clear();
+                if paused && self.level.is_some() {
+                    screen
+                        .screen
+                        .run(qb::checksum("create_pause_menu"), Vec::new());
+                }
+            }
+        }
+    }
+
+    /// The game's menus run on: their scripts (with the level's), sounds,
+    /// and what they ask of the viewer (`unpausegame`: resume).
+    fn update_screen(&mut self, dt: f32) {
+        let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
+            return;
+        };
+        screen.screen.update(level.behaviour.program(), dt);
+        let sounds = std::mem::take(&mut screen.screen.sounds);
+        let requests = std::mem::take(&mut screen.screen.requests);
+        self.model.character.game_menu = !screen.screen.is_empty();
+        if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+            for sound in sounds {
+                audio.play_named(sound, 1.0);
+            }
+        }
+        for (name, _) in requests {
+            if name == qb::checksum("unpausegame") && self.model.character.paused {
+                self.model.character.paused = false;
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                }
+            }
         }
     }
 
@@ -4593,13 +4770,18 @@ impl<'a> App<'a> {
         );
 
         self.update_movie();
+        self.update_screen(dt);
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
         let movie = &mut self.movie;
+        let screen = &mut self.screen;
         let mut actions = Vec::new();
         let output = gpu.egui_ctx.run(raw, |ctx| {
             actions = ui::draw(ctx, model);
+            if let Some(screen) = screen {
+                screen.paint(ctx);
+            }
             if let Some(playing) = movie {
                 if playing.draw(ctx) {
                     actions.push(ui::Action::SkipMovie);
@@ -4777,6 +4959,26 @@ impl<'a> App<'a> {
                     self.movie_queue.clear();
                 }
                 self.stop_movie();
+            }
+            return;
+        }
+        // The game's menu up: the keys are its pad.
+        if self.model.character.game_menu {
+            if let Some(screen) = &mut self.screen {
+                use desa_viewer::screen::Pad;
+                let pad = match code {
+                    KeyCode::ArrowUp | KeyCode::KeyW => Some(Pad::Up),
+                    KeyCode::ArrowDown | KeyCode::KeyS => Some(Pad::Down),
+                    KeyCode::ArrowLeft | KeyCode::KeyA => Some(Pad::Left),
+                    KeyCode::ArrowRight | KeyCode::KeyD => Some(Pad::Right),
+                    KeyCode::Enter | KeyCode::Space => Some(Pad::Choose),
+                    KeyCode::Escape | KeyCode::Backspace => Some(Pad::Back),
+                    KeyCode::KeyP => Some(Pad::Start),
+                    _ => None,
+                };
+                if let Some(pad) = pad {
+                    screen.screen.pad(pad);
+                }
             }
             return;
         }
@@ -5113,6 +5315,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
 
     if let Some(id) = &args.character {
         app.model.character.characters = data.characters();
+        if args.pause {
+            app.screen = ScreenUi::load(&mut data);
+        }
         app.data = Some(data);
         let i = app
             .character_index(id)
@@ -5296,6 +5501,30 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     level.behaviour.sounds.clear();
                 }
             }
+            // The game's pause menu brought up, and the pad's presses
+            // given to it (--pause-keys: up, down, choose, back).
+            if args.pause {
+                app.toggle_pause();
+                for _ in 0..30 {
+                    app.update_screen(1.0 / 60.0);
+                }
+                for key in args.pause_keys.chars() {
+                    use desa_viewer::screen::Pad;
+                    let pad = match key {
+                        'u' => Pad::Up,
+                        'd' => Pad::Down,
+                        'c' => Pad::Choose,
+                        'b' => Pad::Back,
+                        _ => continue,
+                    };
+                    if let Some(screen) = &mut app.screen {
+                        screen.screen.pad(pad);
+                    }
+                    for _ in 0..20 {
+                        app.update_screen(1.0 / 60.0);
+                    }
+                }
+            }
             if let Some(at) = args.replay_at {
                 app.replay = Some(0.0);
                 app.model.character.replaying = true;
@@ -5375,10 +5604,16 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         if !clean {
             ui::draw(ctx, &mut app.model);
         }
+        if let Some(screen) = &mut app.screen {
+            screen.paint(ctx);
+        }
     });
     let mut output = egui_ctx.run(input(), |ctx| {
         if !clean {
             ui::draw(ctx, &mut app.model);
+        }
+        if let Some(screen) = &mut app.screen {
+            screen.paint(ctx);
         }
     });
     let mut textures = first.textures_delta;

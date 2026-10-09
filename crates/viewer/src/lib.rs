@@ -13,6 +13,7 @@ pub mod nodes;
 pub mod objects;
 pub mod particles;
 pub mod renderer;
+pub mod screen;
 pub mod sounds;
 pub mod source;
 pub mod triggers;
