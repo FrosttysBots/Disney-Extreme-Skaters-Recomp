@@ -28,6 +28,9 @@ pub struct Warp {
     /// Its particle effect's emitter (`warpParticle`, or the way back's
     /// `TRG_Warp_Particle_Hub`).
     pub particle: Option<u32>,
+    /// The camera path played going through (`warpCam`, or the way back's
+    /// `Camera_Warp_Hub`).
+    pub camera: Option<u32>,
 }
 
 /// Catches the parameters `LevelWarp` hands its exception.
@@ -99,6 +102,7 @@ pub fn warps(program: &Program, nodes: &LevelNodes) -> Vec<Warp> {
             particle: params
                 .get(checksum("warpParticle"))
                 .and_then(Value::as_name),
+            camera: params.get(checksum("warpCam")).and_then(Value::as_name),
         });
     }
     // The way back to the Hub.
@@ -118,6 +122,7 @@ pub fn warps(program: &Program, nodes: &LevelNodes) -> Vec<Warp> {
             title,
             sector: None,
             particle: Some(checksum("TRG_Warp_Particle_Hub")),
+            camera: Some(checksum("Camera_Warp_Hub")),
         });
     }
     out.sort_by(|a, b| a.title.cmp(&b.title));

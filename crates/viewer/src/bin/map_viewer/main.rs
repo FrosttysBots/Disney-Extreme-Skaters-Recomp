@@ -1195,6 +1195,8 @@ struct App<'a> {
     /// skipped), the one asked for next, and the goal on's success path.
     cutscene: bool,
     cutscene_request: Option<u32>,
+    /// A warp's level, to load when its camera path's over.
+    load_after_cutscene: Option<usize>,
     success_camera: Option<u32>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
@@ -1346,6 +1348,7 @@ impl<'a> App<'a> {
             photo: false,
             cutscene: false,
             cutscene_request: None,
+            load_after_cutscene: None,
             success_camera: None,
             replay_camera: 0,
             replay_eye: None,
@@ -1522,6 +1525,12 @@ impl<'a> App<'a> {
         }
         if self.cutscene && self.model.camera_paths.playing.is_none() {
             self.cutscene = false;
+        }
+        // A warp's camera path over: on to the level.
+        if !self.cutscene {
+            if let Some(index) = self.load_after_cutscene.take() {
+                self.start_load(index);
+            }
         }
     }
 
@@ -2409,11 +2418,11 @@ impl<'a> App<'a> {
             return;
         };
         self.model.character.warp_prompt = None;
-        let Some(level) = self
+        let Some((level, camera)) = self
             .level
             .as_ref()
             .and_then(|l| l.portals.get(i))
-            .map(|p| p.warp.level)
+            .map(|p| (p.warp.level, p.warp.camera))
         else {
             return;
         };
@@ -2424,7 +2433,18 @@ impl<'a> App<'a> {
             .position(|info| qb::checksum(&format!("load_{}", info.id)) == level);
         if let Some(index) = index {
             self.skate_on_load = true;
-            self.start_load(index);
+            // The warp's own camera path first, then the level.
+            match camera {
+                Some(camera) => {
+                    self.play_cutscene(camera);
+                    if self.cutscene {
+                        self.load_after_cutscene = Some(index);
+                    } else {
+                        self.start_load(index);
+                    }
+                }
+                None => self.start_load(index),
+            }
         }
     }
 

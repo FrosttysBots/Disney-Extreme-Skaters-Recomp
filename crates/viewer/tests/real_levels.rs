@@ -207,6 +207,17 @@ fn real_level_camera_paths() {
             .collect();
         println!("{}: pros {pros:?}", level.id);
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
+        // Each warp's camera path is the level's.
+        for warp in &warps {
+            if let Some(camera) = warp.camera {
+                assert!(
+                    files.cameras.iter().any(|(n, _)| qb::checksum(n) == camera),
+                    "{}: {}'s warp camera",
+                    level.id,
+                    warp.title
+                );
+            }
+        }
         println!(
             "{}: warps {:?}",
             level.id,
