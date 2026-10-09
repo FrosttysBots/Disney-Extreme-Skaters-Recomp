@@ -51,6 +51,21 @@ fn real_ui_files() {
             );
         }
     }
+    for name in ["dialog_frame", "dialog_middle", "dialog_frame_b"] {
+        let f = ngc_texture::img::ImgFile::parse(&ui.images[name]).unwrap();
+        let img = f.decode().unwrap();
+        let px = |x: u32, y: u32| &img.rgba[((y * img.width + x) * 4) as usize..][..4];
+        println!(
+            "{name}: {:?} {}x{} stored {}x{} corner {:?} middle {:?}",
+            f.format,
+            f.width,
+            f.height,
+            f.stored_width,
+            f.stored_height,
+            px(0, 0),
+            px(f.width / 2, f.height / 2)
+        );
+    }
     let small = Font::parse(&ui.fonts["small"]).unwrap();
     {
         let out = format!(

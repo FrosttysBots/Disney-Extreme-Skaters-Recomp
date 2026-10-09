@@ -13,7 +13,8 @@
 //!   small`, passed down from parents), a block wrapped to its `Dims`.
 //! - `ContainerElement`: holds others; `focusable_child` passes focus on.
 //! - `VMenu` / `HMenu`: stacks its children (lined up by
-//!   `internal_just`, spaced by `padding_scale`), keeps one focused, and
+//!   `internal_just`, a vertical one's spaced by `padding_scale`, both
+//!   with `spacing_between` between), keeps one focused, and
 //!   moves the focus with the pad (`pad_up`/`pad_down`, or left/right).
 //!
 //! Events (`focus`, `unfocus`, `pad_choose`, `pad_back`, `pad_start`...)
@@ -89,6 +90,8 @@ struct Element {
     focusable_child: Option<u32>,
     wrap: bool,
     padding: f32,
+    /// A menu's gap between its children.
+    spacing: f32,
     /// (event, script, params).
     handlers: Vec<(u32, u32, Params)>,
     tags: Params,
@@ -123,6 +126,7 @@ impl Element {
             focusable_child: None,
             wrap: true,
             padding: 1.0,
+            spacing: 0.0,
             handlers: Vec::new(),
             tags: vec![(Some(checksum("id")), Value::Name(id))],
         }
@@ -451,11 +455,7 @@ impl Screen {
             return Vec::new();
         };
         let mut lines = Vec::new();
-        for paragraph in e
-            .text
-            .split(['\n', '\\'])
-            .map(|p| p.trim_start_matches('n'))
-        {
+        for paragraph in e.text.split('\n') {
             match (e.kind, e.dims, self.font_of(i)) {
                 (Kind::TextBlock, Some(dims), Some(font)) if dims.x > 0.0 => {
                     let mut line = String::new();
@@ -465,7 +465,7 @@ impl Screen {
                         } else {
                             format!("{line} {word}")
                         };
-                        if font.width(&tried) > dims.x && !line.is_empty() {
+                        if self.text_width(font, &tried) > dims.x && !line.is_empty() {
                             lines.push(std::mem::take(&mut line));
                             line = word.to_string();
                         } else {
@@ -496,7 +496,10 @@ impl Screen {
                     return Vec2::ZERO;
                 };
                 let lines = self.lines(i);
-                let wide = lines.iter().map(|l| font.width(l)).fold(0.0, f32::max);
+                let wide = lines
+                    .iter()
+                    .map(|l| self.text_width(font, l))
+                    .fold(0.0, f32::max);
                 let tall = font.line_height as f32 * lines.len().max(1) as f32;
                 match (e.kind, e.dims) {
                     (Kind::TextBlock, Some(d)) => Vec2::new(d.x, d.y.max(tall)),
@@ -512,10 +515,10 @@ impl Screen {
                     };
                     let s = self.size(c) * child.look.scale;
                     if across {
-                        long += s.x * e.padding;
+                        long += s.x + e.spacing;
                         wide = wide.max(s.y);
                     } else {
-                        long += s.y * e.padding;
+                        long += s.y * e.padding + e.spacing;
                         wide = wide.max(s.x);
                     }
                 }
@@ -566,7 +569,11 @@ impl Screen {
                     )
                 };
             }
-            cursor += if across { s.x } else { s.y } * parent.padding;
+            cursor += if across {
+                s.x + parent.spacing
+            } else {
+                s.y * parent.padding + parent.spacing
+            };
         }
         e.look.pos
     }
@@ -623,7 +630,7 @@ impl Screen {
                     let font_name = self.font_name(i);
                     let lines = self.lines(i);
                     for (row, line) in lines.iter().enumerate() {
-                        let line_w = font.width(line) * scale.x;
+                        let line_w = self.text_width(font, line) * scale.x;
                         // A block's lines line up inside it.
                         let mut x = at.x
                             + match e.kind {
@@ -632,6 +639,16 @@ impl Screen {
                             };
                         let y = at.y + row as f32 * font.line_height as f32 * scale.y;
                         for ch in line.chars() {
+                            // A controller button from the buttons font,
+                            // in its own colours; the rest in the text's.
+                            let (font, font_name, rgba) = match self.button_font(ch) {
+                                Some(buttons) => (
+                                    buttons,
+                                    checksum(BUTTONS),
+                                    [1.0, 1.0, 1.0, rgba[3].clamp(0.0, 1.0)],
+                                ),
+                                None => (font, font_name, rgba),
+                            };
                             let Some(g) = font.glyph(ch) else {
                                 x += font.advance(ch) * scale.x;
                                 continue;
@@ -663,6 +680,20 @@ impl Screen {
                 self.draw_element(c, at, scale, alpha, out);
             }
         }
+    }
+
+    /// The buttons font, for a controller button's character.
+    fn button_font(&self, c: char) -> Option<&Font> {
+        (u32::from(c) >= 0xffe0)
+            .then(|| self.fonts.get(&checksum(BUTTONS)))
+            .flatten()
+    }
+
+    /// A line's width, its buttons in the buttons font.
+    fn text_width(&self, font: &Font, text: &str) -> f32 {
+        text.chars()
+            .map(|c| self.button_font(c).unwrap_or(font).advance(c))
+            .sum()
     }
 
     fn font_name(&self, i: usize) -> u32 {
@@ -811,6 +842,8 @@ impl Screen {
                         e.focusable_child = v.as_name();
                     } else if k == checksum("padding_scale") {
                         e.padding = v.as_f32().unwrap_or(1.0);
+                    } else if k == checksum("spacing_between") {
+                        e.spacing = v.as_f32().unwrap_or(0.0);
                     } else if k == checksum("tags") {
                         if let Value::Struct(tags) = v {
                             for (tk, tv) in tags.iter().filter(|(k, _)| k.is_some()) {
@@ -1054,9 +1087,13 @@ fn just(v: &Value) -> Option<Vec2> {
     Some(out)
 }
 
-/// Text: a string, or a global naming one (the localized strings).
+/// The GameCube's controller-button font.
+const BUTTONS: &str = "buttonsngc";
+
+/// Text: a string, or a global naming one (the localized strings), its
+/// escapes turned to characters (see [`unescape`]).
 fn text(v: &Value, program: &Program) -> String {
-    match v {
+    let raw = match v {
         Value::String(s) | Value::LocalString(s) => s.clone(),
         Value::Name(n) => match program.value(*n) {
             Some(Value::String(s) | Value::LocalString(s)) => s.clone(),
@@ -1064,7 +1101,44 @@ fn text(v: &Value, program: &Program) -> String {
         },
         Value::Integer(i) => i.to_string(),
         _ => String::new(),
+    };
+    unescape(&raw)
+}
+
+/// `\n` a new line; `\bN` controller button N (the buttons font's
+/// characters count down from U+FFFF: Y, B, X, A, then the d-pad's down,
+/// right, left, up...); `\mN` the menus' buttons (0 accept: A, 1 back:
+/// B).
+fn unescape(raw: &str) -> String {
+    let button = |n: u32| char::from_u32(0xffff - n.min(31)).unwrap_or(' ');
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('b') => {
+                if let Some(n) = chars.next().and_then(|d| d.to_digit(16)) {
+                    out.push(button(n));
+                }
+            }
+            Some('m') => {
+                if let Some(n) = chars.next().and_then(|d| d.to_digit(16)) {
+                    out.push(button(match n {
+                        0 => 3,
+                        1 => 1,
+                        n => n,
+                    }));
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
     }
+    out
 }
 
 /// `{ pad_choose script params = {...} }`: (event, script, params).
@@ -1349,6 +1423,12 @@ mod tests {
             out.push(Token::EndOfLine);
         }
         out
+    }
+
+    #[test]
+    fn button_escapes() {
+        assert_eq!(unescape(r"\b7/\b4 = Select"), "\u{fff8}/\u{fffb} = Select");
+        assert_eq!(unescape(r"\m0 = Accept\nNext"), "\u{fffc} = Accept\nNext");
     }
 
     #[test]
