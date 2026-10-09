@@ -304,8 +304,15 @@ pub fn generic_goal(program: &Program, level: &str, kind: &str) -> Option<Generi
         Some(Value::Array(a)) => a.len(),
         _ => 0,
     };
-    // (A counter goal counts its things got up to `number`.)
-    let needed = ["num_flags_to_win", "num_flags", "number"]
+    // With flags, so many of them; without, a counter goal's things got
+    // up to `number`. (Hub's ringtones goal has four flags and a stray
+    // `number = 15`.)
+    let keys: &[&str] = if flags > 0 {
+        &["num_flags_to_win", "num_flags"]
+    } else {
+        &["num_flags_to_win", "num_flags", "number"]
+    };
+    let needed = keys
         .iter()
         .find_map(|k| get(k).and_then(Value::as_int))
         .map_or(flags, |n| n.max(0) as usize);

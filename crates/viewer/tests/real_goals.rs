@@ -96,6 +96,7 @@ fn real_goal_scripts() {
         "pizza Collect2",
         "canyon Collect",
         "graveyard Counter2",
+        "HUB Collect3",
     ] {
         assert!(done.contains(&goal.to_string()), "{goal}");
     }
