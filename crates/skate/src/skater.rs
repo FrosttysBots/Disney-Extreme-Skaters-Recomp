@@ -1710,21 +1710,34 @@ impl Skater {
     }
 
     /// Anything in the way along the rail (main.dol 0x801032E4): a line 1
-    /// up from where the skater is to 1 up from `to` and 6 on. Hitting
-    /// anything, like the ground where a rail dips into it, knocks it off
-    /// the rail where it was, 1 higher, its speed along what it hit.
+    /// up from where the skater is to 1 up from `to` and 6 on. A wall
+    /// across the rail knocks it off where it was, 1 higher, its speed
+    /// along what it hit.
+    ///
+    /// Only a wall facing back along the rail, though, and met
+    /// [`GRIND_BLOCK_HEIGHT`] up: rails run along ledges, curbs, slopes and
+    /// copings, and through their own meshes and posts, whose faces cross
+    /// a line 1 up by a hair (the rail's straight, the geometry's not
+    /// quite), and those knocked the skater off partway along. Those it
+    /// grinds past.
     fn grind_blocked(&mut self, to: Vec3, velocity: Vec3, p: &Physics, world: &World) -> bool {
         let Some(direction) = (to - self.position).try_normalize() else {
             return false;
         };
-        let from = self.position + Vec3::Y;
-        let Some(hit) = world.ray(from, to + Vec3::Y + direction * 6.0) else {
+        let up = Vec3::Y * GRIND_BLOCK_HEIGHT;
+        let from = self.position + up;
+        let across = |hit: &Hit| {
+            hit.normal.y.abs() < 0.3
+                && hit.normal.dot(direction) < -0.3
+                && hit.flags & ngc_collision::face_flags::VERT == 0
+        };
+        let Some(hit) = world.ray_past(from, to + up + direction * 6.0, across) else {
             return false;
         };
         if self.trace {
             eprintln!(
-                "knocked off the rail at {:?} by a face at {:?} normal {:?} flags {:#x}",
-                self.position, hit.point, hit.normal, hit.flags
+                "knocked off the rail at {:?} by a face at {:?} normal {:?} flags {:#x} of {:#x}",
+                self.position, hit.point, hit.normal, hit.flags, hit.object
             );
         }
         self.position.y += 1.0;
@@ -2748,6 +2761,10 @@ fn along_keeping_length(v: Vec3, normal: Vec3) -> Vec3 {
 /// Whether a face the skater ran into is a wall (main.dol 0x800F66F0):
 /// skatable and vert faces never are, not-skatable and wall-ridable ones
 /// always are, and the rest by their slope.
+/// How far up the line along a rail looks for a wall in the way
+/// (`grind_blocked`): about the skater's shins.
+const GRIND_BLOCK_HEIGHT: f32 = 12.0;
+
 fn is_wall(hit: &Hit, p: &Physics) -> bool {
     use ngc_collision::face_flags as f;
     if hit.flags & (f::SKATABLE | f::VERT) != 0 {
