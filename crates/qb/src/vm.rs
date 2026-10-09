@@ -550,6 +550,32 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
                 }
             }
             Token::EndOfLine | Token::LineNumber(_) => i += 1,
+            // `Random(@a @b @c)`: one of the choices. They're separated by
+            // jumps past the rest; the last has no end of its own, so it's
+            // taken to be as long as the first (they're single values here).
+            Token::Random(_, offsets) if !offsets.is_empty() => {
+                let mut choices: Vec<&[Token]> = Vec::new();
+                let mut at = i + 1;
+                for _ in 0..offsets.len() - 1 {
+                    let end = tokens[at..]
+                        .iter()
+                        .position(|t| matches!(t, Token::Jump(_)))
+                        .map_or(tokens.len(), |j| at + j);
+                    choices.push(&tokens[at..end]);
+                    at = (end + 1).min(tokens.len());
+                }
+                let last = choices.first().map_or(1, |c| c.len()).max(1);
+                let end = (at + last).min(tokens.len());
+                choices.push(&tokens[at..end]);
+                let pick = next_random() as usize % choices.len();
+                flat.extend(
+                    choices[pick]
+                        .iter()
+                        .filter(|t| !matches!(t, Token::At))
+                        .cloned(),
+                );
+                i = end;
+            }
             t => {
                 flat.push(t.clone());
                 i += 1;
@@ -559,6 +585,18 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
     let with_offsets: Vec<(usize, Token)> = flat.into_iter().map(|t| (0, t)).collect();
     let mut at = 0;
     parse_value(&with_offsets, &mut at).unwrap_or(Value::Struct(Vec::new()))
+}
+
+/// A number for picking among `Random` choices (xorshift, shared).
+fn next_random() -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEED: AtomicU32 = AtomicU32::new(0x2545_F491);
+    let mut x = SEED.load(Ordering::Relaxed);
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    SEED.store(x, Ordering::Relaxed);
+    x
 }
 
 fn matching_paren(tokens: &[Token], open: usize) -> usize {
@@ -732,6 +770,46 @@ mod tests {
 
     fn names(log: &Log) -> Vec<u32> {
         log.calls.iter().map(|c| c.1).collect()
+    }
+
+    #[test]
+    fn random_picks_one_choice() {
+        use crate::token::RandomKind;
+        let mut program = Program::new();
+        // script Say: Speak stream = Random(@LineA @LineB) Vol = 3
+        program.add_script(
+            checksum("Say"),
+            vec![
+                n("Speak"),
+                n("stream"),
+                Token::Equals,
+                Token::Random(RandomKind::Plain, vec![0, 0]),
+                Token::At,
+                n("LineA"),
+                Token::Jump(0),
+                Token::At,
+                n("LineB"),
+                n("Vol"),
+                Token::Equals,
+                Token::Integer(3),
+                Token::EndOfLine,
+            ],
+        );
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..20 {
+            let mut log = Log::default();
+            let mut thread = Thread::new(checksum("Say"), Vec::new());
+            thread.run(&program, &mut log, 0.0);
+            let args = &log.calls[0].2;
+            let stream = args
+                .get(checksum("stream"))
+                .and_then(Value::as_name)
+                .unwrap();
+            assert!(stream == checksum("LineA") || stream == checksum("LineB"));
+            assert_eq!(args.get(checksum("Vol")), Some(&Value::Integer(3)));
+            seen.insert(stream);
+        }
+        assert_eq!(seen.len(), 2, "both choices come up");
     }
 
     #[test]
