@@ -753,8 +753,16 @@ impl Host for Commands<'_> {
             };
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
-        } else if name == c("midgoalvoiceover") {
-            if let Some(stream) = named("stream") {
+        } else if name == c("midgoalvoiceover") || name == c("obj_playstream") {
+            // `midgoalvoiceover stream = name`, `obj_playstream name`.
+            let stream = named("stream").or_else(|| match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            if let Some(stream) = stream {
                 b.voice_lines.push(stream);
             }
         } else if name == c("LocalSkaterExists") {
