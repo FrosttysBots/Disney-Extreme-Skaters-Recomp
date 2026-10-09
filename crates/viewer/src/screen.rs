@@ -94,6 +94,8 @@ struct Element {
     spacing: f32,
     /// Text's own size within the element (`internal_scale`).
     internal_scale: f32,
+    /// A sprite's turn, degrees (`rot_angle`).
+    angle: f32,
     /// (event, script, params).
     handlers: Vec<(u32, u32, Params)>,
     tags: Params,
@@ -130,6 +132,7 @@ impl Element {
             padding: 1.0,
             spacing: 0.0,
             internal_scale: 1.0,
+            angle: 0.0,
             handlers: Vec::new(),
             tags: vec![(Some(checksum("id")), Value::Name(id))],
         }
@@ -141,11 +144,12 @@ impl Element {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Draw {
     /// A panel sprite, by name checksum, over `rect` (left, top, right,
-    /// bottom).
+    /// bottom), turned `angle` degrees (clockwise) about its middle.
     Sprite {
         texture: u32,
         rect: [f32; 4],
         rgba: [f32; 4],
+        angle: f32,
     },
     /// A glyph of a font (by name checksum): its rectangle in the font's
     /// atlas (x, y, width, height), drawn over `rect`.
@@ -679,6 +683,7 @@ impl Screen {
                         texture,
                         rect: [at.x, at.y, at.x + size.x, at.y + size.y],
                         rgba,
+                        angle: e.angle,
                     });
                 }
             }
@@ -911,6 +916,8 @@ impl Screen {
                         e.focusable_child = v.as_name();
                     } else if k == checksum("padding_scale") {
                         e.padding = v.as_f32().unwrap_or(1.0);
+                    } else if k == checksum("rot_angle") {
+                        e.angle = v.as_f32().unwrap_or(0.0);
                     } else if k == checksum("internal_scale") {
                         e.internal_scale = v.as_f32().unwrap_or(1.0);
                     } else if k == checksum("spacing_between") {

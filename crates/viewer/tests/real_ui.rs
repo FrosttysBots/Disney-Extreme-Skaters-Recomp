@@ -139,6 +139,7 @@ fn render(
                 texture,
                 rect,
                 rgba,
+                ..
             } => {
                 if let Some(img) = images.get(&texture) {
                     let src = (

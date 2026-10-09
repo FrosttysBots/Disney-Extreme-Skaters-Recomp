@@ -1174,6 +1174,7 @@ impl ScreenUi {
                     texture,
                     rect,
                     rgba,
+                    angle,
                 } => {
                     let Some(image) = self.images.get(&texture) else {
                         continue;
@@ -1188,12 +1189,22 @@ impl ScreenUi {
                             egui::TextureOptions::LINEAR,
                         )
                     });
-                    painter.image(
-                        handle.id(),
-                        to_screen(rect),
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        tint(rgba),
-                    );
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    if angle == 0.0 {
+                        painter.image(handle.id(), to_screen(rect), uv, tint(rgba));
+                    } else {
+                        // Turned about its middle.
+                        let r = to_screen(rect);
+                        let mut mesh = egui::Mesh::with_texture(handle.id());
+                        mesh.add_rect_with_uv(r, uv, tint(rgba));
+                        let (sin, cos) = angle.to_radians().sin_cos();
+                        let c = r.center();
+                        for v in &mut mesh.vertices {
+                            let d = v.pos - c;
+                            v.pos = c + egui::vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos);
+                        }
+                        painter.add(egui::Shape::mesh(mesh));
+                    }
                 }
                 Draw::Glyph {
                     font,
@@ -4006,11 +4017,20 @@ impl<'a> App<'a> {
                 let k = (lean.abs() * 6.0).round() as usize;
                 let [x, y] = arc[k.min(6)];
                 let x = if lean < 0.0 { -x } else { x };
+                // A manual's stands up beside the skater: turned a quarter
+                // round, its arc with it.
+                let (angle, [x, y]) = if grinding {
+                    (0.0, [x, y])
+                } else {
+                    (-90.0, [y, -x])
+                };
+                let middle = s.image_size("balancemeter").unwrap_or_default() / 2.0;
                 s.set(
                     "the_balance_meter",
                     &props(vec![
                         ("pos", Value::Pair(bar)),
                         ("rgba", rgba([95, 95, 95, 106])),
+                        ("rot_angle", Value::Float(angle)),
                     ]),
                     program,
                 );
@@ -4030,8 +4050,9 @@ impl<'a> App<'a> {
                 s.set_resolved(
                     &arrow,
                     &props(vec![
-                        ("pos", Value::Pair([x + 32.0, y + 16.0])),
+                        ("pos", Value::Pair([x + middle.x, y + middle.y])),
                         ("rgba", rgba([128, 128, 128, 100])),
+                        ("rot_angle", Value::Float(angle)),
                     ]),
                     program,
                 );
