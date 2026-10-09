@@ -166,6 +166,24 @@ pub struct LevelNodes {
     /// Every named node's name as written, by its checksum (for `create
     /// prefix = "..."`).
     pub labels: HashMap<u32, String>,
+    /// Bouncy objects (`LevelObject ... Bouncy`): knocked flying when the
+    /// skater runs into them.
+    pub bouncies: Vec<Bouncy>,
+}
+
+/// A bouncy object's node and how it bounces (`UpMagnitude`,
+/// `Bounciness`, `MinBounceVel`, `Gravity`, `ConstRot`, `BounceSound`).
+#[derive(Clone, Debug)]
+pub struct Bouncy {
+    pub name: u32,
+    pub position: Vec3,
+    pub created_at_start: bool,
+    pub up: f32,
+    pub bounciness: f32,
+    pub min_bounce: f32,
+    pub gravity: f32,
+    pub spin: f32,
+    pub sound: Option<u32>,
 }
 
 /// A `ParticleEmitter` node.
@@ -268,6 +286,26 @@ impl LevelNodes {
                     }
                 }
                 Some(c) if c == key("LevelGeometry") || c == key("LevelObject") => {
+                    if node.has_flag(key("Bouncy")) {
+                        let get =
+                            |k: &str, d: f32| node.get(key(k)).and_then(Value::as_f32).unwrap_or(d);
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.bouncies.push(Bouncy {
+                                name,
+                                position: pos,
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
+                                up: get("UpMagnitude", 24.0),
+                                bounciness: get("Bounciness", 0.5),
+                                min_bounce: get("MinBounceVel", 1.0),
+                                gravity: get("Gravity", 32.0),
+                                spin: get("ConstRot", 180.0),
+                                sound: node
+                                    .get(key("BounceSound"))
+                                    .and_then(Value::as_name)
+                                    .filter(|s| *s != 0),
+                            });
+                        }
+                    }
                     if let (Some(name), Some(script)) = (
                         node.get(key("Name")).and_then(Value::as_name),
                         node.get(key("TriggerScript")).and_then(Value::as_name),

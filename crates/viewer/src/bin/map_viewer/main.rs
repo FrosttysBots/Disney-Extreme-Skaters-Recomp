@@ -258,6 +258,8 @@ struct LoadedLevel {
     sector_layers: HashMap<u32, Option<usize>>,
     /// Where each breakable sector is.
     sector_centres: HashMap<u32, Vec3>,
+    /// The bouncy objects, knocked about.
+    bouncies: Vec<BouncyState>,
     /// The breakables (trigger object: its script, what it shatters, its
     /// sound) and the triggers already broken.
     breakables: HashMap<u32, (u32, Vec<u32>, Option<u32>)>,
@@ -298,6 +300,14 @@ fn load_level(
     // Breakables (what touching a trigger shatters): those that are sectors
     // there at the start get layers of their own, to take away.
     let breakables = desa_viewer::triggers::breakables(&nodes, behaviour.program());
+    // Bouncy objects there at the start get layers of their own too, to
+    // knock about.
+    let bouncy_names: HashSet<u32> = nodes
+        .bouncies
+        .iter()
+        .filter(|b| b.created_at_start)
+        .map(|b| b.name)
+        .collect();
     let breakable_sectors: HashSet<u32> = breakables
         .values()
         .flat_map(|(_, names, _)| names.iter().copied())
@@ -306,7 +316,7 @@ fn load_level(
     // Sectors that aren't there at the start go in their own layer.
     let hidden = &nodes.hidden_sectors;
     let world = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
-        !hidden.contains(&s) && !breakable_sectors.contains(&s)
+        !hidden.contains(&s) && !breakable_sectors.contains(&s) && !bouncy_names.contains(&s)
     })?;
     let goal_geometry = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
         hidden.contains(&s)
@@ -320,7 +330,7 @@ fn load_level(
     for missing in &objects.missing {
         eprintln!("{}: couldn't load {missing}", info.id);
     }
-    let skate_world = files
+    let mut skate_world = files
         .collision
         .as_deref()
         .and_then(|c| ngc_collision::Collision::parse(c).ok())
@@ -336,6 +346,12 @@ fn load_level(
                     .collect(),
             ))
         });
+    // Bouncy objects are knocked away, not run into.
+    if let Some(world) = skate_world.as_mut() {
+        for name in &bouncy_names {
+            world.disable(*name);
+        }
+    }
     let sky = files
         .sky
         .as_ref()
@@ -421,6 +437,45 @@ fn load_level(
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
+    // The bouncy objects, each in a layer of its own.
+    let mut bouncies = Vec::new();
+    for b in nodes.bouncies.iter().filter(|b| b.created_at_start) {
+        let Ok(mut mesh) =
+            Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == b.name)
+        else {
+            continue;
+        };
+        if mesh.vertices.is_empty() {
+            continue;
+        }
+        let mut centre = mesh.focus.0;
+        if centre.length() < b.position.distance(centre) {
+            for v in &mut mesh.vertices {
+                v.position = (Vec3::from(v.position) + b.position).to_array();
+            }
+            centre += b.position;
+        }
+        let (low, high) = mesh.vertices.iter().fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())),
+        );
+        let layer = renderer.add_layer(&mesh, false);
+        renderer.show_layer(layer, true);
+        bouncies.push(BouncyState {
+            spec: b.clone(),
+            layer,
+            base: mesh.vertices,
+            centre,
+            reach: ((high - low).with_y(0.0).length() * 0.5).max(10.0),
+            half_height: ((high.y - low.y) * 0.5).max(4.0),
+            offset: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            spin: Vec3::ZERO,
+            moving: false,
+            since: f32::INFINITY,
+        });
+    }
     // The breakable sectors, shown until broken, and where each is.
     let mut sector_layers = HashMap::new();
     let mut sector_centres = HashMap::new();
@@ -476,6 +531,7 @@ fn load_level(
             scene_textures: files.textures.clone(),
             sector_layers,
             sector_centres,
+            bouncies,
             breakables,
             broken: HashSet::new(),
             minimap,
@@ -711,6 +767,28 @@ fn blob_shadow(at: Vec3, radius: f32, world: &skate::World) -> Vec<collision::Co
         })
         .collect()
 }
+
+/// A bouncy object: its settings, layer and vertices as stored, where it
+/// rests, how far it reaches and half its height, and how it's moving
+/// (offset from rest, velocity, turn and spin), and how long since it was
+/// last knocked.
+struct BouncyState {
+    spec: desa_viewer::nodes::Bouncy,
+    layer: Option<usize>,
+    base: Vec<desa_viewer::level::Vertex>,
+    centre: Vec3,
+    reach: f32,
+    half_height: f32,
+    offset: Vec3,
+    velocity: Vec3,
+    rotation: Quat,
+    spin: Vec3,
+    moving: bool,
+    since: f32,
+}
+
+/// Units a foot (the bouncy objects' settings are in feet).
+const FEET: f32 = 12.0;
 
 /// A two-minute run (the game's single session).
 struct Run {
@@ -2181,6 +2259,89 @@ impl<'a> App<'a> {
         self.model.character.warp_prompt = None;
     }
 
+    /// Knocks the bouncy objects the skater runs into flying (up by their
+    /// `UpMagnitude`, spinning at `ConstRot`), falling with their
+    /// `Gravity` and bouncing (`Bounciness`) till they settle
+    /// (`MinBounceVel`), with their `BounceSound`.
+    fn update_bouncies(&mut self, dt: f32) {
+        let Some(level) = &mut self.level else { return };
+        let skater = self
+            .skating
+            .as_ref()
+            .map(|(s, ..)| (s.position + Vec3::Y * 20.0, s.velocity));
+        let mut seed = (self.session.time * 1000.0) as u32 | 1;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        for b in &mut level.bouncies {
+            b.since += dt;
+            let at = b.centre + b.offset;
+            if let Some((body, velocity)) = skater {
+                let near = (body - at).with_y(0.0).length() < b.reach + 14.0
+                    && (body.y - at.y).abs() < b.half_height + 40.0;
+                if near && b.since > 0.4 && velocity.length() > 60.0 {
+                    b.since = 0.0;
+                    b.moving = true;
+                    b.velocity = velocity.with_y(0.0) * 1.1 + Vec3::Y * b.spec.up * FEET;
+                    b.spin = Vec3::new(random(), random(), random()).normalize_or(Vec3::X)
+                        * b.spec.spin.to_radians();
+                    if let (Some(sound), Some(audio)) = (
+                        b.spec.sound,
+                        self.audio.as_ref().filter(|_| self.model.character.sound),
+                    ) {
+                        audio.play_named(sound, 1.0);
+                    }
+                }
+            }
+            if !b.moving {
+                continue;
+            }
+            b.velocity.y -= b.spec.gravity * FEET * dt;
+            b.offset += b.velocity * dt;
+            b.rotation = (Quat::from_scaled_axis(b.spin * dt) * b.rotation).normalize();
+            // The ground under it: a bounce, losing speed, till it rests.
+            let at = b.centre + b.offset;
+            if let Some(world) = &level.world {
+                let from = at + Vec3::Y * (b.half_height + 20.0);
+                if let Some(hit) = world.ray(from, at - Vec3::Y * (b.half_height + 4.0)) {
+                    if b.velocity.y < 0.0 && at.y - b.half_height <= hit.point.y {
+                        b.offset.y += hit.point.y - (at.y - b.half_height);
+                        b.velocity.y = -b.velocity.y * b.spec.bounciness.clamp(0.0, 1.0) * 0.6;
+                        b.velocity.x *= 0.7;
+                        b.velocity.z *= 0.7;
+                        b.spin *= 0.6;
+                        if b.velocity.length() < (b.spec.min_bounce * FEET).max(30.0) {
+                            b.moving = false;
+                            b.velocity = Vec3::ZERO;
+                        }
+                    }
+                }
+            }
+            // Far below the level: put back where it was.
+            if b.offset.y < -5000.0 {
+                b.offset = Vec3::ZERO;
+                b.rotation = Quat::IDENTITY;
+                b.moving = false;
+            }
+            let moved: Vec<_> = b
+                .base
+                .iter()
+                .map(|v| desa_viewer::level::Vertex {
+                    position: (b.centre
+                        + b.rotation * (Vec3::from(v.position) - b.centre)
+                        + b.offset)
+                        .to_array(),
+                    normal: (b.rotation * Vec3::from(v.normal)).to_array(),
+                    ..*v
+                })
+                .collect();
+            level.renderer.update_layer(b.layer, 0, &moved);
+        }
+    }
+
     /// Breaks what the skater's touched (the trigger scripts' `Shatter`):
     /// the pieces gone (and their collision), chunks thrown, and the sound
     /// the script plays.
@@ -3445,6 +3606,7 @@ impl<'a> App<'a> {
             self.update_letters(dt);
             self.update_race(dt);
             self.update_breakables();
+            self.update_bouncies(dt);
             self.update_collecting();
             self.update_skitch();
             self.update_records(dt);
@@ -4079,6 +4241,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_letters(1.0 / 60.0);
                 app.update_race(1.0 / 60.0);
                 app.update_breakables();
+                app.update_bouncies(1.0 / 60.0);
                 app.update_collecting();
                 app.update_skitch();
                 app.update_records(1.0 / 60.0);

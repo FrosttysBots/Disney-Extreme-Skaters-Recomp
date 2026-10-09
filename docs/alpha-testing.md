@@ -116,6 +116,8 @@ skater is and what it's doing.
 - Breakables: skate into the crates on Tarzan's Treehouse's walkways or
   the plants in Scar's Canyon and they smash, with the game's sound.
   Through the Hub's grocery doors the shelves are stocked to smash too.
+- Bouncy things (the Graveyard's bones, rocks in the Canyon and on Zurg's
+  world): skate into them and they're knocked flying.
 - Particle effects there from the start, like Camp's campfires and the
   steam off Clayton's ship, run from the levels' own emit scripts.
 - Every level, and a few characters (each has its own tricks and stats).
