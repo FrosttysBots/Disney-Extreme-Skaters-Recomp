@@ -2993,6 +2993,14 @@ impl<'a> App<'a> {
             .map(|(k, v)| (Some(*k), v.clone()))
             .collect();
         params.push((Some(qb::checksum("goal_ID")), qb::Value::Name(goal.id)));
+        // (Not talked to the pro yet: its things are made.)
+        if !params
+            .iter()
+            .any(|(k, _)| *k == Some(qb::checksum("talked_to_pro")))
+        {
+            params.push((Some(qb::checksum("talked_to_pro")), qb::Value::Integer(0)));
+        }
+        b.goal_params = params.clone();
         for script in [goal.activate, goal.start_script].into_iter().flatten() {
             b.run_level_script(script, params.clone());
         }

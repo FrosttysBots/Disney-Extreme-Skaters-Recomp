@@ -163,6 +163,12 @@ pub struct Behaviour {
     pub goal_count: usize,
     pub goal_needed: usize,
     pub goal_won: bool,
+    /// The goal on's parameters, as `GoalManager_GetGoalParams` gives
+    /// them (and `GoalManager_EditGoal` changes them).
+    pub goal_params: Params,
+    /// Scripts to run alongside what objects are running
+    /// (`RunScriptOnObject`, `SpawnScript`).
+    spawning: Vec<(usize, Thread)>,
 }
 
 impl Behaviour {
@@ -258,6 +264,8 @@ impl Behaviour {
             goal_count: 0,
             goal_needed: 0,
             goal_won: false,
+            goal_params: Vec::new(),
+            spawning: Vec::new(),
             random: 0x2545_F491,
             unknown: HashMap::new(),
             scripts: nodes
@@ -390,6 +398,17 @@ impl Behaviour {
             };
             self.start(i, Thread::new(script, params));
         }
+    }
+
+    /// Where the objects are that do something when the skater comes
+    /// near (their `SkaterInRadius` exception set), now.
+    pub fn radius_triggers(&self) -> Vec<Vec3> {
+        let key = checksum("SkaterInRadius");
+        self.states
+            .iter()
+            .filter(|s| s.alive && s.inner > 0.0 && s.exceptions.iter().any(|(e, ..)| *e == key))
+            .map(|s| s.position)
+            .collect()
     }
 
     /// How far the goal on's got: its flags set and things counted.
@@ -562,6 +581,7 @@ impl Behaviour {
         for (i, thread) in std::mem::take(&mut self.starting) {
             self.start(i, thread);
         }
+        self.threads.append(&mut self.spawning);
         self.program = program;
 
         for i in 0..self.states.len() {
@@ -1002,6 +1022,64 @@ impl Host for Commands<'_> {
             if ours {
                 b.goal_count += 1;
             }
+        } else if name == c("GoalManager_CanStartGoal") {
+            // The goal on starts (`goal_start` then makes its things).
+            return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
+        } else if name == c("GoalManager_GetGoalParams")
+            || name == c("GoalManager_GetNumberCollected")
+        {
+            // The goal on's settings, with how far it's got.
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            if !ours {
+                return Outcome::Done(false);
+            }
+            let mut params = b.goal_params.clone();
+            params.push((
+                Some(c("num_flags_set")),
+                Value::Integer(b.goal_flags.len() as i32),
+            ));
+            params.push((
+                Some(c("number_collected")),
+                Value::Integer(b.goal_count as i32),
+            ));
+            return Outcome::Params(params);
+        } else if name == c("GoalManager_EditGoal") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            if let (true, Some(Value::Struct(items))) = (ours, args.get(c("params"))) {
+                for (k, v) in items.iter().filter(|(k, _)| k.is_some()) {
+                    b.goal_params.retain(|(o, _)| o != k);
+                    b.goal_params.push((*k, v.clone()));
+                }
+            }
+        } else if name == c("RunScriptOnObject")
+            || name == c("SpawnScript")
+            || name == c("Obj_SpawnScript")
+        {
+            // A script run alongside: on the object named (`id`), or on
+            // this one.
+            let on = if name == c("RunScriptOnObject") {
+                match named("id").and_then(|n| b.object_named(n)) {
+                    Some(o) => o,
+                    None => return Outcome::Done(false),
+                }
+            } else {
+                object
+            };
+            let script = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(script) = script else {
+                return Outcome::Done(false);
+            };
+            let params = match args.get(c("params")) {
+                Some(Value::Struct(p)) => p.clone(),
+                _ => Vec::new(),
+            };
+            b.spawning.push((on, Thread::new(script, params)));
         } else if name == c("GoalManager_AllFlagsSet") {
             let ours = named("Name").is_some() && named("Name") == b.active_goal;
             return Outcome::Done(ours && b.goal_flags.len() >= b.goal_needed.max(1));

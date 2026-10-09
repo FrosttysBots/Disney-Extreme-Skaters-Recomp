@@ -153,6 +153,9 @@ pub enum Outcome {
     Done(bool),
     /// The thread should pause this long before going on.
     Wait(f32),
+    /// Finished, handing the script these parameters (as
+    /// `GoalManager_GetGoalParams` does): true in an `if`.
+    Params(Params),
 }
 
 /// Runs commands that aren't scripts: the game (or a viewer) implements
@@ -408,6 +411,50 @@ impl Thread {
         if target.is_none() && (name == checksum("printf") || name == checksum("printstruct")) {
             return true;
         }
+        // Built in: whether two names are the same (`ChecksumEquals a = x
+        // b = y`).
+        if target.is_none() && name == checksum("ChecksumEquals") {
+            let (a, b) = (args.get(checksum("a")), args.get(checksum("b")));
+            return a.is_some() && a == b;
+        }
+        // Built in: an array's items one by one (`GetNextArrayElement
+        // array` gives `element`, counting with `index`; false past the
+        // end).
+        if target.is_none() && name == checksum("GetNextArrayElement") {
+            let array = match &args {
+                Value::Struct(items) => match items.iter().find(|(k, _)| k.is_none()) {
+                    Some((_, Value::Array(a))) => Some(a.clone()),
+                    Some((_, Value::Name(n))) => match program.value(*n) {
+                        Some(Value::Array(a)) => Some(a.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(array) = array else {
+                return false;
+            };
+            let frame = self.frames.last_mut().unwrap();
+            let index = frame
+                .params
+                .iter()
+                .find(|(k, _)| *k == Some(checksum("index")))
+                .and_then(|(_, v)| v.as_int())
+                .unwrap_or(0)
+                .max(0) as usize;
+            let Some(element) = array.get(index) else {
+                frame.params.retain(|(k, _)| *k != Some(checksum("index")));
+                return false;
+            };
+            set_param(&mut frame.params, checksum("element"), element.clone());
+            set_param(
+                &mut frame.params,
+                checksum("index"),
+                Value::Integer(index as i32 + 1),
+            );
+            return true;
+        }
         // Built in: an array's length (`GetArraySize name`, giving
         // `array_size`), and a script run for each item of one
         // (`ForEachIn array do = script params = {...}`).
@@ -470,6 +517,15 @@ impl Thread {
             Outcome::Done(result) => result,
             Outcome::Wait(seconds) => {
                 self.wait += seconds;
+                true
+            }
+            Outcome::Params(params) => {
+                let frame = self.frames.last_mut().unwrap();
+                for (k, v) in params {
+                    if let Some(k) = k {
+                        set_param(&mut frame.params, k, v);
+                    }
+                }
                 true
             }
         }
