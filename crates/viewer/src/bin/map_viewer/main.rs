@@ -1154,6 +1154,9 @@ struct GoalRun {
     goal: desa_viewer::goals::GenericGoal,
     left: Option<f32>,
     over: bool,
+    /// The objects that already reacted to the skater coming near before
+    /// it started (what's new since is the goal's, for the map).
+    before: HashSet<usize>,
 }
 
 /// How near the skater reaches a race waypoint (`Obj_SetInnerRadius 8`).
@@ -2496,6 +2499,17 @@ impl<'a> App<'a> {
                 }
             }
         }
+        // What the goal on wants gone near.
+        if let Some(run) = self.goal_run.as_ref().filter(|r| !r.over) {
+            for object in level.behaviour.radius_trigger_objects() {
+                if !run.before.contains(&object) {
+                    markers.push((
+                        map.pixel(level.behaviour.position(object)),
+                        ui::MapMark::Target,
+                    ));
+                }
+            }
+        }
         if let Some(race) = self.racing.as_ref().filter(|r| !r.over) {
             if let Some((at, ..)) = race.points.get(race.next) {
                 markers.push((map.pixel(*at), ui::MapMark::Letter));
@@ -3001,6 +3015,7 @@ impl<'a> App<'a> {
         }
         let Some(level) = &mut self.level else { return };
         let b = &mut level.behaviour;
+        let before = b.radius_trigger_objects().into_iter().collect();
         b.active_goal = Some(goal.id);
         b.goal_flags.clear();
         b.goal_count = 0;
@@ -3030,6 +3045,7 @@ impl<'a> App<'a> {
             left: goal.time,
             goal,
             over: false,
+            before,
         });
     }
 

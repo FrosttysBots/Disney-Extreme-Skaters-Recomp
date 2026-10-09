@@ -403,11 +403,22 @@ impl Behaviour {
     /// Where the objects are that do something when the skater comes
     /// near (their `SkaterInRadius` exception set), now.
     pub fn radius_triggers(&self) -> Vec<Vec3> {
+        self.radius_trigger_objects()
+            .into_iter()
+            .map(|i| self.states[i].position)
+            .collect()
+    }
+
+    /// The objects that do something when the skater comes near.
+    pub fn radius_trigger_objects(&self) -> Vec<usize> {
         let key = checksum("SkaterInRadius");
         self.states
             .iter()
-            .filter(|s| s.alive && s.inner > 0.0 && s.exceptions.iter().any(|(e, ..)| *e == key))
-            .map(|s| s.position)
+            .enumerate()
+            .filter(|(_, s)| {
+                s.alive && s.inner > 0.0 && s.exceptions.iter().any(|(e, ..)| *e == key)
+            })
+            .map(|(i, _)| i)
             .collect()
     }
 
