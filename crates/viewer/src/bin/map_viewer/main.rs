@@ -4315,6 +4315,23 @@ impl<'a> App<'a> {
             return;
         };
         screen.screen.update(level.behaviour.program(), dt);
+        // The pause menu's bar (`SlicePause_1`) fitted round its items:
+        // the game's script scales it by a `paused_bar_scale` the disc
+        // doesn't set, and at its own size the items run to its edges.
+        if let Some(menu) = screen.screen.size_of("pause_vmenu") {
+            if let Some(bar) = screen.screen.image_size("slicepause_1") {
+                let want = menu + glam::Vec2::new(32.0, 24.0);
+                let scale = (want / bar.max(glam::Vec2::ONE)).max(glam::Vec2::ONE);
+                screen.screen.set_sprites(
+                    "SlicePause_1",
+                    &qb::Value::Struct(vec![(
+                        Some(qb::checksum("scale")),
+                        qb::Value::Pair(scale.to_array()),
+                    )]),
+                    level.behaviour.program(),
+                );
+            }
+        }
         let sounds = std::mem::take(&mut screen.screen.sounds);
         let requests = std::mem::take(&mut screen.screen.requests);
         self.model.character.game_menu = screen.screen.takes_pad();

@@ -327,6 +327,25 @@ impl Screen {
         }
     }
 
+    /// An element's size as it's drawn (its own scale in), by id or alias.
+    pub fn size_of(&self, id: &str) -> Option<Vec2> {
+        self.find(checksum(id)).map(|i| self.local_rect(i).1)
+    }
+
+    /// Sets the properties of every sprite showing a texture (by name).
+    pub fn set_sprites(&mut self, texture: &str, props: &Value, program: &Program) {
+        let t = checksum(texture);
+        let found: Vec<usize> = (0..self.elements.len())
+            .filter(|i| {
+                self.el(*i)
+                    .is_some_and(|e| e.kind == Kind::Sprite && e.texture == Some(t))
+            })
+            .collect();
+        for i in found {
+            self.apply(i, props, program);
+        }
+    }
+
     /// Takes an element (and what's in it) away, by id or alias.
     pub fn destroy_id(&mut self, id: &str) {
         if let Some(i) = self.find(checksum(id)) {
