@@ -1984,6 +1984,11 @@ impl<'a> App<'a> {
 
     /// Starts or stops skating the character from where it stands.
     fn toggle_skate(&mut self) {
+        // What the scripts asked meanwhile isn't for this run.
+        if let Some(level) = &mut self.level {
+            level.behaviour.cameras.clear();
+            level.behaviour.messages.clear();
+        }
         self.skate_pose = None;
         self.run = None;
         self.warp_offer = None;

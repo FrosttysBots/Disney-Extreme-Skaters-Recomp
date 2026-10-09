@@ -1173,10 +1173,13 @@ impl Host for Commands<'_> {
             // A camera path played (not `STOP`ped), unless it's the goal's
             // own (`virtual_cam`, made up round the pro).
             let path = named("Name");
-            if let (Some(path), false, false) = (
+            // (Only a goal's: the one on, or just over.)
+            let goal = b.active_goal.is_some() || b.ended_goal.is_some();
+            if let (Some(path), false, false, true) = (
                 path,
                 args.has_flag(c("STOP")),
                 args.has_flag(c("virtual_cam")),
+                goal,
             ) {
                 if b.cameras.len() < 8 {
                     b.cameras.push(path);
