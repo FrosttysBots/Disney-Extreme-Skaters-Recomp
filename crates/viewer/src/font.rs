@@ -30,8 +30,9 @@ pub struct Glyph {
     pub width: u16,
     pub height: u16,
     pub top: u16,
-    /// The columns of it that show (outline included), from its left:
-    /// the cell has room round the letter, so letters go by these.
+    /// The letter's body inside its outline (the light columns), from its
+    /// left: letters go by these, their outlines overlapping. The whole
+    /// cell for glyphs without one (the coloured buttons).
     pub ink_left: u16,
     pub ink_width: u16,
 }
@@ -112,22 +113,33 @@ impl Font {
             let at = (y * width as usize + x) * 4;
             atlas[at..at + 4].copy_from_slice(&colours[usize::from(index)]);
         }
-        // How much of each cell shows.
+        // Each letter's body: the light core inside its outline (letters
+        // go by these, their outlines overlapping, as the game sets them:
+        // "CHANGE LEVEL" fits the pause menu's bar that way). Glyphs with
+        // no light core (the coloured buttons) go by the whole cell.
         for g in &mut glyphs {
-            let shows = |x: u32| {
+            let light = |x: u32| {
                 (u32::from(g.y)..u32::from(g.y) + u32::from(g.height)).any(|y| {
-                    let at = ((y * width + x) * 4 + 3) as usize;
-                    x < width && y < height && atlas.get(at).is_some_and(|a| *a > 24)
+                    let at = ((y * width + x) * 4) as usize;
+                    x < width
+                        && y < height
+                        && atlas
+                            .get(at..at + 4)
+                            .is_some_and(|p| p[3] > 200 && p[0] > 180 && p[1] > 180 && p[2] > 180)
                 })
             };
             let cols: Vec<u32> = (u32::from(g.x)..u32::from(g.x) + u32::from(g.width))
-                .filter(|x| shows(*x))
+                .filter(|x| light(*x))
                 .collect();
-            if let (Some(first), Some(last)) = (cols.first(), cols.last()) {
-                g.ink_left = (first - u32::from(g.x)) as u16;
-                g.ink_width = (last - first + 1) as u16;
-            } else {
-                g.ink_width = g.width;
+            match (cols.first(), cols.last()) {
+                (Some(first), Some(last)) if (last - first + 1) * 5 >= u32::from(g.width) * 2 => {
+                    g.ink_left = (first - u32::from(g.x)) as u16;
+                    g.ink_width = (last - first + 1) as u16;
+                }
+                _ => {
+                    g.ink_left = 0;
+                    g.ink_width = g.width;
+                }
             }
         }
         Ok(Font {
@@ -150,7 +162,9 @@ impl Font {
     /// outlines just meeting. A space is a third of the line height.
     pub fn advance(&self, c: char) -> f32 {
         match (c, self.glyph(c)) {
-            (_, Some(g)) => f32::from(g.ink_width) - 1.0,
+            // The body and a little: the outlines meet between letters.
+            (_, Some(g)) if g.ink_width < g.width => f32::from(g.ink_width) + 1.0,
+            (_, Some(g)) => f32::from(g.width) - 1.0,
             (' ', None) => self.line_height as f32 / 3.0,
             _ => 0.0,
         }
