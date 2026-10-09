@@ -35,6 +35,14 @@ pub enum GameData {
     Folder(PathBuf),
 }
 
+/// The screen's sprites and fonts, by lowercase name (see
+/// [`GameData::ui_files`]).
+#[derive(Clone, Debug, Default)]
+pub struct UiFiles {
+    pub images: HashMap<String, Vec<u8>>,
+    pub fonts: HashMap<String, Vec<u8>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelInfo {
     /// The archive name, e.g. `ToyStory_Bedroom`.
@@ -613,6 +621,40 @@ impl GameData {
                 })
             }
         }
+    }
+
+    /// The screen's pieces: the panel sprites (`images/PanelSprites/...`,
+    /// by lowercase file name without `.img.ngc`) and fonts (by lowercase
+    /// name without `.fnt.ngc`) of the archives named, later ones over
+    /// earlier (`panelsprites.prg` for every level, then a theme's:
+    /// `hubpanel.prg`). Languages' own copies (`French/`...) are left out.
+    pub fn ui_files(&mut self, archives: &[&str]) -> Result<UiFiles> {
+        let mut out = UiFiles::default();
+        for name in archives {
+            let Some(data) = self.read_archive(name)? else {
+                continue;
+            };
+            let archive =
+                Archive::parse(&data).with_context(|| format!("could not read {name}"))?;
+            for e in archive.entries() {
+                let path = e.path().to_ascii_lowercase().replace('\\', "/");
+                if ["/french/", "/german/", "/italian/", "/spanish/"]
+                    .iter()
+                    .any(|l| path.contains(l))
+                {
+                    continue;
+                }
+                let file = path.rsplit('/').next().unwrap_or(&path).to_string();
+                if let Some(image) = file.strip_suffix(".img.ngc") {
+                    out.images
+                        .insert(image.to_string(), e.contents()?.into_owned());
+                } else if let Some(font) = file.strip_suffix(".fnt.ngc") {
+                    out.fonts
+                        .insert(font.to_string(), e.contents()?.into_owned());
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The movies on the disc (`movies/*.bik`), by name, sorted.
