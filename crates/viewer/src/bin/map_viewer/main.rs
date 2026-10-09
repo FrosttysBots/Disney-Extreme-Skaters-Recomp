@@ -66,6 +66,10 @@ struct Args {
     /// Character to show, by id (e.g. jessie, buzz, simba)
     #[arg(long)]
     character: Option<String>,
+    /// Don't play the game's opening movies (the logos and the intro) at
+    /// the start
+    #[arg(long)]
+    no_intro: bool,
     /// Render one frame, panel included, to this PNG and exit
     #[arg(long)]
     screenshot: Option<PathBuf>,
@@ -206,6 +210,13 @@ fn main() -> Result<()> {
     let mut app = App::new(&mut settings);
     if let Some(path) = data_path {
         app.open_data(&path);
+    }
+    // The game's opening, as it boots (`startup_loading_screen`): the
+    // publisher's, Disney Interactive's and Toys for Bob's logos, then
+    // the intro.
+    if !args.no_intro && app.model.intro {
+        app.movie_queue
+            .extend(["ATVI", "DI_Logo", "TFBlogo", "intro"].map(String::from));
     }
     // Show the requested character, else the last one shown.
     if let Some(id) = args
@@ -1009,6 +1020,57 @@ struct MoverState {
     last: (bool, Vec3, Quat),
 }
 
+/// A movie playing (through ffmpeg: see `desa_viewer::movie`), since
+/// when, and the texture its frames go to.
+struct MoviePlaying {
+    movie: desa_viewer::movie::Movie,
+    started: Instant,
+    texture: Option<egui::TextureHandle>,
+    /// The newest frame, not yet in the texture.
+    pending: Option<egui::ColorImage>,
+}
+
+impl MoviePlaying {
+    /// Over the whole window, letterboxed on black; true if clicked (to
+    /// skip it).
+    fn draw(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(image) = self.pending.take() {
+            match &mut self.texture {
+                Some(t) => t.set(image, egui::TextureOptions::LINEAR),
+                None => {
+                    self.texture =
+                        Some(ctx.load_texture("movie", image, egui::TextureOptions::LINEAR))
+                }
+            }
+        }
+        let screen = ctx.content_rect();
+        let mut clicked = false;
+        egui::Area::new(egui::Id::new("movie"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK);
+                if let Some(texture) = &self.texture {
+                    let (w, h) = (self.movie.info.width as f32, self.movie.info.height as f32);
+                    let scale = (screen.width() / w).min(screen.height() / h);
+                    let rect =
+                        egui::Rect::from_center_size(screen.center(), egui::vec2(w, h) * scale);
+                    ui.painter().image(
+                        texture.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                }
+                clicked = response.clicked();
+            });
+        // Keep drawing: the movie moves on by itself.
+        ctx.request_repaint();
+        clicked
+    }
+}
+
 /// Units a foot (the bouncy objects' settings are in feet).
 const FEET: f32 = 12.0;
 
@@ -1402,6 +1464,9 @@ struct App<'a> {
     /// The Moon Gravity and Slomo cheats' factors.
     moon_gravity: f32,
     slomo_speed: f32,
+    /// The movie playing, and those to play after it (by name).
+    movie: Option<MoviePlaying>,
+    movie_queue: std::collections::VecDeque<String>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The goal a pro's offering (its place in the level's pros).
@@ -1444,6 +1509,7 @@ impl<'a> App<'a> {
         let camera = settings.best.get("camera").map_or(1, |c| *c as usize);
         let volume = |key: &str| settings.best.get(key).map_or(1.0, |v| *v as f32 / 100.0);
         let (effects_volume, music_volume) = (volume("volume.effects"), volume("volume.music"));
+        let intro = settings.best.get("intro") != Some(&0);
         App {
             settings,
             gpu: None,
@@ -1452,6 +1518,8 @@ impl<'a> App<'a> {
             model: ui::Model {
                 data_path: None,
                 levels: Vec::new(),
+                movies: Vec::new(),
+                intro,
                 level_progress: Vec::new(),
                 current: None,
                 loading: None,
@@ -1556,6 +1624,8 @@ impl<'a> App<'a> {
             racing: None,
             goal_run: None,
             photo: false,
+            movie: None,
+            movie_queue: Default::default(),
             moon_gravity: 0.5,
             slomo_speed: 0.5,
             goal_streams: None,
@@ -1604,6 +1674,7 @@ impl<'a> App<'a> {
         match GameData::open(path) {
             Ok(data) => {
                 self.model.levels = data.levels();
+                self.model.movies = data.movies();
                 self.model.data_path = Some(path.display().to_string());
                 self.model.message = if self.model.levels.is_empty() {
                     Some("No levels found there.".into())
@@ -1799,6 +1870,61 @@ impl<'a> App<'a> {
         level.behaviour.won_goals.insert(id);
         self.settings.best.insert(format!("won.{id:08x}"), 1);
         self.settings.save();
+    }
+
+    /// Starts the next movie waiting, and takes the playing one's frame
+    /// for now; at its end, on to the next.
+    fn update_movie(&mut self) {
+        if let Some(playing) = &mut self.movie {
+            let seconds = playing.started.elapsed().as_secs_f64();
+            let (w, h) = (playing.movie.info.width, playing.movie.info.height);
+            if let Some((frame, true)) = playing.movie.frame_at(seconds) {
+                playing.pending = Some(egui::ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize],
+                    frame,
+                ));
+            }
+            // (A little past its last frame, for the sound to end.)
+            if playing.movie.finished() || seconds > playing.movie.info.duration() + 1.0 {
+                self.stop_movie();
+            }
+            return;
+        }
+        let Some(name) = self.movie_queue.pop_front() else {
+            return;
+        };
+        let (Some(source), Some(ffmpeg)) = (
+            self.data.as_ref().and_then(|d| d.movie(&name)),
+            desa_viewer::movie::ffmpeg(),
+        ) else {
+            // (No ffmpeg: none of them, then.)
+            self.movie_queue.clear();
+            self.model.message =
+                Some("Movies need ffmpeg (on the PATH, or named by DESA_FFMPEG).".into());
+            return;
+        };
+        match desa_viewer::movie::Movie::start(&source, &ffmpeg) {
+            Ok((movie, sound)) => {
+                if let Some(audio) = &mut self.audio {
+                    audio.play_movie(sound);
+                }
+                self.movie = Some(MoviePlaying {
+                    movie,
+                    started: Instant::now(),
+                    texture: None,
+                    pending: None,
+                });
+            }
+            Err(err) => self.model.message = Some(format!("{name}: {err:#}")),
+        }
+    }
+
+    /// Stops the movie playing (the next waiting starts after).
+    fn stop_movie(&mut self) {
+        self.movie = None;
+        if let Some(audio) = &mut self.audio {
+            audio.play_movie(None);
+        }
     }
 
     /// The goal on's camera paths (`kind` as in `<level>_AddGoal_<kind>`):
@@ -4466,11 +4592,20 @@ impl<'a> App<'a> {
             self.camera.pitch.to_degrees()
         );
 
+        self.update_movie();
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
+        let movie = &mut self.movie;
         let mut actions = Vec::new();
-        let output = gpu.egui_ctx.run(raw, |ctx| actions = ui::draw(ctx, model));
+        let output = gpu.egui_ctx.run(raw, |ctx| {
+            actions = ui::draw(ctx, model);
+            if let Some(playing) = movie {
+                if playing.draw(ctx) {
+                    actions.push(ui::Action::SkipMovie);
+                }
+            }
+        });
         gpu.egui_state
             .handle_platform_output(&gpu.window, output.platform_output.clone());
 
@@ -4558,6 +4693,19 @@ impl<'a> App<'a> {
                 ui::Action::GoToSpawn(i) => self.go_to_spawn(i),
                 ui::Action::PlayCameraPath(i) => self.play_camera_path(i),
                 ui::Action::StopCameraPath => self.stop_camera_path(),
+                ui::Action::PlayMovie(i) => {
+                    if let Some(name) = self.model.movies.get(i).cloned() {
+                        self.stop_movie();
+                        self.movie_queue.clear();
+                        self.movie_queue.push_back(name);
+                    }
+                }
+                ui::Action::SkipMovie => self.stop_movie(),
+                ui::Action::SetIntro(on) => {
+                    self.model.intro = on;
+                    self.settings.best.insert("intro".into(), u32::from(on));
+                    self.settings.save();
+                }
                 ui::Action::ResetCamera => {
                     self.stop_camera_path();
                     if let Some(level) = &self.level {
@@ -4620,6 +4768,16 @@ impl<'a> App<'a> {
     fn key_pressed(&mut self, code: KeyCode, repeat: bool) {
         if code == KeyCode::F12 && !repeat {
             self.photo = true;
+            return;
+        }
+        // A movie playing: Esc skips them all, any other key this one.
+        if self.movie.is_some() {
+            if !repeat {
+                if code == KeyCode::Escape {
+                    self.movie_queue.clear();
+                }
+                self.stop_movie();
+            }
             return;
         }
         // Paused: P resumes, Esc stops skating.

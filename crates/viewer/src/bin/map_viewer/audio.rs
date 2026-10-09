@@ -60,6 +60,53 @@ impl Source for Stream {
     }
 }
 
+/// A movie's sound as ffmpeg decodes it: interleaved stereo, taken from
+/// the channel as it comes (silence when it's behind), ending when the
+/// channel does.
+struct MovieSound {
+    from: std::sync::mpsc::Receiver<Vec<f32>>,
+    buffer: Vec<f32>,
+    at: usize,
+}
+
+impl Iterator for MovieSound {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        use std::sync::mpsc::TryRecvError;
+        while self.at >= self.buffer.len() {
+            match self.from.try_recv() {
+                Ok(more) => {
+                    self.buffer = more;
+                    self.at = 0;
+                }
+                Err(TryRecvError::Empty) => return Some(0.0),
+                Err(TryRecvError::Disconnected) => return None,
+            }
+        }
+        self.at += 1;
+        Some(self.buffer[self.at - 1])
+    }
+}
+
+impl Source for MovieSound {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> ChannelCount {
+        NonZero::new(desa_viewer::movie::AUDIO_CHANNELS).unwrap()
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        NonZero::new(desa_viewer::movie::AUDIO_RATE).unwrap()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
 /// A decoded sound, ready to play.
 struct Clip {
     rate: u32,
@@ -104,6 +151,8 @@ pub struct Audio {
     effects: f32,
     music_level: f32,
     voice: Option<Player>,
+    /// A movie's sound playing.
+    movie: Option<Player>,
     seed: u64,
 }
 
@@ -126,6 +175,7 @@ impl Audio {
             effects: 1.0,
             music_level: 1.0,
             voice: None,
+            movie: None,
             seed: 0x9E37_79B9_7F4A_7C15,
         })
     }
@@ -250,6 +300,21 @@ impl Audio {
         player.set_volume(MUSIC_VOLUME * self.music_level);
         player.append(Stream(Dtk::new(track)));
         self.music = Some(player);
+    }
+
+    /// Plays a movie's sound (`samples` as ffmpeg decodes them), or stops
+    /// the one playing (`None`).
+    pub fn play_movie(&mut self, samples: Option<std::sync::mpsc::Receiver<Vec<f32>>>) {
+        self.movie = samples.map(|from| {
+            let player = Player::connect_new(self.sink.mixer());
+            player.set_volume(MASTER * self.music_level.max(self.effects));
+            player.append(MovieSound {
+                from,
+                buffer: Vec::new(),
+                at: 0,
+            });
+            player
+        });
     }
 
     pub fn stop_music(&mut self) {

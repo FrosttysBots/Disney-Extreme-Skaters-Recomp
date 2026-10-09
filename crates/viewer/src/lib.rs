@@ -7,6 +7,7 @@ pub mod character;
 pub mod collision;
 pub mod goals;
 pub mod level;
+pub mod movie;
 pub mod nodes;
 pub mod objects;
 pub mod particles;

@@ -578,6 +578,74 @@ impl GameData {
         Ok(data)
     }
 
+    /// Where a movie is (`movies/NAME.bik`, ignoring case): the disc's
+    /// range of it, or the file in an extracted folder (`movies` beside
+    /// `pre`).
+    pub fn movie(&self, name: &str) -> Option<crate::movie::MovieSource> {
+        let file = format!("{}.bik", name.to_ascii_lowercase());
+        match self {
+            GameData::Disc { path, disc } => {
+                let (offset, size) = disc
+                    .fst()
+                    .files()
+                    .find(|n| n.path.to_ascii_lowercase() == format!("movies/{file}"))?
+                    .file_range()?;
+                Some(crate::movie::MovieSource {
+                    path: path.clone(),
+                    offset,
+                    size,
+                })
+            }
+            GameData::Folder(dir) => {
+                let movies = dir.parent()?.join("movies");
+                let path = fs::read_dir(&movies).ok()?.find_map(|e| {
+                    let e = e.ok()?;
+                    e.file_name()
+                        .to_str()?
+                        .eq_ignore_ascii_case(&file)
+                        .then(|| e.path())
+                })?;
+                let size = fs::metadata(&path).ok()?.len();
+                Some(crate::movie::MovieSource {
+                    path,
+                    offset: 0,
+                    size,
+                })
+            }
+        }
+    }
+
+    /// The movies on the disc (`movies/*.bik`), by name, sorted.
+    pub fn movies(&self) -> Vec<String> {
+        let mut names: Vec<String> = match self {
+            GameData::Disc { disc, .. } => disc
+                .fst()
+                .files()
+                .filter(|n| {
+                    let p = n.path.to_ascii_lowercase();
+                    p.starts_with("movies/") && p.ends_with(".bik")
+                })
+                .map(|n| n.name.trim_end_matches(".bik").to_string())
+                .collect(),
+            GameData::Folder(dir) => dir
+                .parent()
+                .and_then(|d| fs::read_dir(d.join("movies")).ok())
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| {
+                            let name = e.ok()?.file_name().into_string().ok()?;
+                            name.to_ascii_lowercase()
+                                .ends_with(".bik")
+                                .then(|| name[..name.len() - 4].to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        names.sort_by_key(|n| n.to_ascii_lowercase());
+        names
+    }
+
     /// A streamed music track (`music/dtk/NAME.dtk`, ignoring case), or
     /// none if it isn't there.
     pub fn music(&mut self, name: &str) -> Result<Option<Vec<u8>>> {

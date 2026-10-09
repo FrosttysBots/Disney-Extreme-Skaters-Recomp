@@ -42,6 +42,11 @@ pub enum Action {
     /// One of the level's other goals (by its place in the goal list),
     /// played from its own scripts.
     StartGoal(usize),
+    /// A movie (by its place in the list) played, or the one playing
+    /// skipped; and whether the opening movies play at the start.
+    PlayMovie(usize),
+    SkipMovie,
+    SetIntro(bool),
     /// The goal offered by its pro, or not now.
     TakeGoal,
     NotNow,
@@ -173,6 +178,10 @@ pub struct CharacterModel {
 pub struct Model {
     pub data_path: Option<String>,
     pub levels: Vec<LevelInfo>,
+    /// The disc's movies, by name, and whether the opening ones play at
+    /// the start.
+    pub movies: Vec<String>,
+    pub intro: bool,
     /// Each level's progress for the character shown (collectibles got,
     /// gaps landed), beside its name.
     pub level_progress: Vec<String>,
@@ -945,6 +954,33 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                         }
                     });
                 }
+            }
+
+            if !model.movies.is_empty() {
+                egui::CollapsingHeader::new(format!("Movies ({})", model.movies.len()))
+                    .id_salt("movies")
+                    .show(ui, |ui| {
+                        let mut intro = model.intro;
+                        if ui
+                            .checkbox(&mut intro, "Opening movies at the start")
+                            .on_hover_text("The logos and the intro, as the game boots (needs ffmpeg).")
+                            .changed()
+                        {
+                            actions.push(Action::SetIntro(intro));
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for (i, name) in model.movies.iter().enumerate() {
+                                if ui.small_button(name).clicked() {
+                                    actions.push(Action::PlayMovie(i));
+                                }
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new("Any key or a click skips one; Esc skips them all.")
+                                .small()
+                                .weak(),
+                        );
+                    });
             }
 
             if model.current.is_some() {
