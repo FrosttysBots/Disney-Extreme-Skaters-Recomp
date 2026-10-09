@@ -134,6 +134,10 @@ struct Args {
     /// start)
     #[arg(long, requires = "skate", value_parser = ["high", "pro"])]
     score_goal: Option<String>,
+    /// For --skate: cheats on (perfect_manual, perfect_rail,
+    /// perfect_skitch, always_special, moon, slomo, stats_13)
+    #[arg(long, requires = "skate", value_delimiter = ',')]
+    cheat: Vec<String>,
     /// For --skate: play the level's race (from its start)
     #[arg(long, requires = "skate")]
     race: bool,
@@ -1207,6 +1211,9 @@ struct App<'a> {
     /// to say.
     goal_streams: Option<HashMap<u32, (u64, u64)>>,
     lines_to_say: Vec<u32>,
+    /// The Moon Gravity and Slomo cheats' factors.
+    moon_gravity: f32,
+    slomo_speed: f32,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The goal a pro's offering (its place in the level's pros).
@@ -1298,6 +1305,7 @@ impl<'a> App<'a> {
                     message: None,
                     special: (0.0, false),
                     auto_kick: true,
+                    cheats: Default::default(),
                     sound: true,
                     music: true,
                     effects_volume,
@@ -1356,6 +1364,8 @@ impl<'a> App<'a> {
             letter_lines: [None; 5],
             racing: None,
             photo: false,
+            moon_gravity: 0.5,
+            slomo_speed: 0.5,
             goal_streams: None,
             lines_to_say: Vec::new(),
             cutscene: false,
@@ -1826,6 +1836,22 @@ impl<'a> App<'a> {
         let id = &self.model.character.characters[index].id;
         let program = level.behaviour.program();
         let stats = Stats::of(program, id);
+        // The Stats 13 cheat: every stat at 13.
+        let stats = if self.model.character.cheats.stats_13 {
+            Stats([13.0; 10])
+        } else {
+            stats
+        };
+        // The Moon Gravity and Slomo cheats' factors (`Moon_gravity`,
+        // `slomo_speed`).
+        let factor = |name: &str, default: f32| {
+            program
+                .value(qb::checksum(name))
+                .and_then(qb::Value::as_f32)
+                .unwrap_or(default)
+        };
+        self.moon_gravity = factor("Moon_gravity", 0.5);
+        self.slomo_speed = factor("slomo_speed", 0.5);
         let mut physics = Physics::new(program, &stats);
         // The chase camera picked.
         let choices = Physics::camera_choices(program);
@@ -3335,8 +3361,27 @@ impl<'a> App<'a> {
             input
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
+        // The cheats.
+        let cheats = self.model.character.cheats;
+        skater.perfect_manual = cheats.perfect_manual;
+        skater.perfect_rail = cheats.perfect_rail;
+        skater.perfect_skitch = cheats.perfect_skitch;
+        if cheats.always_special {
+            skater.special_meter = 3000.0;
+            skater.special = true;
+        }
+        let gravity = physics.air_gravity;
+        if cheats.moon {
+            physics.air_gravity *= self.moon_gravity;
+        }
+        let dt = if cheats.slomo {
+            dt * self.slomo_speed
+        } else {
+            dt
+        };
         let before = skater.position;
         skater.update(input, physics, world, dt);
+        physics.air_gravity = gravity;
         // A gap landed: ticked off on the level's list, and kept.
         if let Some((name, _)) = skater.last_gap.take() {
             self.session.gaps += 1;
@@ -4501,6 +4546,19 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 anyhow::ensure!(v.len() == 4, "--skate-from is x,y,z,heading");
                 app.placement = Mat4::from_translation(Vec3::new(v[0], v[1], v[2]))
                     * Mat4::from_rotation_y(v[3].to_radians());
+            }
+            for cheat in &args.cheat {
+                let c = &mut app.model.character.cheats;
+                match cheat.as_str() {
+                    "perfect_manual" => c.perfect_manual = true,
+                    "perfect_rail" => c.perfect_rail = true,
+                    "perfect_skitch" => c.perfect_skitch = true,
+                    "always_special" => c.always_special = true,
+                    "moon" => c.moon = true,
+                    "slomo" => c.slomo = true,
+                    "stats_13" => c.stats_13 = true,
+                    other => anyhow::bail!("no cheat called {other}"),
+                }
             }
             if let Some(camera) = args.chase_camera {
                 app.model.character.camera = camera;

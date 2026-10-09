@@ -124,6 +124,9 @@ skater is and what it's doing.
   world): skate into them and they're knocked flying.
 - Particle effects there from the start, like Camp's campfires and the
   steam off Clayton's ship, run from the levels' own emit scripts.
+- Cheats (the panel's Cheats list, the game's own): Perfect Manual, Rail
+  and Skitch, Always Special, Moon Gravity and Slomo (the game's
+  Moon_gravity and slomo_speed, both 0.5), Stats 13.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game

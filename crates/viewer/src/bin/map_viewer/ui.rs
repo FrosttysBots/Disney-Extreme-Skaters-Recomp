@@ -5,6 +5,18 @@ use desa_viewer::collision::CollisionView;
 use desa_viewer::nodes::Spawn;
 use desa_viewer::source::LevelInfo;
 
+/// The game's cheats this viewer has (`CHEAT_PERFECT_MANUAL`...).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct Cheats {
+    pub perfect_manual: bool,
+    pub perfect_rail: bool,
+    pub perfect_skitch: bool,
+    pub always_special: bool,
+    pub moon: bool,
+    pub slomo: bool,
+    pub stats_13: bool,
+}
+
 #[derive(Clone, Copy)]
 pub enum Action {
     OpenDisc,
@@ -75,6 +87,8 @@ pub struct CharacterModel {
     pub special: (f32, bool),
     /// The AutoKick option.
     pub auto_kick: bool,
+    /// The game's cheats (its cheat menu's).
+    pub cheats: Cheats,
     /// The skater's sounds (and the level's ambience) on, and the songs.
     pub sound: bool,
     pub music: bool,
@@ -1138,6 +1152,19 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             }
         });
     }
+    egui::CollapsingHeader::new("Cheats")
+        .id_salt("cheats")
+        .show(ui, |ui| {
+            let c = &mut model.cheats;
+            ui.checkbox(&mut c.perfect_manual, "Perfect Manual");
+            ui.checkbox(&mut c.perfect_rail, "Perfect Rail");
+            ui.checkbox(&mut c.perfect_skitch, "Perfect Skitch");
+            ui.checkbox(&mut c.always_special, "Always Special");
+            ui.checkbox(&mut c.moon, "Moon Gravity");
+            ui.checkbox(&mut c.slomo, "Slomo");
+            ui.checkbox(&mut c.stats_13, "Stats 13")
+                .on_hover_text("Every stat at 13 (takes effect from the next skate)");
+        });
     ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
         "The game's controller option: the skater pushes by itself while under its kick speed. Off, hold W to push.",
     );

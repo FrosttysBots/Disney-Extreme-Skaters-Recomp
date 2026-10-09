@@ -349,6 +349,11 @@ pub struct Skater {
     /// Skitching: the vehicle (in [`World::vehicles`]) towing the skater,
     /// and how long up has been held behind one.
     pub skitch: Option<usize>,
+    /// The game's cheats that keep balance tricks steady: Perfect Manual,
+    /// Perfect Rail, Perfect Skitch.
+    pub perfect_manual: bool,
+    pub perfect_rail: bool,
+    pub perfect_skitch: bool,
     skitch_hold: f32,
     /// Seconds since it last left a rail.
     since_rail: f32,
@@ -487,6 +492,9 @@ impl Skater {
             action_time: 0.0,
             crouched: false,
             skitch: None,
+            perfect_manual: false,
+            perfect_rail: false,
+            perfect_skitch: false,
             skitch_hold: 0.0,
             slope: 0.0,
             bump: None,
@@ -1226,6 +1234,9 @@ impl Skater {
             return;
         }
         self.crouched = input.crouch;
+        if self.perfect_skitch {
+            self.balance.steady();
+        }
         let lean = self
             .balance
             .update(input.turn > 0.0, input.turn < 0.0, &p.skitch_balance, STEP);
@@ -1594,6 +1605,9 @@ impl Skater {
         // Balance (`DoBalanceTrick ButtonA = Right ButtonB = Left`): off
         // the top of the meter it falls to the left, off the bottom to the
         // right (the game's `SkateInOrBail`).
+        if self.perfect_rail {
+            self.balance.steady();
+        }
         let lean = self
             .balance
             .update(input.turn > 0.0, input.turn < 0.0, &p.grind_balance, STEP);
@@ -1842,6 +1856,9 @@ impl Skater {
             }
         }
         if self.manual {
+            if self.perfect_manual {
+                self.balance.steady();
+            }
             match self
                 .balance
                 .update(input.push, input.brake, &p.manual_balance, STEP)
