@@ -170,6 +170,12 @@ pub trait Host {
     fn is_self(&self, _target: u32) -> bool {
         false
     }
+
+    /// The tags `SetTags` and `GetTags` work on, if the host keeps them
+    /// (a screen element's own); else the thread's.
+    fn tags(&mut self) -> Option<&mut Params> {
+        None
+    }
 }
 
 /// Statements a thread runs at most per [`Thread::run`], so a loop that
@@ -433,17 +439,25 @@ impl Thread {
                 .any(|(k, v)| *k == Some(*wanted) || (k.is_none() && *v == Value::Name(*wanted)));
         }
         if target.is_none() && name == checksum("SetTags") {
+            // (The host's tags if it keeps them: a screen element's.)
+            let tags = match host.tags() {
+                Some(tags) => tags,
+                None => &mut self.tags,
+            };
             if let Value::Struct(items) = args {
                 for (k, v) in items {
                     if let Some(k) = k {
-                        set_param(&mut self.tags, k, v);
+                        set_param(tags, k, v);
                     }
                 }
             }
             return true;
         }
         if target.is_none() && name == checksum("GetTags") {
-            let tags = self.tags.clone();
+            let tags = match host.tags() {
+                Some(tags) => tags.clone(),
+                None => self.tags.clone(),
+            };
             let frame = self.frames.last_mut().unwrap();
             for (k, v) in tags {
                 if let Some(k) = k {
@@ -728,12 +742,8 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
         match &tokens[i] {
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
-                let value = evaluate(&tokens[i + 1..close], params, program);
-                flat.push(match value {
-                    Some(v) if v.fract() == 0.0 && v.abs() < 1e9 => Token::Integer(v as i32),
-                    Some(v) => Token::Float(v as f32),
-                    None => Token::Integer(0),
-                });
+                let value = evaluate_num(&tokens[i + 1..close], params, program);
+                flat.push(value.map_or(Token::Integer(0), Num::token));
                 i = close + 1;
             }
             Token::AllArgs => {
@@ -826,40 +836,92 @@ fn matching_paren(tokens: &[Token], open: usize) -> usize {
     tokens.len().saturating_sub(1)
 }
 
-/// Simple arithmetic and comparisons over numbers and `<params>`.
-fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64> {
-    let mut values: Vec<f64> = Vec::new();
+/// A value in arithmetic: a number, or a pair or vector (`(0.0, 12.0)`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Num {
+    Scalar(f64),
+    /// The components and how many there are (2 for a pair, 3).
+    Vector([f64; 3], usize),
+}
+
+impl Num {
+    fn of(value: &Value) -> Option<Num> {
+        match value {
+            Value::Pair([x, y]) => Some(Num::Vector([f64::from(*x), f64::from(*y), 0.0], 2)),
+            Value::Vector([x, y, z]) => Some(Num::Vector(
+                [f64::from(*x), f64::from(*y), f64::from(*z)],
+                3,
+            )),
+            Value::Name(n) => Some(Num::Scalar(f64::from(*n))),
+            v => v.as_f32().map(|f| Num::Scalar(f64::from(f))),
+        }
+    }
+
+    fn scalar(self) -> f64 {
+        match self {
+            Num::Scalar(v) => v,
+            Num::Vector(v, _) => v[0],
+        }
+    }
+
+    /// Componentwise, a number applying to every component.
+    fn zip(self, other: Num, f: impl Fn(f64, f64) -> f64) -> Num {
+        match (self, other) {
+            (Num::Scalar(a), Num::Scalar(b)) => Num::Scalar(f(a, b)),
+            (Num::Vector(a, n), Num::Scalar(b)) => Num::Vector(a.map(|c| f(c, b)), n),
+            (Num::Scalar(a), Num::Vector(b, n)) => Num::Vector(b.map(|c| f(a, c)), n),
+            (Num::Vector(a, n), Num::Vector(b, m)) => {
+                Num::Vector([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2])], n.max(m))
+            }
+        }
+    }
+
+    fn token(self) -> Token {
+        match self {
+            Num::Scalar(v) if v.fract() == 0.0 && v.abs() < 1e9 => Token::Integer(v as i32),
+            Num::Scalar(v) => Token::Float(v as f32),
+            Num::Vector(v, 2) => Token::Pair([v[0] as f32, v[1] as f32]),
+            Num::Vector(v, _) => Token::Vector(v.map(|c| c as f32)),
+        }
+    }
+}
+
+/// Arithmetic and comparisons over numbers, pairs, vectors and
+/// `<params>`: `*`, `/` and `.` (the dot product) before `+` and `-`,
+/// before comparisons. A name compares as its checksum.
+fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<Num> {
+    // Operands and operators in order.
+    let mut values: Vec<Num> = Vec::new();
     let mut ops: Vec<&Token> = Vec::new();
     let mut i = 0;
     let mut negative = false;
     while i < tokens.len() {
         let v = match &tokens[i] {
-            Token::Integer(v) => Some(f64::from(*v)),
-            Token::HexInteger(v) => Some(f64::from(*v)),
-            Token::Float(v) => Some(f64::from(*v)),
+            Token::Integer(v) => Some(Num::Scalar(f64::from(*v))),
+            Token::HexInteger(v) => Some(Num::Scalar(f64::from(*v))),
+            Token::Float(v) => Some(Num::Scalar(f64::from(*v))),
+            Token::Pair(p) => Num::of(&Value::Pair(*p)),
+            Token::Vector(p) => Num::of(&Value::Vector(*p)),
             Token::Arg => {
                 i += 1;
                 let Some(Token::Name(n)) = tokens.get(i) else {
                     return None;
                 };
-                // (A name compares as its checksum: `(<flag> = Got_P01)`.)
                 params
                     .iter()
                     .find(|(k, _)| *k == Some(*n))
-                    .and_then(|(_, v)| match v {
-                        Value::Name(name) => Some(f64::from(*name)),
-                        v => v.as_f32().map(f64::from),
-                    })
+                    .and_then(|(_, v)| Num::of(v))
             }
-            Token::Name(n) => Some(
-                program
+            Token::Name(n) => Some(match program.value(*n).and_then(Num::of) {
+                Some(Num::Scalar(_)) | None => program
                     .value(*n)
                     .and_then(Value::as_f32)
-                    .map_or(f64::from(*n), f64::from),
-            ),
+                    .map_or(Num::Scalar(f64::from(*n)), |f| Num::Scalar(f64::from(f))),
+                Some(v) => v,
+            }),
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
-                let v = evaluate(&tokens[i + 1..close], params, program);
+                let v = evaluate_num(&tokens[i + 1..close], params, program);
                 i = close;
                 v
             }
@@ -872,6 +934,7 @@ fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64>
             | Token::Minus
             | Token::Multiply
             | Token::Divide
+            | Token::Dot
             | Token::Equals
             | Token::LessThan
             | Token::LessThanEqual
@@ -884,25 +947,58 @@ fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64>
             _ => return None,
         };
         let v = v?;
-        values.push(if negative { -v } else { v });
+        values.push(if negative {
+            v.zip(Num::Scalar(-1.0), |a, b| a * b)
+        } else {
+            v
+        });
         negative = false;
         i += 1;
     }
-    // Left to right, which is all these scripts need.
-    let mut acc = *values.first()?;
-    for (op, v) in ops.iter().zip(values.iter().skip(1)) {
-        acc = match op {
-            Token::Add => acc + v,
-            Token::Minus => acc - v,
-            Token::Multiply => acc * v,
-            Token::Divide if *v != 0.0 => acc / v,
-            Token::Equals => f64::from(u8::from(acc == *v)),
-            Token::LessThan => f64::from(u8::from(acc < *v)),
-            Token::LessThanEqual => f64::from(u8::from(acc <= *v)),
-            Token::GreaterThan => f64::from(u8::from(acc > *v)),
-            Token::GreaterThanEqual => f64::from(u8::from(acc >= *v)),
+    if values.is_empty() || values.len() != ops.len() + 1 {
+        return values.first().copied().filter(|_| ops.is_empty());
+    }
+    let apply = |a: Num, op: &Token, b: Num| -> Option<Num> {
+        let bool_of = |x: bool| Num::Scalar(f64::from(u8::from(x)));
+        Some(match op {
+            Token::Add => a.zip(b, |x, y| x + y),
+            Token::Minus => a.zip(b, |x, y| x - y),
+            Token::Multiply => a.zip(b, |x, y| x * y),
+            Token::Divide => a.zip(b, |x, y| if y != 0.0 { x / y } else { 0.0 }),
+            Token::Dot => match (a, b) {
+                (Num::Vector(x, _), Num::Vector(y, _)) => {
+                    Num::Scalar(x[0] * y[0] + x[1] * y[1] + x[2] * y[2])
+                }
+                _ => a.zip(b, |x, y| x * y),
+            },
+            Token::Equals => bool_of(a == b),
+            Token::LessThan => bool_of(a.scalar() < b.scalar()),
+            Token::LessThanEqual => bool_of(a.scalar() <= b.scalar()),
+            Token::GreaterThan => bool_of(a.scalar() > b.scalar()),
+            Token::GreaterThanEqual => bool_of(a.scalar() >= b.scalar()),
             _ => return None,
-        };
+        })
+    };
+    // By precedence: products, then sums, then comparisons.
+    for level in [
+        &[Token::Multiply, Token::Divide, Token::Dot][..],
+        &[Token::Add, Token::Minus][..],
+    ] {
+        let mut k = 0;
+        while k < ops.len() {
+            if level.contains(ops[k]) {
+                let v = apply(values[k], ops[k], values[k + 1])?;
+                values[k] = v;
+                values.remove(k + 1);
+                ops.remove(k);
+            } else {
+                k += 1;
+            }
+        }
+    }
+    let mut acc = values[0];
+    for (op, v) in ops.iter().zip(values.iter().skip(1)) {
+        acc = apply(acc, op, *v)?;
     }
     Some(acc)
 }
@@ -1074,6 +1170,52 @@ mod tests {
                 .unwrap();
             assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
         }
+    }
+
+    #[test]
+    fn pairs_in_arithmetic() {
+        let program = Program::new();
+        let params = vec![
+            (Some(checksum("pos")), Value::Pair([100.0, 20.0])),
+            (Some(checksum("h")), Value::Integer(32)),
+        ];
+        let eval = |tokens: Vec<Token>| evaluate_num(&tokens, &params, &program);
+        // (<pos> + (0.0, 12.0))
+        assert_eq!(
+            eval(vec![
+                Token::Arg,
+                n("pos"),
+                Token::Add,
+                Token::Pair([0.0, 12.0])
+            ]),
+            Some(Num::Vector([100.0, 32.0, 0.0], 2))
+        );
+        // (1.0, 0.0) * 2 + (0.0, 1.0) * <h> / 16: products first.
+        assert_eq!(
+            eval(vec![
+                Token::Pair([1.0, 0.0]),
+                Token::Multiply,
+                Token::Integer(2),
+                Token::Add,
+                Token::Pair([0.0, 1.0]),
+                Token::Multiply,
+                Token::Arg,
+                n("h"),
+                Token::Divide,
+                Token::Integer(16),
+            ]),
+            Some(Num::Vector([2.0, 2.0, 0.0], 2))
+        );
+        // (0.0, 1.0).<pos>: the dot product.
+        assert_eq!(
+            eval(vec![
+                Token::Pair([0.0, 1.0]),
+                Token::Dot,
+                Token::Arg,
+                n("pos")
+            ]),
+            Some(Num::Scalar(20.0))
+        );
     }
 
     #[test]
