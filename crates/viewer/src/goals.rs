@@ -200,6 +200,24 @@ pub struct LevelGoal {
 /// The goals the level adds (`<level>_goals`, as the career has them, or
 /// straight from `<level>_Startup` as Pizza Planet does).
 pub fn level_goals(program: &Program, level: &str) -> Vec<LevelGoal> {
+    all_goal_params(program, level)
+        .into_iter()
+        .filter_map(|(kind, out)| {
+            let text = ["view_goals_text", "goal_text"].iter().find_map(|key| {
+                match param(&out, program, key) {
+                    Some(Value::String(s) | Value::LocalString(s)) if !s.is_empty() => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                }
+            })?;
+            Some(LevelGoal { kind, text })
+        })
+        .collect()
+}
+
+/// Each goal the level adds: its type and its parameters.
+fn all_goal_params(program: &Program, level: &str) -> Vec<(String, Vec<(u32, Value)>)> {
     let names = level_names(level);
     let Some(script) = ["goals", "Startup"]
         .iter()
@@ -224,23 +242,80 @@ pub fn level_goals(program: &Program, level: &str) -> Vec<LevelGoal> {
     host.goals
         .iter()
         .zip(&host.kinds)
-        .filter_map(|(params, kind)| {
+        .map(|(params, kind)| {
             let mut out = Vec::new();
             flatten(params, program, &mut out);
-            let text = ["view_goals_text", "goal_text"].iter().find_map(|key| {
-                match param(&out, program, key) {
-                    Some(Value::String(s) | Value::LocalString(s)) if !s.is_empty() => {
-                        Some(s.clone())
-                    }
-                    _ => None,
-                }
-            })?;
-            Some(LevelGoal {
-                kind: kind.clone(),
-                text,
-            })
+            (kind.clone(), out)
         })
         .collect()
+}
+
+/// A goal played from its own scripts: the level's scripts set its flags
+/// (`GoalManager_SetGoalFlag`) as they're done, and it's won with enough
+/// of them, or when a script wins it (`GoalManager_WinGoal`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenericGoal {
+    /// Its id (`canyon_goal_gaps`) and what the goal list calls it.
+    pub id: u32,
+    pub name: String,
+    /// What it asks (`goal_text`).
+    pub text: String,
+    /// The seconds it gives, none if it's untimed (`unlimited_time`).
+    pub time: Option<f32>,
+    /// How many flags win it (`num_flags_to_win`, `num_flags`, or all of
+    /// `Goal_Flags`); none if only a script wins it.
+    pub needed: usize,
+    pub restart: Option<u32>,
+    /// Scripts: run as it starts (`activate`, `goal_start_script`) and as
+    /// it ends (`goal_deactivate_script`).
+    pub activate: Option<u32>,
+    pub start_script: Option<u32>,
+    pub deactivate: Option<u32>,
+    /// What it says when won (`win_message_text`).
+    pub win: String,
+    /// All its parameters, for its scripts.
+    pub params: Vec<(u32, Value)>,
+}
+
+/// The level's goal of this type (`Gaps`, `Gaps2`...), as played from its
+/// own scripts.
+pub fn generic_goal(program: &Program, level: &str, kind: &str) -> Option<GenericGoal> {
+    let (_, params) = all_goal_params(program, level)
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(kind))?;
+    let get = |key: &str| param(&params, program, key);
+    let name = |key: &str| {
+        params
+            .iter()
+            .find(|(k, _)| *k == checksum(key))
+            .and_then(|(_, v)| v.as_name())
+    };
+    let text = |key: &str| match get(key) {
+        Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+        _ => None,
+    };
+    let flags = match get("Goal_Flags") {
+        Some(Value::Array(a)) => a.len(),
+        _ => 0,
+    };
+    let needed = ["num_flags_to_win", "num_flags"]
+        .iter()
+        .find_map(|k| get(k).and_then(Value::as_int))
+        .map_or(flags, |n| n.max(0) as usize);
+    let unlimited = params.iter().any(|(k, _)| *k == checksum("unlimited_time"));
+    Some(GenericGoal {
+        id: goal_id(level, kind),
+        name: text("view_goals_text").unwrap_or_else(|| kind.to_string()),
+        text: text("goal_text").unwrap_or_default(),
+        time: (!unlimited).then(|| get("time").and_then(Value::as_f32).unwrap_or(120.0)),
+        needed,
+        restart: name("restart_node"),
+        activate: name("activate"),
+        start_script: name("goal_start_script"),
+        deactivate: name("goal_deactivate_script"),
+        win: text("win_message_text").unwrap_or_else(|| "Goal complete!".to_string()),
+        params,
+    })
 }
 
 /// A race goal (`AddGoal_Race`): its name, the waypoints in order (each

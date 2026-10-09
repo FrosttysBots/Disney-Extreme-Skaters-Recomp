@@ -383,6 +383,8 @@ pub struct Skater {
     gaps: Gaps,
     /// The last gap scored, its name and points (for whoever shows it).
     pub last_gap: Option<(String, u32)>,
+    /// The scripts of gaps landed (`Gapscript`), for the viewer to run.
+    pub gap_scripts: Vec<u32>,
     /// A message for the screen (`LaunchPanelMessage`: "Sketchy", a gap's
     /// name, a spine transfer) and seconds left to show it.
     pub message: Option<(String, f32)>,
@@ -516,6 +518,7 @@ impl Skater {
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
             last_gap: None,
+            gap_scripts: Vec::new(),
             message: None,
             auto_kick: true,
             pushing: false,
@@ -808,7 +811,13 @@ impl Skater {
             if self.trace {
                 eprintln!("crossed {trigger:?} on {surface:?} at {:?}", self.position);
             }
-            if let Some((name, score)) = self.gaps.touch(trigger, surface) {
+            if let Some((name, score, script)) = self.gaps.touch(trigger, surface) {
+                // Its script (a goal's: `Gapscript = StrengthGrind`).
+                self.gap_scripts.extend(script);
+                // A goal's own gap has no name or points to score.
+                if name.is_empty() {
+                    continue;
+                }
                 // Into the combo like a trick; rolling along with no combo
                 // going, it banks straight away.
                 self.last_gap = Some((name.clone(), score));

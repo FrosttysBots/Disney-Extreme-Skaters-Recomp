@@ -144,6 +144,14 @@ struct Args {
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
+    /// For --skate: play another of the level's goals from its own
+    /// scripts, by its type (`Gaps`, `Gaps2`...)
+    #[arg(long, requires = "skate")]
+    goal: Option<String>,
+    /// For --goal: scripts to run as it starts, as if the skater had done
+    /// what runs them (a gap's script: `StrengthGrind`)
+    #[arg(long, requires = "goal", value_delimiter = ',')]
+    goal_script: Vec<String>,
     /// For --replay-at: which replay camera (0 as played, 1 behind, 2
     /// front, 3 left, 4 right)
     #[arg(long, requires = "replay_at")]
@@ -1073,6 +1081,17 @@ struct RaceRun {
     started: bool,
 }
 
+/// A goal played from its own scripts (`GenericGoal`): its type (as in
+/// `<level>_AddGoal_<kind>`) and place in the goal list, the clock (none
+/// if untimed), and whether it's over.
+struct GoalRun {
+    kind: String,
+    index: usize,
+    goal: desa_viewer::goals::GenericGoal,
+    left: Option<f32>,
+    over: bool,
+}
+
 /// How near the skater reaches a race waypoint (`Obj_SetInnerRadius 8`).
 const RACE_RADIUS: f32 = 8.0 * 12.0;
 
@@ -1181,6 +1200,8 @@ struct App<'a> {
     letter_lines: [Option<u32>; 5],
     /// The race goal under way.
     racing: Option<RaceRun>,
+    /// A goal played from its own scripts, under way.
+    goal_run: Option<GoalRun>,
     /// The camera turned to look round (yaw, and up or down) and the right
     /// stick as last read; whether the pad's Start was down, to toggle the
     /// pause on pressing it.
@@ -1211,7 +1232,7 @@ struct App<'a> {
     cutscene: bool,
     cutscene_request: Option<u32>,
     /// A goal just won (its kind), to keep.
-    goal_won: Option<&'static str>,
+    goal_won: Option<String>,
     /// A warp's level, to load when its camera path's over.
     load_after_cutscene: Option<usize>,
     success_camera: Option<u32>,
@@ -1330,6 +1351,8 @@ impl<'a> App<'a> {
                     replay_camera: REPLAY_CAMERAS[0].0.to_string(),
                     goals: Vec::new(),
                     goals_won: Vec::new(),
+                    goal_progress: None,
+                    goal_result: None,
                     can_letters: false,
                     race_name: None,
                     race: None,
@@ -1372,6 +1395,7 @@ impl<'a> App<'a> {
             letters: None,
             letter_lines: [None; 5],
             racing: None,
+            goal_run: None,
             photo: false,
             moon_gravity: 0.5,
             slomo_speed: 0.5,
@@ -1562,7 +1586,7 @@ impl<'a> App<'a> {
     /// camera back.
     fn update_cutscene(&mut self) {
         if let Some(kind) = self.goal_won.take() {
-            self.won_goal(kind);
+            self.won_goal(&kind);
         }
         if let Some(name) = self.cutscene_request.take() {
             self.play_cutscene(name);
@@ -1823,6 +1847,12 @@ impl<'a> App<'a> {
         }
         self.model.character.letters = None;
         self.model.character.letters_result = None;
+        // A goal played from its scripts stops: its own end script runs.
+        if let Some(run) = self.goal_run.take() {
+            self.end_goal_run(run);
+        }
+        self.model.character.goal_progress = None;
+        self.model.character.goal_result = None;
         // A race stops: its own end script runs (cars back, gates gone).
         if let Some(race) = self.racing.take() {
             if let (Some(level), Some(script)) = (&mut self.level, race.end_script) {
@@ -1946,6 +1976,10 @@ impl<'a> App<'a> {
         let mut gap_list: Vec<(String, u32, bool)> = Vec::new();
         for trigger in skater.gap_triggers.values() {
             if let skate::gaps::GapTrigger::End { text, score, .. } = trigger {
+                // (A goal's own gaps have no name.)
+                if text.is_empty() {
+                    continue;
+                }
                 if !gap_list.iter().any(|g| &g.0 == text) {
                     let got = landed.is_some_and(|l| l.contains(text));
                     gap_list.push((text.clone(), *score, got));
@@ -2427,6 +2461,9 @@ impl<'a> App<'a> {
             let skate::gaps::GapTrigger::End { text, .. } = trigger else {
                 continue;
             };
+            if text.is_empty() {
+                continue;
+            }
             let Some(at) = level
                 .nodes
                 .nodes
@@ -2456,7 +2493,10 @@ impl<'a> App<'a> {
     /// on), and offering their goal when the skater rolls up.
     fn update_pros(&mut self) {
         let skating = self.skating.as_ref().map(|(s, ..)| s.position);
-        let busy = self.run.is_some() || self.letters.is_some() || self.racing.is_some();
+        let busy = self.run.is_some()
+            || self.letters.is_some()
+            || self.racing.is_some()
+            || self.goal_run.is_some();
         let Some(level) = &mut self.level else { return };
         for (i, pro) in level.pros.iter_mut().enumerate() {
             let Some(at) = skating else {
@@ -2496,6 +2536,7 @@ impl<'a> App<'a> {
             ui::Action::StartRun(goal) => self.start_run(goal),
             ui::Action::StartLetters => self.start_letters(),
             ui::Action::StartRace => self.start_race(),
+            ui::Action::StartGoal(i) => self.start_goal(i),
             _ => {}
         }
     }
@@ -2832,7 +2873,7 @@ impl<'a> App<'a> {
         let won = race.next >= race.points.len();
         if won {
             self.cutscene_request = self.success_camera.take();
-            self.goal_won = Some("Race");
+            self.goal_won = Some("Race".to_string());
         }
         if won || race.left == 0.0 {
             race.over = true;
@@ -2846,6 +2887,130 @@ impl<'a> App<'a> {
                 level.behaviour.run_script(race.goal_runner, script);
             }
         }
+    }
+
+    /// Starts one of the level's goals (by its place in the goal list) as
+    /// its own scripts play it: the skater at its restart node, its
+    /// activate and start scripts run (`goal_ID` its id), and the goal
+    /// manager told it's on. The scripts set its flags as they're done
+    /// (a gap goal's gaps' `Gapscript`s); enough of them, or a script's
+    /// `GoalManager_WinGoal`, wins it.
+    fn start_goal(&mut self, index: usize) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(level) = &self.level else { return };
+        let Some((kind, _)) = self.model.character.goals.get(index) else {
+            return;
+        };
+        let kind = kind.clone();
+        let Some(goal) =
+            desa_viewer::goals::generic_goal(level.behaviour.program(), &level.id, &kind)
+        else {
+            return;
+        };
+        let start = goal
+            .restart
+            .and_then(|name| level.nodes.nodes.iter().find(|n| n.name == name));
+        // (Restart nodes don't say which way: the level start's way.)
+        self.placement = match start.and_then(|n| n.position) {
+            Some(at) => {
+                let (_, facing, _) = level.home.to_scale_rotation_translation();
+                Mat4::from_rotation_translation(facing, at)
+            }
+            None => level.home,
+        };
+        self.toggle_skate();
+        if self.skating.is_none() {
+            return;
+        }
+        let Some(level) = &mut self.level else { return };
+        let b = &mut level.behaviour;
+        b.active_goal = Some(goal.id);
+        b.goal_flags.clear();
+        b.goal_needed = goal.needed;
+        b.goal_won = false;
+        let mut params: qb::vm::Params = goal
+            .params
+            .iter()
+            .map(|(k, v)| (Some(*k), v.clone()))
+            .collect();
+        params.push((Some(qb::checksum("goal_ID")), qb::Value::Name(goal.id)));
+        for script in [goal.activate, goal.start_script].into_iter().flatten() {
+            b.run_level_script(script, params.clone());
+        }
+        self.goal_cutscenes(&kind);
+        self.goal_run = Some(GoalRun {
+            kind,
+            index,
+            left: goal.time,
+            goal,
+            over: false,
+        });
+    }
+
+    /// The goal played from its scripts: the gaps' scripts run (they set
+    /// its flags), the clock counts down, and it's won with all its flags
+    /// or out of time lost.
+    fn update_goal_run(&mut self, dt: f32) {
+        let (Some((skater, ..)), Some(level)) = (&mut self.skating, &mut self.level) else {
+            return;
+        };
+        // Landed gaps' scripts run whether a goal's on or not (they ask).
+        for script in std::mem::take(&mut skater.gap_scripts) {
+            level.behaviour.run_level_script(script, Vec::new());
+        }
+        let Some(run) = &mut self.goal_run else {
+            return;
+        };
+        let model = &mut self.model.character;
+        let got = level.behaviour.goal_flags.len();
+        // (What it asks, unless that's its name over.)
+        let text = if run.goal.text == run.goal.name {
+            String::new()
+        } else {
+            run.goal.text.clone()
+        };
+        model.goal_progress = Some((
+            run.goal.name.clone(),
+            text,
+            got.min(run.goal.needed),
+            run.goal.needed,
+        ));
+        model.run_clock = run.left;
+        if run.over {
+            return;
+        }
+        if let Some(left) = &mut run.left {
+            *left = (*left - dt).max(0.0);
+        }
+        let won = level.behaviour.goal_won || (run.goal.needed > 0 && got >= run.goal.needed);
+        if won || run.left == Some(0.0) {
+            run.over = true;
+            model.goal_result = Some((run.goal.name.clone(), won));
+            if won {
+                self.cutscene_request = self.success_camera.take();
+                self.goal_won = Some(run.kind.clone());
+                if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+            }
+            if let Some(script) = run.goal.deactivate.take() {
+                level.behaviour.run_level_script(script, Vec::new());
+            }
+            level.behaviour.active_goal = None;
+        }
+    }
+
+    /// A goal played from its scripts stopped: its end script, if it
+    /// hasn't run, and the goal manager told it's off.
+    fn end_goal_run(&mut self, run: GoalRun) {
+        let Some(level) = &mut self.level else { return };
+        if let Some(script) = run.goal.deactivate {
+            level.behaviour.run_level_script(script, Vec::new());
+        }
+        level.behaviour.active_goal = None;
+        level.behaviour.goal_flags.clear();
     }
 
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
@@ -2935,7 +3100,7 @@ impl<'a> App<'a> {
         let won = run.got.iter().all(|g| *g);
         if won {
             self.cutscene_request = self.success_camera.take();
-            self.goal_won = Some("SKATE");
+            self.goal_won = Some("SKATE".to_string());
         }
         if won || run.left == 0.0 {
             run.over = true;
@@ -2983,10 +3148,13 @@ impl<'a> App<'a> {
             if skater.score >= *score {
                 run.won = true;
                 self.cutscene_request = self.success_camera.take();
-                self.goal_won = Some(match self.model.character.run_goal {
-                    Some((true, ..)) => "ProScore",
-                    _ => "HighScore",
-                });
+                self.goal_won = Some(
+                    match self.model.character.run_goal {
+                        Some((true, ..)) => "ProScore",
+                        _ => "HighScore",
+                    }
+                    .to_string(),
+                );
                 run.ending.get_or_insert(0.0);
                 self.model.character.run_goal_won = Some(true);
                 if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
@@ -3193,7 +3361,9 @@ impl<'a> App<'a> {
     /// from the level's start.
     fn restart(&mut self) {
         self.model.character.paused = false;
-        if self.letters.is_some() {
+        if let Some(index) = self.goal_run.as_ref().map(|r| r.index) {
+            self.start_goal(index);
+        } else if self.letters.is_some() {
             self.start_letters();
         } else if self.run.is_some() {
             let goal = self.model.character.run_goal.as_ref().map(|(pro, ..)| *pro);
@@ -4005,6 +4175,7 @@ impl<'a> App<'a> {
             self.update_run(dt);
             self.update_letters(dt);
             self.update_race(dt);
+            self.update_goal_run(dt);
             self.update_breakables();
             self.update_bouncies(dt);
             self.update_collecting();
@@ -4173,6 +4344,7 @@ impl<'a> App<'a> {
                 ui::Action::StartRun(goal) => self.start_run(goal),
                 ui::Action::StartLetters => self.start_letters(),
                 ui::Action::StartRace => self.start_race(),
+                ui::Action::StartGoal(i) => self.start_goal(i),
                 ui::Action::Warp => self.take_warp(),
                 ui::Action::Pause => self.toggle_pause(),
                 ui::Action::Restart => self.restart(),
@@ -4632,6 +4804,37 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 }
             } else if args.race {
                 app.start_race();
+            } else if let Some(kind) = &args.goal {
+                // (Loaded straight here: the goal list too.)
+                let level = app.level.as_ref().unwrap();
+                app.model.character.goals =
+                    desa_viewer::goals::level_goals(level.behaviour.program(), &level.id)
+                        .into_iter()
+                        .map(|g| (g.kind, g.text))
+                        .collect();
+                let index = app
+                    .model
+                    .character
+                    .goals
+                    .iter()
+                    .position(|(k, _)| k.eq_ignore_ascii_case(kind))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no goal of type {kind} here (the goals: {:?})",
+                            app.model
+                                .character
+                                .goals
+                                .iter()
+                                .map(|(k, _)| k)
+                                .collect::<Vec<_>>()
+                        )
+                    })?;
+                app.start_goal(index);
+                if let Some((skater, ..)) = &mut app.skating {
+                    skater
+                        .gap_scripts
+                        .extend(args.goal_script.iter().map(|s| qb::checksum(s)));
+                }
             } else if let Some(goal) = &args.score_goal {
                 app.start_run(Some(goal == "pro"));
             } else {
@@ -4676,6 +4879,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
                 app.update_race(1.0 / 60.0);
+                app.update_goal_run(1.0 / 60.0);
                 app.update_breakables();
                 app.update_bouncies(1.0 / 60.0);
                 app.update_pros();

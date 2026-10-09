@@ -39,6 +39,9 @@ pub enum Action {
     Restart,
     /// The level's race goal (again).
     StartRace,
+    /// One of the level's other goals (by its place in the goal list),
+    /// played from its own scripts.
+    StartGoal(usize),
     /// The goal offered by its pro, or not now.
     TakeGoal,
     NotNow,
@@ -117,6 +120,10 @@ pub struct CharacterModel {
     pub goals: Vec<(String, String)>,
     /// Which of them are won.
     pub goals_won: Vec<bool>,
+    /// The goal played from its scripts: its name, what it asks, the flags
+    /// got and needed; and how it ended (won?).
+    pub goal_progress: Option<(String, String, usize, usize)>,
+    pub goal_result: Option<(String, bool)>,
     /// The level has S-K-A-T-E letters; while collecting them, which are
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
@@ -753,6 +760,60 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     });
                 });
         }
+        if let Some((name, text, got, needed)) = &model.character.goal_progress {
+            egui::Area::new(egui::Id::new("goal_progress"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        let line = if *needed > 0 {
+                            format!("{name}  {got}/{needed}")
+                        } else {
+                            name.clone()
+                        };
+                        ui.label(
+                            egui::RichText::new(line)
+                                .size(18.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(120, 220, 255))
+                                .background_color(egui::Color32::from_black_alpha(120)),
+                        );
+                        if !text.is_empty() {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(13.0)
+                                    .color(egui::Color32::WHITE)
+                                    .background_color(egui::Color32::from_black_alpha(120)),
+                            );
+                        }
+                    });
+                });
+        }
+        if let Some((name, won)) = &model.character.goal_result {
+            egui::Area::new(egui::Id::new("goal_result"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(name);
+                            let (text, color) = if *won {
+                                ("Goal complete!", egui::Color32::from_rgb(90, 230, 90))
+                            } else {
+                                ("Out of time", egui::Color32::from_rgb(255, 90, 70))
+                            };
+                            ui.label(egui::RichText::new(text).size(20.0).color(color));
+                            ui.horizontal(|ui| {
+                                if ui.button("Again").clicked() {
+                                    actions.push(Action::Restart);
+                                }
+                                if ui.button("Done").clicked() {
+                                    actions.push(Action::ToggleSkate);
+                                }
+                            });
+                        });
+                    });
+                });
+        }
         if let Some(result) = model.character.letters_result {
             letters_result(ctx, result, &mut actions);
         }
@@ -1082,7 +1143,7 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                             "Race" => Some(Action::StartRace),
                             "HighScore" => Some(Action::StartRun(Some(false))),
                             "ProScore" => Some(Action::StartRun(Some(true))),
-                            _ => None,
+                            _ => Some(Action::StartGoal(i)),
                         };
                         let playable = action.is_some() && model.can_skate;
                         if ui.add_enabled(playable, egui::Button::new("Play").small()).clicked() {

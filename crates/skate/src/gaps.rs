@@ -22,8 +22,18 @@ pub struct GapFlags {
 /// What touching a trigger does for gaps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GapTrigger {
-    Start { id: u32, flags: GapFlags },
-    End { id: u32, text: String, score: u32 },
+    Start {
+        id: u32,
+        flags: GapFlags,
+    },
+    /// A gap's end: its name and points (none for a goal's), and the
+    /// script run when it's landed (`Gapscript`).
+    End {
+        id: u32,
+        text: String,
+        score: u32,
+        script: Option<u32>,
+    },
 }
 
 /// Where the skater is, for a gap's flags.
@@ -85,7 +95,11 @@ impl Gaps {
 
     /// A trigger touched: starts a gap, or ends one with its name and
     /// score if it's under way.
-    pub fn touch(&mut self, trigger: &GapTrigger, surface: Surface) -> Option<(String, u32)> {
+    pub fn touch(
+        &mut self,
+        trigger: &GapTrigger,
+        surface: Surface,
+    ) -> Option<(String, u32, Option<u32>)> {
         match trigger {
             GapTrigger::Start { id, flags } => {
                 // Started whatever the skater's on (start pads sit at the
@@ -101,7 +115,12 @@ impl Gaps {
                 }
                 None
             }
-            GapTrigger::End { id, text, score } => {
+            GapTrigger::End {
+                id,
+                text,
+                score,
+                script,
+            } => {
                 let at = self.open.iter().position(|gap| gap.id == *id)?;
                 let Open {
                     flags, travelled, ..
@@ -113,7 +132,7 @@ impl Gaps {
                     return None;
                 }
                 self.open.remove(at);
-                Some((text.clone(), *score))
+                Some((text.clone(), *score, *script))
             }
         }
     }
@@ -146,6 +165,7 @@ mod tests {
             id: 1,
             text: "Chain Link Gap".into(),
             score: 100,
+            script: None,
         }
     }
 
@@ -163,7 +183,7 @@ mod tests {
         gaps.update(Surface::Air, MIN_TRAVEL);
         assert_eq!(
             gaps.touch(&end(), Surface::Air),
-            Some(("Chain Link Gap".into(), 100))
+            Some(("Chain Link Gap".into(), 100, None))
         );
         assert!(gaps.is_empty(), "scored once");
     }

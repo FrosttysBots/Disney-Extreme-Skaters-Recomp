@@ -34,6 +34,11 @@
 //!   `Obj_LookAtObject Type = skater time = seconds` (turning smoothly)
 //!   and `Obj_WaitRotate`.
 //! - `GoalManager_HasWonGoal Name = goal`, from the goals won.
+//! - The goal on, for scripts that aren't any object's (a gap's
+//!   `Gapscript`, a goal's own): `GoalManager_GoalIsActive`,
+//!   `GoalManager_SetGoalFlag Name = goal flag 1`, `GoalManager_GoalFlagSet`,
+//!   `GoalManager_AllFlagsSet`, `GoalManager_WinGoal`, and `IsCareerMode`
+//!   (while a goal's on).
 //! - `LocalSkaterExists` (skating), `Obj_LookAtObject Name = object`.
 //! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
 //!   `Obj_Hover Amp = units Freq = hertz`.
@@ -144,6 +149,15 @@ pub struct Behaviour {
     pub voice_lines: Vec<u32>,
     /// The goals won (their ids), for `GoalManager_HasWonGoal`.
     pub won_goals: std::collections::HashSet<u32>,
+    /// The level's own runner (an extra state past the objects).
+    level_runner: usize,
+    /// The goal manager: the goal on (its id), the flags its scripts have
+    /// set (`GoalManager_SetGoalFlag`), how many win it, and whether a
+    /// script has won it (`GoalManager_WinGoal`).
+    pub active_goal: Option<u32>,
+    pub goal_flags: std::collections::HashSet<u32>,
+    pub goal_needed: usize,
+    pub goal_won: bool,
 }
 
 impl Behaviour {
@@ -181,6 +195,28 @@ impl Behaviour {
                 turn: None,
             })
             .collect();
+        // One more, the level's own: what runs scripts that are nobody's
+        // (a gap's, a goal's).
+        let mut states: Vec<State> = states;
+        let level_runner = states.len();
+        states.push(State {
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            alive: true,
+            dirty: false,
+            path: Path::default(),
+            moving: None,
+            inner: 0.0,
+            outer: 0.0,
+            was_inside: false,
+            was_outside: true,
+            exceptions: Vec::new(),
+            spin: 0.0,
+            hover: None,
+            stick: None,
+            flags: Vec::new(),
+            turn: None,
+        });
         let threads = nodes
             .objects
             .iter()
@@ -205,11 +241,26 @@ impl Behaviour {
                 .enumerate()
                 .map(|(i, n)| (n.name, i))
                 .collect(),
-            object_node: nodes.objects.iter().map(|o| o.node).collect(),
+            object_node: nodes.objects.iter().map(|o| o.node).chain([0]).collect(),
+            level_runner,
+            active_goal: None,
+            goal_flags: Default::default(),
+            goal_needed: 0,
+            goal_won: false,
             random: 0x2545_F491,
             unknown: HashMap::new(),
-            scripts: nodes.objects.iter().map(|o| o.script).collect(),
-            goal: nodes.objects.iter().map(|o| !o.created_at_start).collect(),
+            scripts: nodes
+                .objects
+                .iter()
+                .map(|o| o.script)
+                .chain([None])
+                .collect(),
+            goal: nodes
+                .objects
+                .iter()
+                .map(|o| !o.created_at_start)
+                .chain([false])
+                .collect(),
             goal_shown: None,
             skater: None,
             starting: Vec::new(),
@@ -330,9 +381,21 @@ impl Behaviour {
         }
     }
 
+    /// Runs a script that's nobody's (a gap's `Gapscript`, a goal's
+    /// scripts) alongside whatever else the level's running.
+    pub fn run_level_script(&mut self, script: u32, params: Params) {
+        self.starting
+            .push((self.level_runner, Thread::new(script, params)));
+    }
+
     /// Runs `thread` as object `i`'s script, in place of what it was
     /// running.
     fn start(&mut self, i: usize, thread: Thread) {
+        // The level's runner runs any number side by side.
+        if i == self.level_runner {
+            self.threads.push((i, thread));
+            return;
+        }
         match self.threads.iter_mut().find(|(o, _)| *o == i) {
             Some((_, t)) => *t = thread,
             None => self.threads.push((i, thread)),
@@ -884,6 +947,47 @@ impl Host for Commands<'_> {
             let to = (skater - state.position).with_y(0.0).normalize_or_zero();
             let angle = facing.dot(to).clamp(-1.0, 1.0).acos().to_degrees();
             return Outcome::Done(angle > degrees);
+        } else if name == c("GoalManager_GoalIsActive") {
+            return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
+        } else if name == c("GoalManager_HasSeenGoal") {
+            return Outcome::Done(true);
+        } else if name == c("IsCareerMode") {
+            // The career's scripts run while one of its goals is on.
+            return Outcome::Done(b.active_goal.is_some());
+        } else if name == c("GoalManager_SetGoalFlag") || name == c("GoalManager_GoalFlagSet") {
+            // `GoalManager_SetGoalFlag Name = goal Got_1 1`.
+            let (mut flag, mut value) = (None, 1);
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Name(n)) => flag = flag.or(Some(*n)),
+                        (None, Value::Integer(i)) => value = *i,
+                        (Some(k), Value::Name(n)) if *k == c("flag") => flag = Some(*n),
+                        _ => {}
+                    }
+                }
+            }
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            let Some(flag) = flag.filter(|_| ours) else {
+                return Outcome::Done(false);
+            };
+            if name == c("GoalManager_GoalFlagSet") {
+                return Outcome::Done(b.goal_flags.contains(&flag));
+            }
+            if value != 0 {
+                b.goal_flags.insert(flag);
+            } else {
+                b.goal_flags.remove(&flag);
+            }
+        } else if name == c("GoalManager_AllFlagsSet") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            return Outcome::Done(ours && b.goal_flags.len() >= b.goal_needed.max(1));
+        } else if name == c("GoalManager_WinGoal") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            if ours {
+                b.goal_won = true;
+            }
+            return Outcome::Done(ours);
         } else if name == c("GoalManager_HasWonGoal") {
             let won = named("Name").is_some_and(|g| b.won_goals.contains(&g));
             return Outcome::Done(won);

@@ -243,6 +243,7 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     let mut flags = GapFlags::default();
     let mut text = None;
     let mut score = None;
+    let mut script = None;
     let mut i = 0;
     while i + 2 < args.len() + 1 {
         let (Some(Token::Name(k)), Some(Token::Equals)) = (args.get(i), args.get(i + 1)) else {
@@ -281,6 +282,10 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
                     flags.require_lip = true;
                 }
             }
+        } else if *k == key("Gapscript") {
+            if let Some(Token::Name(v)) = value {
+                script = Some(*v);
+            }
         } else if *k == key("text") {
             if let Some(Token::String(s)) = value {
                 text = Some(s.clone());
@@ -298,10 +303,15 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     if start {
         Some(GapTrigger::Start { id, flags })
     } else {
+        // A goal's gap ends without a name or points, but with its script.
+        if script.is_none() && (text.is_none() || score.is_none()) {
+            return None;
+        }
         Some(GapTrigger::End {
             id,
-            text: text?,
-            score: score?,
+            text: text.unwrap_or_default(),
+            score: score.unwrap_or(0),
+            script,
         })
     }
 }
@@ -413,7 +423,8 @@ mod tests {
             Some(&GapTrigger::End {
                 id: checksum("ChainLinkGap"),
                 text: "Chain Link Gap".into(),
-                score: 100
+                score: 100,
+                script: None,
             })
         );
     }

@@ -304,3 +304,73 @@ fn real_level_camera_paths() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Canyon's gap goal ("Three grinds") played from its own scripts: on, its
+/// gaps' scripts (`Gapscript`) set its three flags, and they win it.
+#[test]
+#[ignore = "needs the game data"]
+fn real_gap_goal() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let level = data
+        .levels()
+        .into_iter()
+        .find(|l| l.id.eq_ignore_ascii_case("canyon"))
+        .unwrap();
+    let files = data.load_level(&level.id).unwrap();
+    let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
+    let mut scripts = data.global_scripts().unwrap();
+    scripts.extend(files.scripts.iter().cloned());
+    let mut behaviour = Behaviour::new(&nodes, &scripts);
+    let goal = desa_viewer::goals::generic_goal(behaviour.program(), &level.id, "Gaps").unwrap();
+    println!("{goal:?}");
+    assert_eq!(goal.needed, 3);
+    assert_eq!(goal.time, Some(120.0));
+    assert_eq!(goal.id, qb::checksum("canyon_goal_gaps"));
+    // The gaps name their scripts.
+    let gaps = desa_viewer::triggers::gaps(&nodes, behaviour.program());
+    let scripted: Vec<u32> = gaps
+        .values()
+        .filter_map(|g| match g {
+            skate::gaps::GapTrigger::End { script, .. } => *script,
+            _ => None,
+        })
+        .collect();
+    for name in ["StrengthGrind", "SkillGrind", "CourageGrind"] {
+        assert!(scripted.contains(&qb::checksum(name)), "{name}");
+    }
+
+    let sets = data.animation_sets().unwrap();
+    let mut files = files;
+    data.add_animations(&mut files, &objects::needed_animations(&nodes, &sets))
+        .unwrap();
+    let mut objects = LevelObjects::build(&nodes, &files, &sets);
+    let mut run = |behaviour: &mut Behaviour, seconds: usize| {
+        for step in 0..seconds * 30 {
+            behaviour.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false, None);
+        }
+    };
+    // Off, the scripts leave it be.
+    behaviour.run_level_script(qb::checksum("StrengthGrind"), Vec::new());
+    run(&mut behaviour, 3);
+    assert!(behaviour.goal_flags.is_empty());
+    // On: each grind's flag.
+    behaviour.active_goal = Some(goal.id);
+    behaviour.goal_needed = goal.needed;
+    let mut params: qb::vm::Params = goal
+        .params
+        .iter()
+        .map(|(k, v)| (Some(*k), v.clone()))
+        .collect();
+    params.push((Some(qb::checksum("goal_ID")), qb::Value::Name(goal.id)));
+    behaviour.run_level_script(goal.activate.unwrap(), params);
+    for (i, name) in ["StrengthGrind", "SkillGrind", "CourageGrind"]
+        .iter()
+        .enumerate()
+    {
+        behaviour.run_level_script(qb::checksum(name), Vec::new());
+        run(&mut behaviour, 3);
+        assert_eq!(behaviour.goal_flags.len(), i + 1, "{name}");
+    }
+}
