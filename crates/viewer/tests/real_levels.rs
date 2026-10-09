@@ -383,7 +383,7 @@ fn real_generic_goals() {
     let path = std::env::var("DESA_GAME_DATA")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
     let mut data = GameData::open(Path::new(&path)).unwrap();
-    let (mut goals, mut with_pros) = (0, 0);
+    let (mut goals, mut with_pros, mut trick_spots) = (0, 0, 0);
     for level in data.levels() {
         let files = data.load_level(&level.id).unwrap();
         let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
@@ -391,6 +391,12 @@ fn real_generic_goals() {
         scripts.extend(files.scripts.iter().cloned());
         let behaviour = Behaviour::new(&nodes, &scripts);
         let program = behaviour.program();
+        let spots = desa_viewer::triggers::gaps(&nodes, program)
+            .values()
+            .filter(|g| matches!(g, skate::GapTrigger::Start { trick: Some(_), .. }))
+            .count();
+        println!("{}: {spots} trick spots", level.id);
+        trick_spots += spots;
         for goal in desa_viewer::goals::level_goals(program, &level.id) {
             let generic = desa_viewer::goals::generic_goal(program, &level.id, &goal.kind)
                 .unwrap_or_else(|| panic!("{} {}", level.id, goal.kind));
@@ -403,5 +409,5 @@ fn real_generic_goals() {
             );
         }
     }
-    println!("{goals} goals, {with_pros} with their pro there");
+    println!("{goals} goals, {with_pros} with their pro there, {trick_spots} trick spots");
 }

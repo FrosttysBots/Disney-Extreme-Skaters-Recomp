@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use qb::token::Token;
 use qb::vm::{Host, Outcome, Program, Thread};
 use qb::{Value, checksum};
-use skate::{GapFlags, GapTrigger};
+use skate::{GapFlags, GapTrick, GapTrigger, TrickNeed};
 
 use crate::nodes::LevelNodes;
 
@@ -244,6 +244,7 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     let mut text = None;
     let mut score = None;
     let mut script = None;
+    let (mut trick_script, mut lip, mut trick_text) = (None, false, None);
     let mut i = 0;
     while i + 2 < args.len() + 1 {
         let (Some(Token::Name(k)), Some(Token::Equals)) = (args.get(i), args.get(i + 1)) else {
@@ -280,7 +281,22 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
                     flags.require_rail = true;
                 } else if flag == key("REQUIRE_LIP") {
                     flags.require_lip = true;
+                } else if flag == key("PURE_RAIL") {
+                    flags.pure_rail = true;
                 }
+            }
+        } else if *k == key("trickscript") {
+            if let Some(Token::Name(v)) = value {
+                trick_script = Some(*v);
+            }
+        } else if *k == key("KeyCombo") {
+            if let Some(Token::Name(_)) = value {
+                // (`Lip_TriangleL`: the lip tricks are the only ones asked.)
+                lip = true;
+            }
+        } else if *k == key("TrickText") {
+            if let Some(Token::String(s)) = value {
+                trick_text = Some(s.clone());
             }
         } else if *k == key("Gapscript") {
             if let Some(Token::Name(v)) = value {
@@ -301,7 +317,18 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     }
     let id = id?;
     if start {
-        Some(GapTrigger::Start { id, flags })
+        // A trick spot: what it asks, and its script.
+        let trick = trick_script.map(|script| GapTrick {
+            needs: if lip {
+                TrickNeed::Lip
+            } else if let Some(text) = trick_text {
+                TrickNeed::Named(text)
+            } else {
+                TrickNeed::Any
+            },
+            script,
+        });
+        Some(GapTrigger::Start { id, flags, trick })
     } else {
         // A goal's gap ends without a name or points, but with its script.
         if script.is_none() && (text.is_none() || score.is_none()) {
@@ -415,7 +442,8 @@ mod tests {
                 flags: GapFlags {
                     cancel_ground: true,
                     ..GapFlags::default()
-                }
+                },
+                trick: None,
             })
         );
         assert_eq!(

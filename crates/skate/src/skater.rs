@@ -611,6 +611,10 @@ impl Skater {
     /// A trick into the combo; grinds and manuals block spins.
     fn credit(&mut self, trick: Option<(String, u32)>, block_spin: bool) {
         if let Some((name, score)) = trick {
+            // Trick spots under way that asked for it run their scripts.
+            let surface = self.surface();
+            self.gap_scripts
+                .extend(self.gaps.trick_done(&name, surface));
             self.combo_tricks.add(&name, score, block_spin);
         }
         if block_spin {
@@ -759,13 +763,9 @@ impl Skater {
         }
     }
 
-    /// Touching a trigger face of a teleporter (the level's `TriggerScript`
-    /// sends the skater to a restart: `Teleporter`, `Teleporter_water` and
-    /// the like): there, standing, the combo lost.
-    ///
-    /// And gaps: their start and end triggers, scored into the combo.
-    fn check_triggers(&mut self, before: Vec3, world: &World, p: &Physics) {
-        let surface = if self.lip.is_some() {
+    /// What the skater's on, for gaps.
+    fn surface(&self) -> Surface {
+        if self.lip.is_some() {
             Surface::Lip
         } else if self.grind.is_some() {
             Surface::Rail
@@ -773,7 +773,16 @@ impl Skater {
             Surface::Ground
         } else {
             Surface::Air
-        };
+        }
+    }
+
+    /// Touching a trigger face of a teleporter (the level's `TriggerScript`
+    /// sends the skater to a restart: `Teleporter`, `Teleporter_water` and
+    /// the like): there, standing, the combo lost.
+    ///
+    /// And gaps: their start and end triggers, scored into the combo.
+    fn check_triggers(&mut self, before: Vec3, world: &World, p: &Physics) {
+        let surface = self.surface();
         let across = (self.position - before) * Vec3::new(1.0, 0.0, 1.0);
         self.gaps.update(surface, across.length());
         // The trigger faces touched: crossed along the way at knee height

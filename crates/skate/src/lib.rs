@@ -17,7 +17,7 @@ pub use anims::{Anim, Landing};
 pub use balance::{Balance, BalanceParams, Lean};
 pub use camera::ChaseCamera;
 pub use constants::{Physics, Stats};
-pub use gaps::{GapFlags, GapTrigger, Gaps, Surface};
+pub use gaps::{GapFlags, GapTrick, GapTrigger, Gaps, Surface, TrickNeed};
 pub use rails::{RailHit, Rails, Segment};
 pub use score::{Combo, ComboTrick};
 pub use skater::{Action, Grind, Input, Landed, Lip, Phase, Playing, SkateSound, Skater, VertAir};
