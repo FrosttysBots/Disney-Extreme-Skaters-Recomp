@@ -101,6 +101,11 @@ pub enum SkateSound {
     },
     /// The board knocking the coping going into a lip (`Copinghit`).
     CopingHit,
+    /// Into a wall hard (the terrain's `SK3SFX_TABLE_BONK` sound), on the
+    /// wall's terrain.
+    Bonk {
+        terrain: u16,
+    },
 }
 
 /// What the skater is doing, for picking animations.
@@ -2041,6 +2046,9 @@ impl Skater {
                         speed *= 1.0 - (angle.abs() - dont_slow) / (FRAC_PI_2 - dont_slow);
                     }
                     if before > p.wall_bounce_dont_flail_speed {
+                        self.sounds.push(SkateSound::Bonk {
+                            terrain: hit.terrain,
+                        });
                         flailed = Some(if turn > 0.0 {
                             Action::FlailLeft
                         } else {
@@ -2428,6 +2436,11 @@ impl Skater {
                 // In vert air the ramp is for landing on.
                 let ramp = self.vert.is_some() && hit.flags & ngc_collision::face_flags::VERT != 0;
                 if !ground && !ramp {
+                    if self.velocity.with_y(0.0).length() > p.wall_bounce_dont_flail_speed {
+                        self.sounds.push(SkateSound::Bonk {
+                            terrain: hit.terrain,
+                        });
+                    }
                     self.air_bounce(hit.normal);
                     // Out of the wall across, flat, as far as needed; the
                     // rise or fall carries on (a wall leaning over the

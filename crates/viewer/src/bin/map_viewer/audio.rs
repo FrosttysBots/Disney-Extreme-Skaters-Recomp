@@ -357,6 +357,7 @@ impl Audio {
                     self.play("copinghit3_11", 0.8, pitch);
                 }
                 SkateSound::Smack => self.play("bodysmacka", 1.0, 1.0),
+                SkateSound::Bonk { terrain } => self.play_terrain(terrain, Moment::Bonk),
                 SkateSound::Gap => self.play("hud_jumpgap", 1.0, 1.0),
                 // The teleporter's own sound (the viewer plays it).
                 SkateSound::Teleport => {}
