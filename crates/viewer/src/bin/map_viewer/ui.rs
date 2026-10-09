@@ -115,6 +115,8 @@ pub struct CharacterModel {
     pub replay_camera: String,
     /// The level's goals (type, text), for the list in the panel.
     pub goals: Vec<(String, String)>,
+    /// Which of them are won.
+    pub goals_won: Vec<bool>,
     /// The level has S-K-A-T-E letters; while collecting them, which are
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
@@ -1072,7 +1074,8 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     )
                     .small(),
                 );
-                for (kind, text) in &model.goals {
+                for (i, (kind, text)) in model.goals.iter().enumerate() {
+                    let won = model.goals_won.get(i).copied().unwrap_or(false);
                     ui.horizontal(|ui| {
                         let action = match kind.as_str() {
                             "Skate" => Some(Action::StartLetters),
@@ -1085,7 +1088,17 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                         if ui.add_enabled(playable, egui::Button::new("Play").small()).clicked() {
                             actions.extend(action);
                         }
-                        ui.label(egui::RichText::new(text).small());
+                        let text = egui::RichText::new(if won {
+                            format!("✔ {text}")
+                        } else {
+                            text.clone()
+                        })
+                        .small();
+                        ui.label(if won {
+                            text.color(egui::Color32::from_rgb(120, 220, 120))
+                        } else {
+                            text
+                        });
                     });
                 }
             });

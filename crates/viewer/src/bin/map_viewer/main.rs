@@ -1329,6 +1329,7 @@ impl<'a> App<'a> {
                     replaying: false,
                     replay_camera: REPLAY_CAMERAS[0].0.to_string(),
                     goals: Vec::new(),
+                    goals_won: Vec::new(),
                     can_letters: false,
                     race_name: None,
                     race: None,
@@ -3116,6 +3117,21 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Which of the level's goals are won, for the list.
+    fn update_goals_won(&mut self) {
+        let Some(level) = &self.level else { return };
+        self.model.character.goals_won = self
+            .model
+            .character
+            .goals
+            .iter()
+            .map(|(kind, _)| {
+                let id = desa_viewer::goals::goal_id(&level.id, kind);
+                self.settings.best.contains_key(&format!("won.{id:08x}"))
+            })
+            .collect();
+    }
+
     /// Each level's progress for the character shown, beside its name in
     /// the list: its collectibles got and the gaps landed there.
     fn update_progress(&mut self) {
@@ -4001,6 +4017,7 @@ impl<'a> App<'a> {
         self.apply_camera();
         if self.frame % 30 == 0 {
             self.update_progress();
+            self.update_goals_won();
         }
         self.frame = self.frame.wrapping_add(1);
         self.update_music();
