@@ -57,7 +57,7 @@ fn real_goal_scripts() {
             }
             run(&mut b, 90);
             let mut visited: Vec<Vec3> = Vec::new();
-            for _ in 0..6 {
+            for _ in 0..12 {
                 let new: Vec<Vec3> = b
                     .radius_triggers()
                     .into_iter()
@@ -74,6 +74,8 @@ fn real_goal_scripts() {
                     run(&mut b, 20);
                 }
             }
+            // (What the last one set off finishes.)
+            run(&mut b, 300);
             println!(
                 "{} {} \"{}\": {}/{} after {} visits",
                 level.id,
@@ -89,7 +91,12 @@ fn real_goal_scripts() {
         }
     }
     println!("done by going near things: {done:?}");
-    for goal in ["beach Counter", "pizza Collect2"] {
+    for goal in [
+        "beach Counter",
+        "pizza Collect2",
+        "canyon Collect",
+        "graveyard Counter2",
+    ] {
         assert!(done.contains(&goal.to_string()), "{goal}");
     }
 }

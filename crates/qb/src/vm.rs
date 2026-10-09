@@ -746,13 +746,21 @@ fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64>
                 let Some(Token::Name(n)) = tokens.get(i) else {
                     return None;
                 };
+                // (A name compares as its checksum: `(<flag> = Got_P01)`.)
                 params
                     .iter()
                     .find(|(k, _)| *k == Some(*n))
-                    .and_then(|(_, v)| v.as_f32())
-                    .map(f64::from)
+                    .and_then(|(_, v)| match v {
+                        Value::Name(name) => Some(f64::from(*name)),
+                        v => v.as_f32().map(f64::from),
+                    })
             }
-            Token::Name(n) => program.value(*n).and_then(Value::as_f32).map(f64::from),
+            Token::Name(n) => Some(
+                program
+                    .value(*n)
+                    .and_then(Value::as_f32)
+                    .map_or(f64::from(*n), f64::from),
+            ),
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
                 let v = evaluate(&tokens[i + 1..close], params, program);

@@ -281,6 +281,9 @@ struct LoadedLevel {
     /// The breakables (trigger object: its script, what it shatters, its
     /// sound) and the triggers already broken.
     breakables: HashMap<u32, (u32, Vec<u32>, Option<u32>)>,
+    /// Trigger geometry's own scripts, by collision object, run when the
+    /// skater touches it.
+    touch_scripts: HashMap<u32, u32>,
     broken: HashSet<u32>,
     /// The level from above, for the map in the corner.
     minimap: Option<minimap::Minimap>,
@@ -318,6 +321,21 @@ fn load_level(
     // Breakables (what touching a trigger shatters): those that are sectors
     // there at the start get layers of their own, to take away.
     let breakables = desa_viewer::triggers::breakables(&nodes, behaviour.program());
+    // The other trigger geometry's scripts, run as the skater touches it
+    // (a goal's things: Canyon's pesky birds). Teleporters, gaps and
+    // breakables are done their own ways.
+    let touch_scripts: HashMap<u32, u32> = {
+        let teleports = desa_viewer::triggers::teleports(&nodes, behaviour.program());
+        let gaps = desa_viewer::triggers::gaps(&nodes, behaviour.program());
+        nodes
+            .geometry_scripts
+            .iter()
+            .filter(|(o, _)| {
+                !teleports.contains_key(o) && !gaps.contains_key(o) && !breakables.contains_key(o)
+            })
+            .copied()
+            .collect()
+    };
     // Bouncy objects there at the start get layers of their own too, to
     // knock about.
     let bouncy_names: HashSet<u32> = nodes
@@ -563,6 +581,7 @@ fn load_level(
             sector_centres,
             bouncies,
             breakables,
+            touch_scripts,
             broken: HashSet::new(),
             minimap,
             particles,
@@ -3024,6 +3043,12 @@ impl<'a> App<'a> {
         // Landed gaps' scripts run whether a goal's on or not (they ask).
         for script in std::mem::take(&mut skater.gap_scripts) {
             level.behaviour.run_level_script(script, Vec::new());
+        }
+        // And touched trigger geometry's.
+        for object in std::mem::take(&mut skater.touches) {
+            if let Some(&script) = level.touch_scripts.get(&object) {
+                level.behaviour.run_level_script(script, Vec::new());
+            }
         }
         let Some(run) = &mut self.goal_run else {
             return;

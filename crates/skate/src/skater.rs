@@ -377,6 +377,9 @@ pub struct Skater {
     /// The trigger objects touched this step (for the viewer's own
     /// triggers: breakables).
     pub touched: Vec<u32>,
+    /// Trigger objects newly touched (not touched the step before), for
+    /// the viewer to run their scripts; it empties this.
+    pub touches: Vec<u32>,
     /// Trigger faces that start or end gaps, by collision object, and the
     /// gaps under way.
     pub gap_triggers: HashMap<u32, GapTrigger>,
@@ -515,6 +518,7 @@ impl Skater {
             teleports: HashMap::new(),
             last_teleport: None,
             touched: Vec::new(),
+            touches: Vec::new(),
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
             last_gap: None,
@@ -779,7 +783,9 @@ impl Skater {
         let mut touched = world.triggers(before + knee, self.position + knee);
         touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
         touched.dedup();
-        self.touched = touched.clone();
+        let before_touched = std::mem::replace(&mut self.touched, touched.clone());
+        self.touches
+            .extend(touched.iter().filter(|t| !before_touched.contains(t)));
         if self.teleports.is_empty() && self.gap_triggers.is_empty() {
             return;
         }
