@@ -374,3 +374,34 @@ fn real_gap_goal() {
         assert_eq!(behaviour.goal_flags.len(), i + 1, "{name}");
     }
 }
+
+/// Every level's goals read as goals played from their own scripts: the
+/// flags each needs and whether its pro's there.
+#[test]
+#[ignore = "needs the game data"]
+fn real_generic_goals() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut goals, mut with_pros) = (0, 0);
+    for level in data.levels() {
+        let files = data.load_level(&level.id).unwrap();
+        let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
+        let mut scripts = data.global_scripts().unwrap();
+        scripts.extend(files.scripts.iter().cloned());
+        let behaviour = Behaviour::new(&nodes, &scripts);
+        let program = behaviour.program();
+        for goal in desa_viewer::goals::level_goals(program, &level.id) {
+            let generic = desa_viewer::goals::generic_goal(program, &level.id, &goal.kind)
+                .unwrap_or_else(|| panic!("{} {}", level.id, goal.kind));
+            let pro = generic.pro.and_then(|p| behaviour.object(p)).is_some();
+            goals += 1;
+            with_pros += usize::from(pro);
+            println!(
+                "{} {}: \"{}\", {} flags, {:?} s, pro {pro}",
+                level.id, goal.kind, goal.text, generic.needed, generic.time
+            );
+        }
+    }
+    println!("{goals} goals, {with_pros} with their pro there");
+}

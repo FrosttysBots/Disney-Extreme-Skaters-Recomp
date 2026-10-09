@@ -263,9 +263,12 @@ pub struct GenericGoal {
     /// The seconds it gives, none if it's untimed (`unlimited_time`).
     pub time: Option<f32>,
     /// How many flags win it (`num_flags_to_win`, `num_flags`, or all of
-    /// `Goal_Flags`); none if only a script wins it.
+    /// `Goal_Flags`), or things got for a counter goal (`number`); none if
+    /// only a script wins it.
     pub needed: usize,
     pub restart: Option<u32>,
+    /// Its pro, who offers it (`trigger_obj_id`).
+    pub pro: Option<u32>,
     /// Scripts: run as it starts (`activate`, `goal_start_script`) and as
     /// it ends (`goal_deactivate_script`).
     pub activate: Option<u32>,
@@ -298,7 +301,8 @@ pub fn generic_goal(program: &Program, level: &str, kind: &str) -> Option<Generi
         Some(Value::Array(a)) => a.len(),
         _ => 0,
     };
-    let needed = ["num_flags_to_win", "num_flags"]
+    // (A counter goal counts its things got up to `number`.)
+    let needed = ["num_flags_to_win", "num_flags", "number"]
         .iter()
         .find_map(|k| get(k).and_then(Value::as_int))
         .map_or(flags, |n| n.max(0) as usize);
@@ -310,6 +314,7 @@ pub fn generic_goal(program: &Program, level: &str, kind: &str) -> Option<Generi
         time: (!unlimited).then(|| get("time").and_then(Value::as_f32).unwrap_or(120.0)),
         needed,
         restart: name("restart_node"),
+        pro: name("trigger_obj_id"),
         activate: name("activate"),
         start_script: name("goal_start_script"),
         deactivate: name("goal_deactivate_script"),

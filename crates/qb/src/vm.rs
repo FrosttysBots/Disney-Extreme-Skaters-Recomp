@@ -408,6 +408,64 @@ impl Thread {
         if target.is_none() && (name == checksum("printf") || name == checksum("printstruct")) {
             return true;
         }
+        // Built in: an array's length (`GetArraySize name`, giving
+        // `array_size`), and a script run for each item of one
+        // (`ForEachIn array do = script params = {...}`).
+        if target.is_none() && (name == checksum("GetArraySize") || name == checksum("ForEachIn")) {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let array = match items.iter().find(|(k, _)| k.is_none()).map(|(_, v)| v) {
+                Some(Value::Array(a)) => a.clone(),
+                Some(Value::Name(n)) => match program.value(*n) {
+                    Some(Value::Array(a)) => a.clone(),
+                    _ => return false,
+                },
+                _ => return false,
+            };
+            if name == checksum("GetArraySize") {
+                let frame = self.frames.last_mut().unwrap();
+                set_param(
+                    &mut frame.params,
+                    checksum("array_size"),
+                    Value::Integer(array.len() as i32),
+                );
+                return true;
+            }
+            let Some(Value::Name(script)) = args.get(checksum("do")) else {
+                return false;
+            };
+            if !program.has_script(*script) {
+                return false;
+            }
+            let base = match args.get(checksum("params")) {
+                Some(Value::Struct(p)) => p.clone(),
+                _ => Vec::new(),
+            };
+            // The last item's frame deepest, so they run in order.
+            for item in array.iter().rev() {
+                if self.frames.len() >= MAX_DEPTH {
+                    break;
+                }
+                let mut params = base.clone();
+                if let Value::Struct(fields) = item {
+                    for (k, v) in fields {
+                        match k {
+                            Some(k) => set_param(&mut params, *k, v.clone()),
+                            None => params.push((None, v.clone())),
+                        }
+                    }
+                }
+                self.frames.push(Frame {
+                    script: *script,
+                    pc: 0,
+                    params,
+                    loops: Vec::new(),
+                    started: false,
+                });
+            }
+            return true;
+        }
         match host.command(target, name, &args) {
             Outcome::Done(result) => result,
             Outcome::Wait(seconds) => {
@@ -856,6 +914,77 @@ mod tests {
                 .unwrap();
             assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
         }
+    }
+
+    #[test]
+    fn array_size_and_for_each() {
+        let mut program = Program::new();
+        let spot =
+            |id: &str| Value::Struct(vec![(Some(checksum("id")), Value::Name(checksum(id)))]);
+        program.add_value(
+            checksum("Spots"),
+            Value::Array(vec![spot("SpotA"), spot("SpotB")]),
+        );
+        // script Count: GetArraySize Spots / Report <array_size> /
+        // ForEachIn Spots do = Visit params = { Goal = g }
+        program.add_script(
+            checksum("Count"),
+            vec![
+                n("GetArraySize"),
+                n("Spots"),
+                Token::EndOfLine,
+                n("Report"),
+                Token::Arg,
+                n("array_size"),
+                Token::EndOfLine,
+                n("ForEachIn"),
+                n("Spots"),
+                n("do"),
+                Token::Equals,
+                n("Visit"),
+                n("params"),
+                Token::Equals,
+                Token::StartStruct,
+                n("Goal"),
+                Token::Equals,
+                n("g"),
+                Token::EndStruct,
+                Token::EndOfLine,
+            ],
+        );
+        // script Visit: Seen <id> <Goal>
+        program.add_script(
+            checksum("Visit"),
+            vec![
+                n("Seen"),
+                Token::Arg,
+                n("id"),
+                Token::Arg,
+                n("Goal"),
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        let mut thread = Thread::new(checksum("Count"), Vec::new());
+        thread.run(&program, &mut log, 0.0);
+        let args = |name: &str| -> Vec<Value> {
+            log.calls
+                .iter()
+                .filter(|c| c.1 == checksum(name))
+                .map(|c| c.2.clone())
+                .collect()
+        };
+        assert_eq!(
+            args("Report"),
+            vec![Value::Struct(vec![(None, Value::Integer(2))])]
+        );
+        let seen = |id: &str| {
+            Value::Struct(vec![
+                (None, Value::Name(checksum(id))),
+                (None, Value::Name(checksum("g"))),
+            ])
+        };
+        assert_eq!(args("Seen"), vec![seen("SpotA"), seen("SpotB")]);
     }
 
     #[test]

@@ -37,8 +37,9 @@
 //! - The goal on, for scripts that aren't any object's (a gap's
 //!   `Gapscript`, a goal's own): `GoalManager_GoalIsActive`,
 //!   `GoalManager_SetGoalFlag Name = goal flag 1`, `GoalManager_GoalFlagSet`,
-//!   `GoalManager_AllFlagsSet`, `GoalManager_WinGoal`, and `IsCareerMode`
-//!   (while a goal's on).
+//!   `GoalManager_AllFlagsSet`, `GoalManager_GotCounterObject` (a counter
+//!   goal's), `GoalManager_WinGoal`, `GoalManager_GoalExists`, and
+//!   `IsCareerMode` (always: the levels are as the career has them).
 //! - `LocalSkaterExists` (skating), `Obj_LookAtObject Name = object`.
 //! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
 //!   `Obj_Hover Amp = units Freq = hertz`.
@@ -151,11 +152,15 @@ pub struct Behaviour {
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
     level_runner: usize,
+    /// Every named node's name as written (for `create prefix = "..."`).
+    labels: Vec<(u32, String)>,
     /// The goal manager: the goal on (its id), the flags its scripts have
     /// set (`GoalManager_SetGoalFlag`), how many win it, and whether a
     /// script has won it (`GoalManager_WinGoal`).
     pub active_goal: Option<u32>,
     pub goal_flags: std::collections::HashSet<u32>,
+    /// A counter goal's things got (`GoalManager_GotCounterObject`).
+    pub goal_count: usize,
     pub goal_needed: usize,
     pub goal_won: bool,
 }
@@ -243,8 +248,14 @@ impl Behaviour {
                 .collect(),
             object_node: nodes.objects.iter().map(|o| o.node).chain([0]).collect(),
             level_runner,
+            labels: nodes
+                .labels
+                .iter()
+                .map(|(n, l)| (*n, l.to_ascii_lowercase()))
+                .collect(),
             active_goal: None,
             goal_flags: Default::default(),
+            goal_count: 0,
             goal_needed: 0,
             goal_won: false,
             random: 0x2545_F491,
@@ -379,6 +390,11 @@ impl Behaviour {
             };
             self.start(i, Thread::new(script, params));
         }
+    }
+
+    /// How far the goal on's got: its flags set and things counted.
+    pub fn goal_progress(&self) -> usize {
+        self.goal_flags.len() + self.goal_count
     }
 
     /// Runs a script that's nobody's (a gap's `Gapscript`, a goal's
@@ -951,9 +967,11 @@ impl Host for Commands<'_> {
             return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
         } else if name == c("GoalManager_HasSeenGoal") {
             return Outcome::Done(true);
-        } else if name == c("IsCareerMode") {
-            // The career's scripts run while one of its goals is on.
-            return Outcome::Done(b.active_goal.is_some());
+        } else if name == c("IsCareerMode") || name == c("GoalManager_GoalExists") {
+            // The levels are played as the career has them (their set-up
+            // scripts leave things as the goals won say), with all their
+            // goals.
+            return Outcome::Done(true);
         } else if name == c("GoalManager_SetGoalFlag") || name == c("GoalManager_GoalFlagSet") {
             // `GoalManager_SetGoalFlag Name = goal Got_1 1`.
             let (mut flag, mut value) = (None, 1);
@@ -978,6 +996,11 @@ impl Host for Commands<'_> {
                 b.goal_flags.insert(flag);
             } else {
                 b.goal_flags.remove(&flag);
+            }
+        } else if name == c("GoalManager_GotCounterObject") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            if ours {
+                b.goal_count += 1;
             }
         } else if name == c("GoalManager_AllFlagsSet") {
             let ours = named("Name").is_some() && named("Name") == b.active_goal;
@@ -1027,12 +1050,25 @@ impl Host for Commands<'_> {
                 }
             }
         } else if name == c("create") || name == c("kill") {
-            let target = named("Name");
-            if let Some(n) = target.filter(|n| b.object_named(*n).is_none()) {
-                b.other_creates.push((n, name == c("create")));
-            }
-            if let Some(o) = target.and_then(|n| b.object_named(n)) {
-                let create = name == c("create");
+            // By name, or every node whose name starts so
+            // (`create prefix = "seaweed"`).
+            let targets: Vec<u32> = match args.get(c("prefix")) {
+                Some(Value::String(p) | Value::LocalString(p)) => {
+                    let p = p.to_ascii_lowercase();
+                    b.labels
+                        .iter()
+                        .filter(|(_, l)| l.starts_with(&p))
+                        .map(|(n, _)| *n)
+                        .collect()
+                }
+                _ => named("Name").into_iter().collect(),
+            };
+            let create = name == c("create");
+            for target in targets {
+                let Some(o) = b.object_named(target) else {
+                    b.other_creates.push((target, create));
+                    continue;
+                };
                 // A new object runs its own script.
                 if create && !b.states[o].alive {
                     if let Some(script) = b.scripts[o] {

@@ -464,7 +464,9 @@ fn load_level(
     }
     // The bouncy objects, each in a layer of its own.
     let mut bouncies = Vec::new();
-    for b in nodes.bouncies.iter().filter(|b| b.created_at_start) {
+    // (Those not there at the start are made hidden, for scripts to
+    // create.)
+    for b in &nodes.bouncies {
         let Ok(mut mesh) =
             Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == b.name)
         else {
@@ -485,8 +487,10 @@ fn load_level(
             |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())),
         );
         let layer = renderer.add_layer(&mesh, false);
-        renderer.show_layer(layer, true);
+        renderer.show_layer(layer, b.created_at_start);
         bouncies.push(BouncyState {
+            shown: b.created_at_start,
+            collided: false,
             spec: b.clone(),
             layer,
             base: mesh.vertices,
@@ -646,6 +650,20 @@ impl LoadedLevel {
     /// stopped, created and killed.
     fn apply_creates(&mut self) {
         for (name, created) in std::mem::take(&mut self.behaviour.other_creates) {
+            // A bouncy object: shown at rest, or gone.
+            if let Some(b) = self.bouncies.iter_mut().find(|b| b.spec.name == name) {
+                if created != b.shown {
+                    b.shown = created;
+                    b.collided = false;
+                    b.offset = Vec3::ZERO;
+                    b.velocity = Vec3::ZERO;
+                    b.rotation = Quat::IDENTITY;
+                    b.moving = false;
+                    self.renderer.update_layer(b.layer, 0, &b.base);
+                    self.renderer.show_layer(b.layer, created);
+                }
+                continue;
+            }
             if self.nodes.hidden_sectors.contains(&name) {
                 self.show_sector(name, created);
                 continue;
@@ -808,7 +826,7 @@ struct GoalPro {
 /// The pros of the goals the viewer plays (`trigger_obj_id`).
 fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> Vec<GoalPro> {
     let goals = desa_viewer::goals::level_goals(program, level);
-    [
+    let mut pros: Vec<GoalPro> = [
         ("HighScore", "HighScore", ui::Action::StartRun(Some(false))),
         ("ProScore", "ProScore", ui::Action::StartRun(Some(true))),
         ("SKATE", "Skate", ui::Action::StartLetters),
@@ -826,7 +844,30 @@ fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> V
             declined: false,
         })
     })
-    .collect()
+    .collect();
+    // The rest, played from their own scripts (one goal a pro).
+    for (i, goal) in goals.iter().enumerate() {
+        if ["HighScore", "ProScore", "Skate", "Race"].contains(&goal.kind.as_str()) {
+            continue;
+        }
+        let Some(generic) = desa_viewer::goals::generic_goal(program, level, &goal.kind) else {
+            continue;
+        };
+        let Some(object) = generic.pro.and_then(|p| behaviour.object(p)) else {
+            continue;
+        };
+        if pros.iter().any(|p| p.object == object) {
+            continue;
+        }
+        pros.push(GoalPro {
+            object,
+            title: goal.text.clone(),
+            line: desa_viewer::goals::goal_intro_line(program, level, &goal.kind),
+            start: ui::Action::StartGoal(i),
+            declined: false,
+        });
+    }
+    pros
 }
 
 /// How near a pro the skater's offered their goal, and how far it has to
@@ -839,6 +880,10 @@ const PRO_LEAVE: f32 = 25.0 * 12.0;
 /// (offset from rest, velocity, turn and spin), and how long since it was
 /// last knocked.
 struct BouncyState {
+    /// Whether it's there (created), and whether its `CollideScript` has
+    /// run since it was.
+    shown: bool,
+    collided: bool,
     spec: desa_viewer::nodes::Bouncy,
     layer: Option<usize>,
     base: Vec<desa_viewer::level::Vertex>,
@@ -2616,7 +2661,11 @@ impl<'a> App<'a> {
             seed ^= seed << 5;
             (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
         };
+        let mut scripts = Vec::new();
         for b in &mut level.bouncies {
+            if !b.shown {
+                continue;
+            }
             b.since += dt;
             let at = b.centre + b.offset;
             if let Some((body, velocity)) = skater {
@@ -2625,6 +2674,10 @@ impl<'a> App<'a> {
                 if near && b.since > 0.4 && velocity.length() > 60.0 {
                     b.since = 0.0;
                     b.moving = true;
+                    // Its script, the first knock.
+                    if !std::mem::replace(&mut b.collided, true) {
+                        scripts.extend(b.spec.collide_script);
+                    }
                     b.velocity = velocity.with_y(0.0) * 1.1 + Vec3::Y * b.spec.up * FEET;
                     b.spin = Vec3::new(random(), random(), random()).normalize_or(Vec3::X)
                         * b.spec.spin.to_radians();
@@ -2679,6 +2732,9 @@ impl<'a> App<'a> {
                 })
                 .collect();
             level.renderer.update_layer(b.layer, 0, &moved);
+        }
+        for script in scripts {
+            level.behaviour.run_level_script(script, Vec::new());
         }
     }
 
@@ -2928,6 +2984,7 @@ impl<'a> App<'a> {
         let b = &mut level.behaviour;
         b.active_goal = Some(goal.id);
         b.goal_flags.clear();
+        b.goal_count = 0;
         b.goal_needed = goal.needed;
         b.goal_won = false;
         let mut params: qb::vm::Params = goal
@@ -2964,7 +3021,7 @@ impl<'a> App<'a> {
             return;
         };
         let model = &mut self.model.character;
-        let got = level.behaviour.goal_flags.len();
+        let got = level.behaviour.goal_progress();
         // (What it asks, unless that's its name over.)
         let text = if run.goal.text == run.goal.name {
             String::new()
@@ -4829,7 +4886,20 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                                 .collect::<Vec<_>>()
                         )
                     })?;
+                let from = app.placement.transform_point3(Vec3::ZERO);
                 app.start_goal(index);
+                // From --skate-from, if given, rather than the goal's start.
+                if let (Some(_), Some((skater, ..))) = (&args.skate_from, &mut app.skating) {
+                    skater.position = from;
+                    skater.on_ground = false;
+                }
+                // Where the things it counts are (those with a script).
+                for b in &app.level.as_ref().unwrap().bouncies {
+                    if b.spec.collide_script.is_some() {
+                        let c = b.centre;
+                        println!("bouncy at {:.0} {:.0} {:.0}", c.x, c.y, c.z);
+                    }
+                }
                 if let Some((skater, ..)) = &mut app.skating {
                     skater
                         .gap_scripts

@@ -184,6 +184,9 @@ pub struct Bouncy {
     pub gravity: f32,
     pub spin: f32,
     pub sound: Option<u32>,
+    /// Run when the skater knocks it (`CollideScript`: a counter goal's
+    /// thing got).
+    pub collide_script: Option<u32>,
 }
 
 /// A `ParticleEmitter` node.
@@ -301,6 +304,10 @@ impl LevelNodes {
                                 spin: get("ConstRot", 180.0),
                                 sound: node
                                     .get(key("BounceSound"))
+                                    .and_then(Value::as_name)
+                                    .filter(|s| *s != 0),
+                                collide_script: node
+                                    .get(key("CollideScript"))
                                     .and_then(Value::as_name)
                                     .filter(|s| *s != 0),
                             });
