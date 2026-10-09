@@ -1618,6 +1618,8 @@ struct App<'a> {
     /// Shop loading.
     screen: Option<ScreenUi>,
     main_menu_pending: bool,
+    /// The controller's menu presses held last frame.
+    menu_held: Vec<desa_viewer::screen::Pad>,
     /// The movie playing, and those to play after it (by name).
     movie: Option<MoviePlaying>,
     movie_queue: std::collections::VecDeque<String>,
@@ -1785,6 +1787,7 @@ impl<'a> App<'a> {
             movie_queue: Default::default(),
             screen: None,
             main_menu_pending: false,
+            menu_held: Vec::new(),
             moon_gravity: 0.5,
             slomo_speed: 0.5,
             goal_streams: None,
@@ -3895,6 +3898,51 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The controller in the game's menus: the d-pad or left stick moves,
+    /// A chooses, B goes back, Start is Start, each on being pressed.
+    fn menu_pad(&mut self) {
+        use desa_viewer::screen::Pad;
+        use gilrs::{Axis, Button};
+        // (What's held is kept track of all along, so the Start that
+        // paused isn't taken as a press in the menu it brings up.)
+        let Some(gilrs) = self.gamepads.as_mut() else {
+            return;
+        };
+        while gilrs.next_event().is_some() {}
+        let mut held = Vec::new();
+        for (_, pad) in gilrs.gamepads() {
+            let (x, y) = (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
+            let pressed = |b| pad.is_pressed(b);
+            for (on, p) in [
+                (pressed(Button::DPadUp) || y > 0.6, Pad::Up),
+                (pressed(Button::DPadDown) || y < -0.6, Pad::Down),
+                (pressed(Button::DPadLeft) || x < -0.6, Pad::Left),
+                (pressed(Button::DPadRight) || x > 0.6, Pad::Right),
+                (pressed(Button::South), Pad::Choose),
+                (pressed(Button::East), Pad::Back),
+                (pressed(Button::Start), Pad::Start),
+            ] {
+                if on && !held.contains(&p) {
+                    held.push(p);
+                }
+            }
+        }
+        let fresh: Vec<Pad> = held
+            .iter()
+            .copied()
+            .filter(|p| !self.menu_held.contains(p))
+            .collect();
+        self.menu_held = held;
+        if !self.model.character.game_menu {
+            return;
+        }
+        if let Some(screen) = &mut self.screen {
+            for p in fresh {
+                screen.screen.pad(p);
+            }
+        }
+    }
+
     /// The game's main menu (`launch_main_menu`), in the Skate Shop as the
     /// game has it: there now, or once the shop's loaded.
     fn open_main_menu(&mut self) {
@@ -3929,6 +3977,7 @@ impl<'a> App<'a> {
     /// The game's menus run on: their scripts (with the level's), sounds,
     /// and what they ask of the viewer (`unpausegame`: resume).
     fn update_screen(&mut self, dt: f32) {
+        self.menu_pad();
         let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
             return;
         };
