@@ -1746,6 +1746,7 @@ impl<'a> App<'a> {
                     message: None,
                     special: (0.0, false),
                     auto_kick: true,
+                    wallride_anywhere: true,
                     cheats: Default::default(),
                     sound: true,
                     music: true,
@@ -4605,6 +4606,7 @@ impl<'a> App<'a> {
             input
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
+        skater.wallride_anywhere = self.model.character.wallride_anywhere;
         // The cheats.
         let cheats = self.model.character.cheats;
         skater.perfect_manual = cheats.perfect_manual;

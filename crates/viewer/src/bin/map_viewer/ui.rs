@@ -99,6 +99,9 @@ pub struct CharacterModel {
     pub special: (f32, bool),
     /// The AutoKick option.
     pub auto_kick: bool,
+    /// Wallriding on any steep wall (else only the game's few
+    /// wall-ridable faces, all in Canyon).
+    pub wallride_anywhere: bool,
     /// The game's cheats (its cheat menu's).
     pub cheats: Cheats,
     /// The skater's sounds (and the level's ambience) on, and the songs.
@@ -1313,6 +1316,9 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         });
     ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
         "The game's controller option: the skater pushes by itself while under its kick speed. Off, hold W to push.",
+    );
+    ui.checkbox(&mut model.wallride_anywhere, "Wallride any wall").on_hover_text(
+        "Jump at a wall alongside it holding Grind to ride it; let go of crouch to wallie off (with W held, a wallplant).          The game only lets you ride faces flagged wall-ridable, and only Canyon has any: off, so does this.",
     );
     if model.skating {
         if !model.trick_list.is_empty() {

@@ -171,6 +171,21 @@ pub struct Physics {
     pub rail_corner_leave_angle: f32,
     pub rail_jump_angle: f32,
     pub regrind_time: f32,
+    /// Wallriding (`Wall_Ride_*`, main.dol 0x800FDB6C and 0x800FE664):
+    /// gravity on the wall, the slowest along it, the widest angle onto it
+    /// and the furthest overhang (degrees), how long after the grind
+    /// button it still catches and how soon after one another starts
+    /// (seconds), and the push off it, out and up. An ollie off it with
+    /// up held is a wallplant, at the boneless jump speed.
+    pub wall_ride_gravity: f32,
+    pub wall_ride_min_speed: f32,
+    pub wall_ride_max_incident_angle: f32,
+    pub wall_ride_upside_down_angle: f32,
+    pub wall_ride_triangle_window: f32,
+    pub wall_ride_delay: f32,
+    pub wall_ride_jump_out_speed: f32,
+    pub wall_ride_jump_up_speed: f32,
+    pub boneless_jump_speed: f32,
     /// Balancing manuals (`ManualParams`, by the manual stat) and grinds
     /// (`GrindParams`, by the rail balance stat).
     pub manual_balance: BalanceParams,
@@ -272,6 +287,15 @@ impl Physics {
             rail_corner_leave_angle: plain("Rail_Corner_Leave_Angle", 50.0),
             rail_jump_angle: plain("Rail_Jump_Angle", 15.0),
             regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
+            wall_ride_gravity: plain("Wall_Ride_Gravity", -969.0),
+            wall_ride_min_speed: plain("Wall_Ride_Min_Speed", 200.0),
+            wall_ride_max_incident_angle: plain("Wall_Ride_Max_Incident_Angle", 60.0),
+            wall_ride_upside_down_angle: plain("Wall_Ride_Upside_Down_Angle", 53.0),
+            wall_ride_triangle_window: plain("Wall_Ride_Triangle_Window", 0.333),
+            wall_ride_delay: plain("Wall_Ride_Delay", 0.666),
+            wall_ride_jump_out_speed: plain("Wall_Ride_Jump_Out_Speed", 40.0),
+            wall_ride_jump_up_speed: plain("Wall_Ride_Jump_Up_Speed", 80.0),
+            boneless_jump_speed: scaled("Physics_Boneless_Jump_Speed_Stat", 500.0),
             manual_balance: BalanceParams::new(program, "ManualParams", stats),
             grind_balance: BalanceParams::new(program, "GrindParams", stats),
             lip_balance: BalanceParams::new(program, "LipParams", stats),

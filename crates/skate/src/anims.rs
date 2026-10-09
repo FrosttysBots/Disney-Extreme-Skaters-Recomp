@@ -124,6 +124,8 @@ pub fn choose(skater: &Skater) -> Anim {
         Action::FlailLeft => Anim::once("StandFlailLeft", LAND).committed(),
         Action::FlailRight => Anim::once("StandFlailRight", LAND).committed(),
         Action::Grinding => Anim::into("GrindIn1", "GrindRange1", TRICK),
+        // (The game's `WallRideFrontLoop` and the rest aren't on the disc.)
+        Action::WallRide => Anim::cycle("CrouchIdle", TRICK),
         // `Skitch`: `PlayAnim anim = StandIdle cycle`.
         Action::Skitching => Anim::cycle("StandIdle", TRICK),
         Action::Manual if skater.special_manual => {
