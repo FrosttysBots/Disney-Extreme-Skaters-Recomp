@@ -164,6 +164,12 @@ pub trait Host {
     /// `target` is the object named before a `:`, if any; `args` is a
     /// [`Value::Struct`].
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome;
+
+    /// Whether `target` (before a `:`) is the object this thread runs as:
+    /// `self_object:script` is then an ordinary call.
+    fn is_self(&self, _target: u32) -> bool {
+        false
+    }
 }
 
 /// Statements a thread runs at most per [`Thread::run`], so a loop that
@@ -390,7 +396,8 @@ impl Thread {
         tokens.extend_from_slice(args);
         tokens.push(Token::EndStruct);
         let args = resolve(&tokens, &frame.params, program);
-        if target.is_none() && program.has_script(name) {
+        let own = target.is_none_or(|t| host.is_self(t));
+        if own && program.has_script(name) {
             if self.frames.len() < MAX_DEPTH {
                 let Value::Struct(params) = args else {
                     return false;

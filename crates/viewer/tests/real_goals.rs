@@ -56,20 +56,37 @@ fn real_goal_scripts() {
                 b.run_level_script(script, params.clone());
             }
             run(&mut b, 90);
+            // (Something that moves off, herded, is followed till it
+            // stops: a skater keeping up with it.)
             let mut visited: Vec<Vec3> = Vec::new();
             for _ in 0..12 {
-                let new: Vec<Vec3> = b
-                    .radius_triggers()
+                let new: Vec<(usize, Vec3)> = b
+                    .radius_trigger_objects()
                     .into_iter()
-                    .filter(|p| !visited.iter().any(|v| v.distance(*p) < 1.0))
+                    .map(|o| (o, b.position(o)))
+                    .filter(|(_, p)| !visited.iter().any(|v| v.distance(*p) < 1.0))
                     .collect();
                 if new.is_empty() {
                     break;
                 }
-                for at in new {
+                for (object, at) in new {
                     visited.push(at);
-                    b.set_skater(Some(at));
-                    run(&mut b, 20);
+                    let mut was = at;
+                    let mut still = 0;
+                    for step in 0..900 {
+                        let now = b.position(object);
+                        b.set_skater(Some(now));
+                        run(&mut b, 1);
+                        still = if b.position(object).distance(was) < 0.01 {
+                            still + 1
+                        } else {
+                            0
+                        };
+                        was = b.position(object);
+                        if step >= 20 && still > 45 {
+                            break;
+                        }
+                    }
                     b.set_skater(Some(at + Vec3::Y * 5000.0));
                     run(&mut b, 20);
                 }
@@ -97,6 +114,9 @@ fn real_goal_scripts() {
         "canyon Collect",
         "graveyard Counter2",
         "HUB Collect3",
+        "canyon Collect2",
+        "pizza Collect3",
+        "PrideRock Collect2",
     ] {
         assert!(done.contains(&goal.to_string()), "{goal}");
     }

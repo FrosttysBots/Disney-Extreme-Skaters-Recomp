@@ -811,6 +811,10 @@ impl Commands<'_> {
 }
 
 impl Host for Commands<'_> {
+    fn is_self(&self, target: u32) -> bool {
+        self.behaviour.object_named(target) == Some(self.object)
+    }
+
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
         let object = match target {
             Some(t) => match self.behaviour.object_named(t) {
@@ -822,6 +826,17 @@ impl Host for Commands<'_> {
         let named = |key: &str| args.get(checksum(key)).and_then(Value::as_name);
         let c = |s: &str| checksum(s);
         let b = &mut *self.behaviour;
+
+        // `object:script args`: the script run as that object, alongside
+        // what it's doing (the wildebeest's `HerdWildebeast_Waiting`).
+        if target.is_some() && self.program.has_script(name) {
+            let params = match args {
+                Value::Struct(items) => items.clone(),
+                _ => Vec::new(),
+            };
+            b.spawning.push((object, Thread::new(name, params)));
+            return Outcome::Done(true);
+        }
 
         if name == c("Obj_FollowPathLinked") {
             let state = &mut b.states[object];
@@ -1184,6 +1199,32 @@ impl Host for Commands<'_> {
                     }
                     b.messages.push(text);
                 }
+            }
+        } else if name == c("SendFlag") || name == c("QueryFlag") || name == c("ClearFlag") {
+            // An object's flags, by `Name = object`: `SendFlag Name = obj
+            // flag` sets one, `QueryFlag flag Name = obj` asks.
+            let on = named("Name")
+                .and_then(|n| b.object_named(n))
+                .unwrap_or(object);
+            let flag = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(f)) => Some(*f),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(flag) = flag else {
+                return Outcome::Done(false);
+            };
+            let flags = &mut b.states[on].flags;
+            if name == c("QueryFlag") {
+                return Outcome::Done(flags.contains(&flag));
+            } else if name == c("SendFlag") {
+                if !flags.contains(&flag) {
+                    flags.push(flag);
+                }
+            } else {
+                flags.retain(|f| *f != flag);
             }
         } else if name == c("GoalManager_CanStartGoal") {
             // The goal on starts (`goal_start` then makes its things).
