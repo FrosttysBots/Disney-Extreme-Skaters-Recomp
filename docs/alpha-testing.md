@@ -115,7 +115,7 @@ skater is and what it's doing.
   on those the viewer runs so far (the letters and the score goals).
 - Breakables: skate into the crates on Tarzan's Treehouse's walkways or
   the plants in Scar's Canyon and they smash, with the game's sound.
-  (The Hub's grocery items need the store's own scripts, not yet run.)
+  Through the Hub's grocery doors the shelves are stocked to smash too.
 - Particle effects there from the start, like Camp's campfires and the
   steam off Clayton's ship, run from the levels' own emit scripts.
 - Every level, and a few characters (each has its own tricks and stats).

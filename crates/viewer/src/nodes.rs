@@ -18,7 +18,7 @@
 //! open later, invisible trigger boxes and most pedestrians, which goals
 //! create.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -163,6 +163,9 @@ pub struct LevelNodes {
     /// (which makes the particle system), whether there at the start, and
     /// how far off they're drawn (`CutOff`).
     pub emitters: Vec<Emitter>,
+    /// Every named node's name as written, by its checksum (for `create
+    /// prefix = "..."`).
+    pub labels: HashMap<u32, String>,
 }
 
 /// A `ParticleEmitter` node.
@@ -228,6 +231,14 @@ impl LevelNodes {
                 .collect(),
             ..LevelNodes::default()
         };
+        for node in nodes.iter() {
+            if let (Some(name), Some(label)) = (
+                node.get(key("Name")).and_then(Value::as_name),
+                name_of(node, "Name"),
+            ) {
+                out.labels.insert(name, label);
+            }
+        }
         for (index, node) in nodes.iter().enumerate() {
             let Some(pos) = position(node).map(Vec3::from) else {
                 continue;

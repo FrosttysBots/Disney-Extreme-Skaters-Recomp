@@ -595,14 +595,17 @@ impl LoadedLevel {
                 .filter(|l| !l.vertices.is_empty())?;
             // Some are stored round the origin, to be put where their node
             // is (a race's gates); others already sit in place.
+            let mut centre = level.focus.0;
             if let Some(at) = node {
-                let centre = level.focus.0;
                 if centre.length() < at.distance(centre) {
                     for v in &mut level.vertices {
                         v.position = (Vec3::from(v.position) + at).to_array();
                     }
+                    centre += at;
                 }
             }
+            // (Where it is, for chunks if it's smashed.)
+            self.sector_centres.insert(name, centre);
             self.renderer.add_layer(&level, false)
         });
         self.renderer.show_layer(layer, shown);
@@ -1042,6 +1045,8 @@ struct App<'a> {
     /// panel's list), and whether the pad's Back was down.
     camera_shown: usize,
     pad_back: bool,
+    /// What a teleporter created or killed on the way, to apply.
+    pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
     /// After a splash: the camera held where it was, and for how long.
     splash_hold: Option<(FlyCamera, f32)>,
     /// Frames drawn (for things done now and then).
@@ -1198,6 +1203,7 @@ impl<'a> App<'a> {
             skitched: None,
             frame: 0,
             splash_hold: None,
+            pending_creates: Vec::new(),
             camera_shown: usize::MAX,
             pad_back: false,
             session: Session::default(),
@@ -2182,6 +2188,49 @@ impl<'a> App<'a> {
         let (Some((skater, ..)), Some(level)) = (&self.skating, &mut self.level) else {
             return;
         };
+        // What teleporters created or killed (the grocery store
+        // restocked): created breakables can break again.
+        for (target, created) in std::mem::take(&mut self.pending_creates) {
+            let names: Vec<u32> = match target {
+                desa_viewer::triggers::CreateTarget::Name(n) => vec![n],
+                desa_viewer::triggers::CreateTarget::Prefix(p) => {
+                    let p = p.to_ascii_lowercase();
+                    level
+                        .nodes
+                        .labels
+                        .iter()
+                        .filter(|(_, l)| l.to_ascii_lowercase().starts_with(&p))
+                        .map(|(n, _)| *n)
+                        .collect()
+                }
+            };
+            for name in names {
+                if let Some(object) = level.behaviour.object(name) {
+                    level.behaviour.set_alive(object, created);
+                } else if level.nodes.hidden_sectors.contains(&name)
+                    || level.sector_layers.contains_key(&name)
+                {
+                    level.show_sector(name, created);
+                }
+                if created {
+                    if let Some(world) = &mut level.world {
+                        world.enable(name);
+                    }
+                    let mended: Vec<u32> = level
+                        .breakables
+                        .iter()
+                        .filter(|(_, (_, names, _))| names.contains(&name))
+                        .map(|(t, _)| *t)
+                        .collect();
+                    for trigger in mended {
+                        level.broken.remove(&trigger);
+                        if let Some(world) = &mut level.world {
+                            world.enable(trigger);
+                        }
+                    }
+                }
+            }
+        }
         for trigger in &skater.touched {
             let Some((_, names, sound)) = level.breakables.get(trigger) else {
                 continue;
@@ -2861,9 +2910,10 @@ impl<'a> App<'a> {
             ) {
                 audio.play_named(sound, 1.0);
             }
-            if let Some(message) = effect.message {
+            if let Some(message) = effect.message.clone() {
                 skater.message = Some((message, 1.5));
             }
+            self.pending_creates.extend(effect.creates.iter().cloned());
             if water {
                 self.sparks.splash(before);
                 // The camera stays a moment to see it, then cuts to the skater.

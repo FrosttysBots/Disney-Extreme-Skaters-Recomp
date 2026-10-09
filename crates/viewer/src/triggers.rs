@@ -53,6 +53,17 @@ pub fn teleports(nodes: &LevelNodes, program: &Program) -> HashMap<u32, usize> {
 pub struct TeleportEffect {
     pub sound: Option<u32>,
     pub message: Option<String>,
+    /// What it creates or kills on the way (`create prefix = "toiletpaper"`
+    /// restocks the Hub's grocery store): a name or a name's start, and
+    /// whether it's created.
+    pub creates: Vec<(CreateTarget, bool)>,
+}
+
+/// What a `create` or `kill` names.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CreateTarget {
+    Name(u32),
+    Prefix(String),
 }
 
 /// Catches a trigger script's sound and message.
@@ -70,6 +81,18 @@ impl Host for Catch<'_> {
                     _ => None,
                 });
                 self.effect.sound = self.effect.sound.or(sound);
+            }
+        } else if name == checksum("create") || name == checksum("kill") {
+            let created = name == checksum("create");
+            let target = match (args.get(checksum("Name")), args.get(checksum("prefix"))) {
+                (Some(Value::Name(n)), _) => Some(CreateTarget::Name(*n)),
+                (_, Some(Value::String(p) | Value::LocalString(p))) => {
+                    Some(CreateTarget::Prefix(p.clone()))
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.effect.creates.push((target, created));
             }
         } else if name == checksum("Create_Panel_Message")
             || name == checksum("CreateScreenElement")
@@ -109,7 +132,13 @@ pub fn teleport_effects(nodes: &LevelNodes, program: &Program) -> HashMap<u32, T
                 effect: TeleportEffect::default(),
             };
             let mut thread = Thread::new(script, Vec::new());
-            thread.run(program, &mut host, 0.0);
+            // Through any waits (a panel message's) to the end.
+            for _ in 0..20 {
+                if thread.is_finished() {
+                    break;
+                }
+                thread.run(program, &mut host, 1.0);
+            }
             (object, host.effect)
         })
         .collect()

@@ -79,6 +79,11 @@ impl World {
             .unwrap_or(f32::NEG_INFINITY)
     }
 
+    /// Puts a collision object back.
+    pub fn enable(&mut self, object: u32) {
+        self.disabled.remove(&object);
+    }
+
     /// Takes a collision object out (a breakable that's been broken).
     pub fn disable(&mut self, object: u32) {
         self.disabled.insert(object);
