@@ -148,6 +148,9 @@ pub struct Behaviour {
     pub other_creates: Vec<(u32, bool)>,
     /// Voice lines scripts asked for (`midgoalvoiceover stream = name`).
     pub voice_lines: Vec<u32>,
+    /// Text scripts put on screen (`Create_Panel_Message`,
+    /// `create_panel_block`: a goal's messages), for the viewer to show.
+    pub messages: Vec<String>,
     /// The goals won (their ids), for `GoalManager_HasWonGoal`.
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
@@ -286,6 +289,7 @@ impl Behaviour {
             sounds: Vec::new(),
             other_creates: Vec::new(),
             voice_lines: Vec::new(),
+            messages: Vec::new(),
             won_goals: Default::default(),
         }
     }
@@ -582,6 +586,7 @@ impl Behaviour {
                 objects,
                 object: *object,
                 now,
+                program: &program,
             };
             thread.run(&program, &mut host, dt);
         }
@@ -709,6 +714,8 @@ struct Commands<'a> {
     objects: &'a mut LevelObjects,
     object: usize,
     now: f32,
+    /// The scripts and globals (the localized texts scripts name).
+    program: &'a Program,
 }
 
 impl Commands<'_> {
@@ -1032,6 +1039,41 @@ impl Host for Commands<'_> {
             let ours = named("Name").is_some() && named("Name") == b.active_goal;
             if ours {
                 b.goal_count += 1;
+            }
+        } else if name == c("CreateScreenElement") {
+            // Text put on screen (a panel message): its words, the goal's
+            // own text block aside (the viewer shows that already). (Its
+            // settings come in a struct of their own.)
+            let args = match args {
+                Value::Struct(items) => items
+                    .iter()
+                    .find_map(|(k, v)| match (k, v) {
+                        (None, inner @ Value::Struct(_)) => Some(inner),
+                        _ => None,
+                    })
+                    .unwrap_or(args),
+                _ => args,
+            };
+            let named = |key: &str| args.get(checksum(key)).and_then(Value::as_name);
+            let kind = args.get(c("Type")).and_then(Value::as_name);
+            let text_kind = kind == Some(c("TextElement")) || kind == Some(c("TextBlockElement"));
+            let goal_block = named("id") == Some(c("current_goal"));
+            let text = match args.get(c("text")) {
+                Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                Some(Value::Name(n)) => match self.program.value(*n) {
+                    Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let (true, false, Some(text)) = (text_kind, goal_block, text) {
+                if !text.trim().is_empty() {
+                    // (Kept few, for when nobody's taking them.)
+                    if b.messages.len() >= 8 {
+                        b.messages.remove(0);
+                    }
+                    b.messages.push(text);
+                }
             }
         } else if name == c("GoalManager_CanStartGoal") {
             // The goal on starts (`goal_start` then makes its things).

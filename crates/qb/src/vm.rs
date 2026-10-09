@@ -411,6 +411,57 @@ impl Thread {
         if target.is_none() && (name == checksum("printf") || name == checksum("printstruct")) {
             return true;
         }
+        // Built in: text made from a pattern (`FormatText TextName = msg
+        // "%i of %n" i = 3 n = 10`), or a name made so (`ChecksumName`).
+        if target.is_none() && name == checksum("FormatText") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let pattern = items.iter().find_map(|(k, v)| match (k, v) {
+                (None, Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                _ => None,
+            });
+            let (Some(pattern), Some((into, as_name))) = (
+                pattern,
+                args.get(checksum("TextName"))
+                    .and_then(Value::as_name)
+                    .map(|n| (n, false))
+                    .or_else(|| {
+                        args.get(checksum("ChecksumName"))
+                            .and_then(Value::as_name)
+                            .map(|n| (n, true))
+                    }),
+            ) else {
+                return false;
+            };
+            let mut text = String::new();
+            let mut chars = pattern.chars();
+            while let Some(ch) = chars.next() {
+                if ch != '%' {
+                    text.push(ch);
+                    continue;
+                }
+                let Some(key) = chars.next() else { break };
+                match args.get(checksum(&key.to_string())) {
+                    Some(Value::Integer(i)) => text.push_str(&i.to_string()),
+                    Some(Value::Float(f)) => text.push_str(&f.to_string()),
+                    Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
+                    Some(Value::Name(n)) => match program.value(*n) {
+                        Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            let value = if as_name {
+                Value::Name(checksum(&text))
+            } else {
+                Value::String(text)
+            };
+            let frame = self.frames.last_mut().unwrap();
+            set_param(&mut frame.params, into, value);
+            return true;
+        }
         // Built in: whether two names are the same (`ChecksumEquals a = x
         // b = y`).
         if target.is_none() && name == checksum("ChecksumEquals") {

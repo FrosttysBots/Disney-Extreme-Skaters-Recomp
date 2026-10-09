@@ -3060,6 +3060,10 @@ impl<'a> App<'a> {
         for script in std::mem::take(&mut skater.gap_scripts) {
             level.behaviour.run_level_script(script, Vec::new());
         }
+        // What the scripts put on screen, as the skater's message.
+        if let Some(text) = level.behaviour.messages.drain(..).last() {
+            skater.message = Some((text, 2.5));
+        }
         // And touched trigger geometry's.
         for object in std::mem::take(&mut skater.touches) {
             if let Some(&script) = level.touch_scripts.get(&object) {
