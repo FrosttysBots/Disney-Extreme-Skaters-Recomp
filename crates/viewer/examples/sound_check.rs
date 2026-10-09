@@ -45,7 +45,13 @@ fn main() {
         let files = data.sounds(&format!("{}.prg", level.id)).unwrap();
         let (mut found, mut fallback, mut missing, mut bad) = (0, 0, 0, 0);
         for t in 0..50u16 {
-            for moment in [Moment::Roll, Moment::Jump, Moment::Land, Moment::Grind, Moment::Bonk] {
+            for moment in [
+                Moment::Roll,
+                Moment::Jump,
+                Moment::Land,
+                Moment::Grind,
+                Moment::Bonk,
+            ] {
                 match terrain.get(t, moment) {
                     Some(s) if files.contains_key(&s.file) => {
                         found += 1;

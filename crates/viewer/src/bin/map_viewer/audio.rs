@@ -303,6 +303,20 @@ impl Audio {
         player.detach();
     }
 
+    /// A rail sound, falling back to the grind's for a slide's the level
+    /// hasn't.
+    fn play_rail(&self, terrain: u16, moment: Moment) {
+        let fallback = match moment {
+            Moment::SlideJump => Moment::GrindJump,
+            Moment::SlideLand => Moment::GrindLand,
+            other => other,
+        };
+        match self.terrain_sound(terrain, moment) {
+            Some(sound) => self.play(&sound.file, sound.volume, 1.0),
+            None => self.play_terrain(terrain, fallback),
+        }
+    }
+
     fn play_terrain(&self, terrain: u16, moment: Moment) {
         if let Some(sound) = self.terrain_sound(terrain, moment) {
             self.play(&sound.file, sound.volume, 1.0);
@@ -325,18 +339,26 @@ impl Audio {
         let rail = skater
             .grind
             .map(|g| self.rail_terrain.get(g.segment).copied().unwrap_or(0));
+        // A slide (a 50-50 on its side): the slide sounds, where the rail's
+        // surface has them.
+        let slide = skater.balance_trick.as_ref().is_some_and(|t| t.slide);
+        let rail_moment = |grind: Moment, slide_moment: Moment| {
+            if slide { slide_moment } else { grind }
+        };
         for sound in std::mem::take(&mut skater.sounds) {
             match sound {
-                SkateSound::Jump { from_rail: true } => {
-                    self.play_terrain(rail.unwrap_or(skater.terrain), Moment::GrindJump)
-                }
+                SkateSound::Jump { from_rail: true } => self.play_rail(
+                    rail.unwrap_or(skater.terrain),
+                    rail_moment(Moment::GrindJump, Moment::SlideJump),
+                ),
                 SkateSound::Jump { from_rail: false } => {
                     self.play_terrain(skater.terrain, Moment::Jump)
                 }
                 SkateSound::Land => self.play_terrain(skater.terrain, Moment::Land),
-                SkateSound::RailOn => {
-                    self.play_terrain(rail.unwrap_or(skater.terrain), Moment::GrindLand)
-                }
+                SkateSound::RailOn => self.play_rail(
+                    rail.unwrap_or(skater.terrain),
+                    rail_moment(Moment::GrindLand, Moment::SlideLand),
+                ),
                 SkateSound::Cess => self.play_terrain(skater.terrain, Moment::Cess),
                 SkateSound::Bail => {
                     self.play("bail_knee1", 1.0, 1.0);
@@ -386,7 +408,10 @@ impl Audio {
             speed,
             self.effects,
         );
-        let grind = rail.and_then(|t| self.terrain_sound(t, Moment::Grind));
+        let grind = rail.and_then(|t| {
+            self.terrain_sound(t, rail_moment(Moment::Grind, Moment::Slide))
+                .or_else(|| self.terrain_sound(t, Moment::Grind))
+        });
         let grind_speed = skater.grind.map_or(0.0, |g| g.speed);
         Self::keep_looping(
             &self.clips,
