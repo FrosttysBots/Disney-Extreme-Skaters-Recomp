@@ -169,6 +169,27 @@ pub struct LevelNodes {
     /// Bouncy objects (`LevelObject ... Bouncy`): knocked flying when the
     /// skater runs into them.
     pub bouncies: Vec<Bouncy>,
+    /// The level's own pieces that scripts can move, turn, make and take
+    /// away (`LevelObject`s that aren't bouncy: Beach's cargo doors,
+    /// Pizza's alien heads).
+    pub movers: Vec<Mover>,
+}
+
+/// A `LevelObject` node that isn't bouncy: where it's placed (mesh space),
+/// which way (its `Angles` heading), and whether it's there at the start.
+#[derive(Clone, Debug)]
+pub struct Mover {
+    pub name: u32,
+    pub position: Vec3,
+    pub heading: f32,
+    pub created_at_start: bool,
+}
+
+impl Mover {
+    /// As `ObjectNode::rotation`.
+    pub fn rotation(&self) -> Quat {
+        Quat::from_rotation_y(-self.heading)
+    }
 }
 
 /// A bouncy object's node and how it bounces (`UpMagnitude`,
@@ -289,6 +310,19 @@ impl LevelNodes {
                     }
                 }
                 Some(c) if c == key("LevelGeometry") || c == key("LevelObject") => {
+                    if c == key("LevelObject") && !node.has_flag(key("Bouncy")) {
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.movers.push(Mover {
+                                name,
+                                position: pos,
+                                heading: node
+                                    .get(key("Angles"))
+                                    .and_then(Value::as_vector)
+                                    .map_or(0.0, |a| a[1]),
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
+                            });
+                        }
+                    }
                     if node.has_flag(key("Bouncy")) {
                         let get =
                             |k: &str, d: f32| node.get(key(k)).and_then(Value::as_f32).unwrap_or(d);

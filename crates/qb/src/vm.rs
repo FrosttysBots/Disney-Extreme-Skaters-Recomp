@@ -332,6 +332,43 @@ impl Thread {
                 set_param(&mut frame.params, name, value);
                 frame.pc = line_end;
             }
+            // `<x> = value`: a parameter set, as `x = value` is.
+            Token::Arg
+                if matches!(body.get(frame.pc + 1), Some(Token::Name(_)))
+                    && body.get(frame.pc + 2) == Some(&Token::Equals) =>
+            {
+                let Some(&Token::Name(name)) = body.get(frame.pc + 1) else {
+                    unreachable!()
+                };
+                let mut args = frame_line(body, frame.pc + 3, line_end).to_vec();
+                args.insert(0, Token::StartStruct);
+                args.push(Token::EndStruct);
+                let value = match resolve(&args, &frame.params, program) {
+                    Value::Struct(mut items) if items.len() == 1 => items.remove(0).1,
+                    other => other,
+                };
+                set_param(&mut frame.params, name, value);
+                frame.pc = line_end;
+            }
+            // `<script> args` or `<object>:command args`: the call named by
+            // a parameter (`<goal_outro_script> <goal_outro_script_params>`).
+            Token::Arg => {
+                let line = frame_line(body, frame.pc, line_end).to_vec();
+                frame.pc = line_end;
+                let named = match line.get(1) {
+                    Some(Token::Name(n)) => frame
+                        .params
+                        .iter()
+                        .find(|(k, _)| *k == Some(*n))
+                        .and_then(|(_, v)| v.as_name()),
+                    _ => None,
+                };
+                if let Some(named) = named {
+                    let mut call = vec![Token::Name(named)];
+                    call.extend_from_slice(&line[2..]);
+                    self.call(program, host, &call);
+                }
+            }
             Token::Name(_) => {
                 let line = frame_line(body, frame.pc, line_end).to_vec();
                 frame.pc = line_end;
@@ -1030,6 +1067,47 @@ mod tests {
                 .unwrap();
             assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
         }
+    }
+
+    #[test]
+    fn statements_through_params() {
+        let mut program = Program::new();
+        // script Outer: <n> = 2 / <n> = (<n> + 1) / <then> <n>
+        program.add_script(
+            checksum("Outer"),
+            vec![
+                Token::Arg,
+                n("n"),
+                Token::Equals,
+                Token::Integer(2),
+                Token::EndOfLine,
+                Token::Arg,
+                n("n"),
+                Token::Equals,
+                Token::OpenParen,
+                Token::Arg,
+                n("n"),
+                Token::Add,
+                Token::Integer(1),
+                Token::CloseParen,
+                Token::EndOfLine,
+                Token::Arg,
+                n("then"),
+                Token::Arg,
+                n("n"),
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        let params = vec![(Some(checksum("then")), Value::Name(checksum("Report")))];
+        let mut thread = Thread::new(checksum("Outer"), params);
+        thread.run(&program, &mut log, 0.0);
+        let report = log
+            .calls
+            .iter()
+            .find(|c| c.1 == checksum("Report"))
+            .unwrap();
+        assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
     }
 
     #[test]

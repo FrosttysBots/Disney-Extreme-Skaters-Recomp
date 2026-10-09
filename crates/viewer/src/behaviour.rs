@@ -95,6 +95,9 @@ struct State {
     flags: Vec<u32>,
     /// Turning to face something: from, to, seconds in and how long.
     turn: Option<(Quat, Quat, f32, f32)>,
+    /// Moving to a spot without turning to face the way (`Obj_MoveToPos`:
+    /// a door sliding open).
+    slide: bool,
     /// Kept on the ground below as it moves (`Obj_StickToGround distAbove
     /// distBelow [pitch]`): how far up and down to look (units), and
     /// whether to tip with the slope.
@@ -155,6 +158,9 @@ pub struct Behaviour {
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
     level_runner: usize,
+    /// Where the level's moving pieces start among the objects (one each,
+    /// in `LevelNodes::movers` order).
+    movers: usize,
     /// Every named node's name as written (for `create prefix = "..."`).
     labels: Vec<(u32, String)>,
     /// The goal manager: the goal on (its id), the flags its scripts have
@@ -209,11 +215,35 @@ impl Behaviour {
                 stick: None,
                 flags: Vec::new(),
                 turn: None,
+                slide: false,
             })
             .collect();
+        // Then the level's pieces that move (`LevelObject`s), objects too.
+        let mut states: Vec<State> = states;
+        let movers = states.len();
+        for m in &nodes.movers {
+            states.push(State {
+                position: m.position,
+                rotation: m.rotation(),
+                alive: m.created_at_start,
+                dirty: false,
+                path: Path::default(),
+                moving: None,
+                inner: 0.0,
+                outer: 0.0,
+                was_inside: false,
+                was_outside: true,
+                exceptions: Vec::new(),
+                spin: 0.0,
+                hover: None,
+                stick: None,
+                flags: Vec::new(),
+                turn: None,
+                slide: false,
+            });
+        }
         // One more, the level's own: what runs scripts that are nobody's
         // (a gap's, a goal's).
-        let mut states: Vec<State> = states;
         let level_runner = states.len();
         states.push(State {
             position: Vec3::ZERO,
@@ -232,6 +262,7 @@ impl Behaviour {
             stick: None,
             flags: Vec::new(),
             turn: None,
+            slide: false,
         });
         let threads = nodes
             .objects
@@ -248,16 +279,25 @@ impl Behaviour {
             by_name: nodes
                 .objects
                 .iter()
+                .map(|o| o.name)
+                .chain(nodes.movers.iter().map(|m| m.name))
                 .enumerate()
-                .map(|(i, o)| (o.name, i))
+                .map(|(i, name)| (name, i))
                 .collect(),
+            movers,
             node_by_name: nodes
                 .nodes
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (n.name, i))
                 .collect(),
-            object_node: nodes.objects.iter().map(|o| o.node).chain([0]).collect(),
+            object_node: nodes
+                .objects
+                .iter()
+                .map(|o| o.node)
+                .chain(nodes.movers.iter().map(|_| 0))
+                .chain([0])
+                .collect(),
             level_runner,
             labels: nodes
                 .labels
@@ -278,12 +318,14 @@ impl Behaviour {
                 .objects
                 .iter()
                 .map(|o| o.script)
+                .chain(nodes.movers.iter().map(|_| None))
                 .chain([None])
                 .collect(),
             goal: nodes
                 .objects
                 .iter()
                 .map(|o| !o.created_at_start)
+                .chain(nodes.movers.iter().map(|_| false))
                 .chain([false])
                 .collect(),
             goal_shown: None,
@@ -505,7 +547,7 @@ impl Behaviour {
         let along = to - state.position;
         let distance = along.length();
         let step = speed * dt;
-        if distance > 1e-3 {
+        if distance > 1e-3 && !state.slide {
             let direction = if orient {
                 along / distance
             } else {
@@ -527,6 +569,17 @@ impl Behaviour {
     /// Where an object is now (in mesh space).
     pub fn position(&self, object: usize) -> Vec3 {
         self.states[object].position
+    }
+
+    /// The object standing for the level's moving piece `i` (in
+    /// `LevelNodes::movers` order).
+    pub fn mover(&self, i: usize) -> usize {
+        self.movers + i
+    }
+
+    /// How an object's turned now.
+    pub fn rotation(&self, object: usize) -> Quat {
+        self.states[object].rotation
     }
 
     /// Which way an object faces (models face +Z) and how fast it's going
@@ -801,6 +854,7 @@ impl Host for Commands<'_> {
                 match args.get(c("speed")).and_then(Value::as_f32) {
                     Some(speed) if speed > 0.0 => {
                         state.moving = Some((p, speed * MPH, args.has_flag(c("orient"))));
+                        state.slide = false;
                     }
                     _ => {
                         state.position = p;
@@ -826,6 +880,59 @@ impl Host for Commands<'_> {
                     .filter(|t| *t > 0.0)
                     .unwrap_or(10.0);
                 state.moving = Some((to, offset.length() / time, true));
+                state.slide = false;
+            }
+        } else if name == c("Obj_MoveToPos") {
+            // `Obj_MoveToPos (x, y, z) time = t seconds`: to a spot, over
+            // that long, facing as it was. (These come from the levels'
+            // animation exports, already in mesh space: Pizza's alien
+            // heads move to where their nodes put them with Z unmirrored.)
+            let to = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Vector(v)) => Some(Vec3::from(*v)),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(to) = to {
+                let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
+                let state = &mut b.states[object];
+                let distance = state.position.distance(to);
+                if time <= 0.0 || distance < 1e-3 {
+                    state.position = to;
+                    state.moving = None;
+                    state.dirty = true;
+                } else {
+                    state.moving = Some((to, distance / time, false));
+                    state.slide = true;
+                }
+            }
+        } else if name == c("Obj_Rotate") {
+            // `Obj_Rotate absolute = (axis) axis_angle = degrees time = t`:
+            // to that orientation in the world, over that long. The axis
+            // is the animation export's, Z up: Pizza's alien heads, placed
+            // turned half round, start at about 180 degrees round (0, 0,
+            // 1). In mesh space that's about Y, the other way round, as
+            // the nodes' headings are.
+            let axis = match args.get(c("absolute")) {
+                Some(Value::Vector([x, y, z])) => Vec3::new(*x, *z, *y).normalize_or_zero(),
+                _ => Vec3::ZERO,
+            };
+            if axis != Vec3::ZERO {
+                let angle = args
+                    .get(c("axis_angle"))
+                    .and_then(Value::as_f32)
+                    .unwrap_or(0.0)
+                    .to_radians();
+                let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
+                let state = &mut b.states[object];
+                let to = Quat::from_axis_angle(axis, -angle);
+                if time > 0.0 {
+                    state.turn = Some((state.rotation, to, 0.0, time));
+                } else {
+                    state.rotation = to;
+                    state.dirty = true;
+                }
             }
         } else if name == c("Obj_LookAtNode") {
             let node = named("Name").and_then(|n| b.node_by_name.get(&n).copied());
@@ -1175,6 +1282,9 @@ impl Host for Commands<'_> {
             }
         } else if name == c("Obj_WaitMove") {
             let state = &b.states[object];
+            if let (None, Some((_, _, t, length))) = (state.moving, state.turn) {
+                return Outcome::Wait((length - t).max(0.0));
+            }
             if let Some((to, speed, _)) = state.moving {
                 if speed > 0.0 {
                     return Outcome::Wait((to - state.position).length() / speed + 1.0 / 60.0);

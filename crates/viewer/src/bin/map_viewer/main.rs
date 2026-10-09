@@ -278,6 +278,8 @@ struct LoadedLevel {
     sector_centres: HashMap<u32, Vec3>,
     /// The bouncy objects, knocked about.
     bouncies: Vec<BouncyState>,
+    /// The level's pieces scripts move.
+    movers: Vec<MoverState>,
     /// The breakables (trigger object: its script, what it shatters, its
     /// sound) and the triggers already broken.
     breakables: HashMap<u32, (u32, Vec<u32>, Option<u32>)>,
@@ -351,11 +353,16 @@ fn load_level(
         .collect();
     // Sectors that aren't there at the start go in their own layer.
     let hidden = &nodes.hidden_sectors;
+    // The pieces scripts move are in layers of their own too.
+    let mover_names: HashSet<u32> = nodes.movers.iter().map(|m| m.name).collect();
     let world = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
-        !hidden.contains(&s) && !breakable_sectors.contains(&s) && !bouncy_names.contains(&s)
+        !hidden.contains(&s)
+            && !breakable_sectors.contains(&s)
+            && !bouncy_names.contains(&s)
+            && !mover_names.contains(&s)
     })?;
     let goal_geometry = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
-        hidden.contains(&s)
+        hidden.contains(&s) && !mover_names.contains(&s)
     })?;
     let sets = data.animation_sets().unwrap_or_else(|e| {
         eprintln!("warning: no pedestrian animations: {e:#}");
@@ -523,6 +530,33 @@ fn load_level(
             since: f32::INFINITY,
         });
     }
+    // The level's moving pieces, each in a layer of its own, shown while
+    // its object is there and put where it is.
+    let mut movers = Vec::new();
+    for (i, m) in nodes.movers.iter().enumerate() {
+        let Ok(mesh) =
+            Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == m.name)
+        else {
+            continue;
+        };
+        if mesh.vertices.is_empty() {
+            continue;
+        }
+        let layer = renderer.add_layer(&mesh, false);
+        renderer.show_layer(layer, m.created_at_start);
+        if let (false, Some(world)) = (m.created_at_start, skate_world.as_mut()) {
+            world.disable(m.name);
+        }
+        movers.push(MoverState {
+            object: behaviour.mover(i),
+            name: m.name,
+            layer,
+            base: mesh.vertices,
+            pivot: m.position,
+            placed: m.rotation(),
+            last: (m.created_at_start, m.position, m.rotation()),
+        });
+    }
     // The breakable sectors, shown until broken, and where each is.
     let mut sector_layers = HashMap::new();
     let mut sector_centres = HashMap::new();
@@ -580,6 +614,7 @@ fn load_level(
             sector_layers,
             sector_centres,
             bouncies,
+            movers,
             breakables,
             touch_scripts,
             broken: HashSet::new(),
@@ -733,13 +768,49 @@ impl LoadedLevel {
     /// Runs objects' scripts for `dt` seconds, shows or hides the object
     /// layers, poses the pedestrians shown and animates vertex colors.
     fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32, dt: f32) {
-        for (goal, copy, placement) in self.behaviour.update(
+        let placed = self.behaviour.update(
             &mut self.objects,
             seconds,
             dt,
             goal_objects,
             self.world.as_ref(),
-        ) {
+        );
+        // The level's pieces the scripts moved, made or took away.
+        for m in &mut self.movers {
+            let now = (
+                self.behaviour.alive(m.object),
+                self.behaviour.position(m.object),
+                self.behaviour.rotation(m.object),
+            );
+            if now == m.last {
+                continue;
+            }
+            if now.0 != m.last.0 {
+                self.renderer.show_layer(m.layer, now.0);
+                if let Some(world) = &mut self.world {
+                    if now.0 {
+                        world.enable(m.name);
+                    } else {
+                        world.disable(m.name);
+                    }
+                }
+            }
+            if (now.1, now.2) != (m.last.1, m.last.2) {
+                let turn = now.2 * m.placed.inverse();
+                let moved: Vec<desa_viewer::level::Vertex> = m
+                    .base
+                    .iter()
+                    .map(|v| desa_viewer::level::Vertex {
+                        position: (now.1 + turn * (Vec3::from(v.position) - m.pivot)).to_array(),
+                        normal: (turn * Vec3::from(v.normal)).to_array(),
+                        ..*v
+                    })
+                    .collect();
+                self.renderer.update_layer(m.layer, 0, &moved);
+            }
+            m.last = now;
+        }
+        for (goal, copy, placement) in placed {
             let (props, layer) = if goal {
                 (&self.objects.goal_props, self.layers.goal_props)
             } else {
@@ -915,6 +986,20 @@ struct BouncyState {
     spin: Vec3,
     moving: bool,
     since: f32,
+}
+
+/// A piece of the level scripts move (`Obj_MoveToPos`, `Obj_Rotate`,
+/// `create`, `kill`): its object, name, layer and vertices as stored,
+/// where and how it was placed, and how it was last drawn (there?, where,
+/// how turned).
+struct MoverState {
+    object: usize,
+    name: u32,
+    layer: Option<usize>,
+    base: Vec<desa_viewer::level::Vertex>,
+    pivot: Vec3,
+    placed: Quat,
+    last: (bool, Vec3, Quat),
 }
 
 /// Units a foot (the bouncy objects' settings are in feet).
