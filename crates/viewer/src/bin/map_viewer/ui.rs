@@ -5,6 +5,7 @@ use desa_viewer::collision::CollisionView;
 use desa_viewer::nodes::Spawn;
 use desa_viewer::source::LevelInfo;
 
+#[derive(Clone, Copy)]
 pub enum Action {
     OpenDisc,
     OpenFolder,
@@ -26,6 +27,9 @@ pub enum Action {
     Restart,
     /// The level's race goal (again).
     StartRace,
+    /// The goal offered by its pro, or not now.
+    TakeGoal,
+    NotNow,
     /// Through the warp the skater's at, or not.
     Warp,
     StayHere,
@@ -122,6 +126,8 @@ pub struct CharacterModel {
     pub warp_prompt: Option<String>,
     /// Skating paused.
     pub paused: bool,
+    /// At a goal's pro: what they offer.
+    pub goal_prompt: Option<String>,
     /// This session's skating, line by line.
     pub session: Vec<String>,
     /// The map in the corner: shown or not, a new level's picture to
@@ -755,6 +761,26 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                                 )
                                 .small(),
                             );
+                        });
+                    });
+                });
+        }
+        if let Some(goal) = &model.character.goal_prompt {
+            egui::Area::new(egui::Id::new("goal_offer"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(goal);
+                            ui.horizontal(|ui| {
+                                if ui.button("Start").clicked() {
+                                    actions.push(Action::TakeGoal);
+                                }
+                                if ui.button("Not now").clicked() {
+                                    actions.push(Action::NotNow);
+                                }
+                            });
+                            ui.label(egui::RichText::new("Enter to start, Esc not now").small());
                         });
                     });
                 });

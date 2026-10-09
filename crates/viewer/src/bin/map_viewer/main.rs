@@ -253,6 +253,8 @@ struct LoadedLevel {
     colors: [ColorAnimation; 3],
     /// The level's warps to other levels.
     portals: Vec<Portal>,
+    /// The pros offering the goals the viewer plays.
+    pros: Vec<GoalPro>,
     /// What each teleporter plays and says.
     teleport_effects: HashMap<u32, desa_viewer::triggers::TeleportEffect>,
     /// The level's scene and textures, kept to make a layer for a hidden
@@ -441,6 +443,7 @@ fn load_level(
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
+    let pros = goal_pros(behaviour.program(), &info.id, &behaviour);
     // The bouncy objects, each in a layer of its own.
     let mut bouncies = Vec::new();
     for b in nodes.bouncies.iter().filter(|b| b.created_at_start) {
@@ -529,6 +532,7 @@ fn load_level(
             behaviour,
             world: skate_world,
             colors,
+            pros,
             teleport_effects,
             portals,
             scene: files.scene.clone(),
@@ -771,6 +775,43 @@ fn blob_shadow(at: Vec3, radius: f32, world: &skate::World) -> Vec<collision::Co
         })
         .collect()
 }
+
+/// A goal's pro: their object, the goal they offer (its words and how to
+/// start it), and whether it's been turned down till the skater's gone.
+struct GoalPro {
+    object: usize,
+    title: String,
+    start: ui::Action,
+    declined: bool,
+}
+
+/// The pros of the goals the viewer plays (`trigger_obj_id`).
+fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> Vec<GoalPro> {
+    let goals = desa_viewer::goals::level_goals(program, level);
+    [
+        ("HighScore", "HighScore", ui::Action::StartRun(Some(false))),
+        ("ProScore", "ProScore", ui::Action::StartRun(Some(true))),
+        ("SKATE", "Skate", ui::Action::StartLetters),
+        ("Race", "Race", ui::Action::StartRace),
+    ]
+    .into_iter()
+    .filter_map(|(script, kind, start)| {
+        let object = behaviour.object(desa_viewer::goals::goal_pro(program, level, script)?)?;
+        let title = goals.iter().find(|g| g.kind == kind)?.text.clone();
+        Some(GoalPro {
+            object,
+            title,
+            start,
+            declined: false,
+        })
+    })
+    .collect()
+}
+
+/// How near a pro the skater's offered their goal, and how far it has to
+/// go after saying not now.
+const PRO_NEAR: f32 = 10.0 * 12.0;
+const PRO_LEAVE: f32 = 25.0 * 12.0;
 
 /// A bouncy object: its settings, layer and vertices as stored, where it
 /// rests, how far it reaches and half its height, and how it's moving
@@ -1152,6 +1193,8 @@ struct App<'a> {
     replay_eye: Option<Vec3>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
+    /// The goal a pro's offering (its place in the level's pros).
+    goal_offer: Option<usize>,
     /// The warp offered (the level's portal) and, once taken, to skate on
     /// arriving.
     warp_offer: Option<usize>,
@@ -1267,6 +1310,7 @@ impl<'a> App<'a> {
                     record_message: None,
                     warp_prompt: None,
                     paused: false,
+                    goal_prompt: None,
                     session: Vec::new(),
                     switch: false,
                     show_map: true,
@@ -1309,6 +1353,7 @@ impl<'a> App<'a> {
             pad_look: glam::Vec2::ZERO,
             pad_start: false,
             warp_offer: None,
+            goal_offer: None,
             skate_on_load: false,
             collecting: None,
             combo_lengths: [0.0; 3],
@@ -1622,6 +1667,8 @@ impl<'a> App<'a> {
         self.run = None;
         self.warp_offer = None;
         self.model.character.warp_prompt = None;
+        self.goal_offer = None;
+        self.model.character.goal_prompt = None;
         self.model.character.paused = false;
         self.look = glam::Vec2::ZERO;
         self.session.last_position = None;
@@ -2240,6 +2287,65 @@ impl<'a> App<'a> {
             size: (map.width as f32, map.height as f32),
             markers,
         });
+    }
+
+    /// The goals' pros: standing in the level while skating (with no goal
+    /// on), and offering their goal when the skater rolls up.
+    fn update_pros(&mut self) {
+        let skating = self.skating.as_ref().map(|(s, ..)| s.position);
+        let busy = self.run.is_some() || self.letters.is_some() || self.racing.is_some();
+        let Some(level) = &mut self.level else { return };
+        for (i, pro) in level.pros.iter_mut().enumerate() {
+            let shown = skating.is_some();
+            if level.behaviour.alive(pro.object) != shown {
+                level.behaviour.set_alive(pro.object, shown);
+            }
+            let Some(at) = skating else {
+                pro.declined = false;
+                continue;
+            };
+            let near = at.distance(level.behaviour.position(pro.object));
+            if pro.declined {
+                pro.declined = near < PRO_LEAVE;
+                continue;
+            }
+            if !busy && self.goal_offer.is_none() && self.warp_offer.is_none() && near < PRO_NEAR {
+                self.goal_offer = Some(i);
+                self.model.character.goal_prompt = Some(pro.title.clone());
+            }
+        }
+    }
+
+    /// Starts the goal offered.
+    fn take_goal(&mut self) {
+        let Some(i) = self.goal_offer.take() else {
+            return;
+        };
+        self.model.character.goal_prompt = None;
+        let Some(action) = self
+            .level
+            .as_ref()
+            .and_then(|l| l.pros.get(i))
+            .map(|p| p.start)
+        else {
+            return;
+        };
+        match action {
+            ui::Action::StartRun(goal) => self.start_run(goal),
+            ui::Action::StartLetters => self.start_letters(),
+            ui::Action::StartRace => self.start_race(),
+            _ => {}
+        }
+    }
+
+    /// Turns the goal down: not offered again till the skater's gone off.
+    fn not_now(&mut self) {
+        if let Some(i) = self.goal_offer.take() {
+            if let Some(pro) = self.level.as_mut().and_then(|l| l.pros.get_mut(i)) {
+                pro.declined = true;
+            }
+        }
+        self.model.character.goal_prompt = None;
     }
 
     /// Goes through the warp offered: that level loads, and skating goes on
@@ -2975,8 +3081,9 @@ impl<'a> App<'a> {
             self.play_replay(dt);
             return;
         }
-        // Held still while a warp's offered (`PauseSkaters`) or paused.
-        if self.warp_offer.is_some() || self.model.character.paused {
+        // Held still while a warp or goal's offered (`PauseSkaters`) or
+        // paused.
+        if self.warp_offer.is_some() || self.goal_offer.is_some() || self.model.character.paused {
             // (The pad's still read, for Start.)
             let _ = self.pad_input();
             return;
@@ -3674,6 +3781,7 @@ impl<'a> App<'a> {
             self.update_skitch();
             self.update_records(dt);
             self.update_portals(dt);
+            self.update_pros();
         }
         self.update_map();
         self.apply_camera();
@@ -3838,6 +3946,8 @@ impl<'a> App<'a> {
                 ui::Action::Pause => self.toggle_pause(),
                 ui::Action::Restart => self.restart(),
                 ui::Action::StayHere => self.stay_here(),
+                ui::Action::TakeGoal => self.take_goal(),
+                ui::Action::NotNow => self.not_now(),
                 ui::Action::Replay => {
                     if !self.recording.is_empty() {
                         self.replay = Some(0.0);
@@ -3906,6 +4016,15 @@ impl<'a> App<'a> {
         }
         if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
             self.toggle_pause();
+            return;
+        }
+        // At a goal's pro: Enter starts it, Esc not now.
+        if self.goal_offer.is_some() {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter if !repeat => self.take_goal(),
+                KeyCode::Escape if !repeat => self.not_now(),
+                _ => {}
+            }
             return;
         }
         // At a warp: Enter goes through, Esc stays.
@@ -4310,6 +4429,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_race(1.0 / 60.0);
                 app.update_breakables();
                 app.update_bouncies(1.0 / 60.0);
+                app.update_pros();
                 app.update_collecting();
                 app.update_skitch();
                 app.update_records(1.0 / 60.0);

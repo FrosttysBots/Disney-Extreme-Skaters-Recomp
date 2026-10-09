@@ -288,6 +288,13 @@ pub fn race(program: &Program, level: &str) -> Option<Race> {
     })
 }
 
+/// The goal's pro (`trigger_obj_id`, like `TRG_G_HS_Pro`): the pedestrian
+/// who stands where the goal's offered. `kind` as in `<level>_AddGoal_<kind>`.
+pub fn goal_pro(program: &Program, level: &str, kind: &str) -> Option<u32> {
+    let params = goal_params(program, level, kind)?;
+    param(&params, program, "trigger_obj_id").and_then(Value::as_name)
+}
+
 /// A goal to score so many points in the time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScoreGoal {

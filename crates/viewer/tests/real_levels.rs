@@ -188,6 +188,24 @@ fn real_level_camera_paths() {
             breaks.len(),
             killed.len()
         );
+        let pros: Vec<String> = ["HighScore", "ProScore", "SKATE", "Race"]
+            .iter()
+            .filter_map(|kind| {
+                let pro = desa_viewer::goals::goal_pro(behaviour.program(), &level.id, kind)?;
+                let object = behaviour.object(pro);
+                Some(format!(
+                    "{kind}: {}",
+                    object.map_or("not an object".to_string(), |o| format!(
+                        "{} at {:.0} {:.0} {:.0}",
+                        nodes.objects[o].label,
+                        nodes.objects[o].position.x,
+                        nodes.objects[o].position.y,
+                        nodes.objects[o].position.z
+                    ))
+                ))
+            })
+            .collect();
+        println!("{}: pros {pros:?}", level.id);
         let warps = desa_viewer::warps::warps(behaviour.program(), &nodes);
         println!(
             "{}: warps {:?}",
