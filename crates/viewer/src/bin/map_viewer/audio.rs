@@ -204,6 +204,22 @@ impl Audio {
         self.voice = Some(player);
     }
 
+    /// A goal pedestrian's line (a `.dsp` sound), over whatever the
+    /// character was saying.
+    pub fn say_line(&mut self, data: &[u8]) {
+        let Ok(sound) = Sound::parse(data) else {
+            return;
+        };
+        let clip = Clip {
+            rate: sound.sample_rate,
+            samples: sound.floats(),
+        };
+        let player = Player::connect_new(self.sink.mixer());
+        player.set_volume(MASTER * 1.3 * self.effects);
+        player.append(clip.buffer());
+        self.voice = Some(player);
+    }
+
     /// The panel's volumes, 0 to 1: the effects and the music (playing
     /// ones follow at once).
     pub fn set_volumes(&mut self, effects: f32, music: f32) {

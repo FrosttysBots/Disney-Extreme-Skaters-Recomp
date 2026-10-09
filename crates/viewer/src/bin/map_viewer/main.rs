@@ -1162,8 +1162,10 @@ struct App<'a> {
     /// them again (seconds) while a replay plays.
     recording: Vec<ReplayFrame>,
     replay: Option<f32>,
-    /// The S-K-A-T-E letters goal under way.
+    /// The S-K-A-T-E letters goal under way, and what its pro says for
+    /// each letter.
     letters: Option<LetterRun>,
+    letter_lines: [Option<u32>; 5],
     /// The race goal under way.
     racing: Option<RaceRun>,
     /// The camera turned to look round (yaw, and up or down) and the right
@@ -1198,6 +1200,10 @@ struct App<'a> {
     /// A warp's level, to load when its camera path's over.
     load_after_cutscene: Option<usize>,
     success_camera: Option<u32>,
+    /// Where the goal pedestrians' voice lines are (read once), and lines
+    /// to say.
+    goal_streams: Option<HashMap<u32, (u64, u64)>>,
+    lines_to_say: Vec<u32>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The goal a pro's offering (its place in the level's pros).
@@ -1344,8 +1350,11 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            letter_lines: [None; 5],
             racing: None,
             photo: false,
+            goal_streams: None,
+            lines_to_say: Vec::new(),
             cutscene: false,
             cutscene_request: None,
             load_after_cutscene: None,
@@ -1530,6 +1539,37 @@ impl<'a> App<'a> {
         if !self.cutscene {
             if let Some(index) = self.load_after_cutscene.take() {
                 self.start_load(index);
+            }
+        }
+    }
+
+    /// Says the voice lines asked for: the goal pedestrians' own
+    /// (`streams/goalpeds`), read off the disc as they're wanted.
+    fn say_lines(&mut self) {
+        if let Some(level) = &mut self.level {
+            self.lines_to_say
+                .extend(std::mem::take(&mut level.behaviour.voice_lines));
+        }
+        if self.lines_to_say.is_empty() {
+            return;
+        }
+        let lines = std::mem::take(&mut self.lines_to_say);
+        let (Some(audio), Some(data)) = (
+            self.audio.as_mut().filter(|_| self.model.character.sound),
+            &mut self.data,
+        ) else {
+            return;
+        };
+        if self.goal_streams.is_none() {
+            self.goal_streams = Some(data.goal_streams().unwrap_or_default());
+        }
+        let Some(streams) = &self.goal_streams else {
+            return;
+        };
+        // The last asked for (a newer line cuts an older one off).
+        if let Some(range) = lines.iter().rev().find_map(|l| streams.get(l)) {
+            if let Ok(Some(sound)) = data.stream(*range) {
+                audio.say_line(&sound);
             }
         }
     }
@@ -2790,6 +2830,7 @@ impl<'a> App<'a> {
                 .run_script(object, qb::checksum("bounce_skate_letter"));
         }
         self.goal_cutscenes("SKATE");
+        self.letter_lines = goal.streams;
         self.letters = Some(LetterRun {
             objects,
             got: [false; 5],
@@ -2824,6 +2865,7 @@ impl<'a> App<'a> {
             run.got[i] = true;
             level.behaviour.set_alive(object, false);
             let letter = "SKATE".chars().nth(i).unwrap_or('?');
+            self.lines_to_say.extend(self.letter_lines[i]);
             skater.message = Some((letter.to_string(), 1.0));
             if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
                 audio.play_named(qb::checksum("GoalDone"), 1.0);
@@ -3858,6 +3900,7 @@ impl<'a> App<'a> {
         self.update(dt);
         self.skate(dt);
         self.update_cutscene();
+        self.say_lines();
         // Paused (or a goal's camera path playing): the clocks stop too.
         if !self.model.character.paused && !self.cutscene {
             self.update_run(dt);

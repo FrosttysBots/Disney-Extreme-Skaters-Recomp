@@ -79,6 +79,17 @@ fn real_level_camera_paths() {
         if has_letters {
             let goal = letters.expect("a letters goal");
             assert!(goal.letters.iter().all(|l| behaviour.object(*l).is_some()));
+            // The pro's line for each letter, where the goal names them.
+            let streams = data.goal_streams().unwrap();
+            let named = goal.streams.iter().flatten().count();
+            let mut said = 0;
+            for line in goal.streams.iter().flatten() {
+                let range = streams.get(line).expect("a letter line on the disc");
+                let sound = data.stream(*range).unwrap().expect("the line's sound");
+                assert!(ngc_sound::Sound::parse(&sound).is_ok());
+                said += 1;
+            }
+            println!("{}: {said} of {named} letter lines", level.id);
         }
         // Each character's collectibles on the levels of its world.
         let mut collectibles = 0;

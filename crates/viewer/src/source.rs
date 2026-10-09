@@ -501,23 +501,60 @@ impl GameData {
         Ok(out)
     }
 
+    /// The goal pedestrians' voice lines (`streams/goalpeds/NAME`): where
+    /// each is in `streams.wad`, by its name's checksum (as goal scripts
+    /// name them: `S_Stream = hench_beach_Letter_S`).
+    pub fn goal_streams(&mut self) -> Result<HashMap<u32, (u64, u64)>> {
+        let prefix = r"\streams\goalpeds\";
+        let Some(index) = self.stream_file("streams.hed", None)? else {
+            return Ok(HashMap::new());
+        };
+        let mut out = HashMap::new();
+        let mut at = 0;
+        while at + 8 <= index.len() {
+            let offset = u32::from_le_bytes(index[at..at + 4].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(index[at + 4..at + 8].try_into().unwrap()) as u64;
+            at += 8;
+            let Some(end) = index[at..].iter().position(|&b| b == 0) else {
+                break;
+            };
+            let name = String::from_utf8_lossy(&index[at..at + end]).to_ascii_lowercase();
+            at = (at + end + 4) & !3;
+            if name.is_empty() {
+                break;
+            }
+            if let Some(stem) = name.strip_prefix(prefix) {
+                out.insert(qb::checksum(stem), (offset, size));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One voice line out of `streams.wad`.
+    pub fn stream(&mut self, (offset, size): (u64, u64)) -> Result<Option<Vec<u8>>> {
+        self.stream_file("streams.wad", Some((offset, size)))
+    }
+
     /// A file of the `streams` folder, or a range of it.
     fn stream_file(&mut self, name: &str, range: Option<(u64, u64)>) -> Result<Option<Vec<u8>>> {
         use std::io::{Read, Seek, SeekFrom};
         let data = match self {
             GameData::Disc { disc, .. } => {
-                let path = disc
+                let file = disc
                     .fst()
                     .files()
                     .find(|n| n.path.to_ascii_lowercase() == format!("streams/{name}"))
-                    .map(|n| n.path.clone());
-                let Some(path) = path else { return Ok(None) };
-                let whole = disc.read_file(&path)?;
+                    .and_then(|n| Some((n.path.clone(), n.file_range()?)));
+                let Some((path, (start, length))) = file else {
+                    return Ok(None);
+                };
                 match range {
-                    Some((offset, size)) => whole
-                        .get(offset as usize..(offset + size) as usize)
-                        .map(<[u8]>::to_vec),
-                    None => Some(whole),
+                    // Just the part wanted, straight off the disc.
+                    Some((offset, size)) if offset + size <= length => {
+                        Some(disc.read_range(start + offset, size)?)
+                    }
+                    Some(_) => None,
+                    None => Some(disc.read_file(&path)?),
                 }
             }
             GameData::Folder(dir) => {

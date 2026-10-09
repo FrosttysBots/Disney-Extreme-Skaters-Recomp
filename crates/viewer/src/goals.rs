@@ -25,6 +25,8 @@ pub struct SkateLetters {
     pub letters: [u32; 5],
     /// Where the goal starts again (`restart_node`), if it says.
     pub restart: Option<u32>,
+    /// What the pro says as each letter's got (`S_Stream`...`E_Stream`).
+    pub streams: [Option<u32>; 5],
 }
 
 /// Catches the goal manager's goals (and each one's type, as
@@ -375,5 +377,6 @@ pub fn skate_letters(program: &Program, level: &str) -> Option<SkateLetters> {
             name("e_obj_id")?,
         ],
         restart: name("restart_node"),
+        streams: ["S_Stream", "K_Stream", "A_Stream", "T_Stream", "E_Stream"].map(name),
     })
 }

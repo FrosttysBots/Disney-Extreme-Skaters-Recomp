@@ -129,6 +129,8 @@ pub struct Behaviour {
     /// Names scripts created or killed that aren't objects (particle
     /// emitters, sectors), for the viewer: (name, created?).
     pub other_creates: Vec<(u32, bool)>,
+    /// Voice lines scripts asked for (`midgoalvoiceover stream = name`).
+    pub voice_lines: Vec<u32>,
 }
 
 impl Behaviour {
@@ -198,6 +200,7 @@ impl Behaviour {
             starting: Vec::new(),
             sounds: Vec::new(),
             other_creates: Vec::new(),
+            voice_lines: Vec::new(),
         }
     }
 
@@ -750,6 +753,10 @@ impl Host for Commands<'_> {
             };
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
+        } else if name == c("midgoalvoiceover") {
+            if let Some(stream) = named("stream") {
+                b.voice_lines.push(stream);
+            }
         } else if name == c("LocalSkaterExists") {
             return Outcome::Done(b.skater.is_some());
         } else if name == c("Obj_LookAtObject") {
