@@ -32,6 +32,9 @@ pub type Params = Vec<(Option<u32>, Value)>;
 pub struct Program {
     scripts: HashMap<u32, Vec<Token>>,
     values: HashMap<u32, Value>,
+    /// Each script's default parameters, from its header (`script TransAm
+    /// DefaultSpeed = 30`): a call gets them where it doesn't pass its own.
+    defaults: HashMap<u32, Params>,
 }
 
 impl Program {
@@ -49,10 +52,53 @@ impl Program {
                     tokens: range,
                 } => {
                     // Skip `script name` and the closing `endscript`.
-                    let body = tokens[range.start + 2..range.end - 1]
+                    let mut body: Vec<Token> = tokens[range.start + 2..range.end - 1]
                         .iter()
                         .map(|(_, t)| t.clone())
                         .collect();
+                    // The rest of the header: default parameters, to the end
+                    // of the line or, written as a struct, to its close.
+                    let header = if body.first() == Some(&Token::StartStruct) {
+                        let mut depth = 0;
+                        body.iter()
+                            .position(|t| {
+                                match t {
+                                    Token::StartStruct => depth += 1,
+                                    Token::EndStruct => depth -= 1,
+                                    _ => {}
+                                }
+                                depth == 0
+                            })
+                            .map_or(body.len(), |end| end + 1)
+                    } else {
+                        body.iter()
+                            .position(|t| matches!(t, Token::EndOfLine | Token::LineNumber(_)))
+                            .unwrap_or(body.len())
+                    };
+                    if header > 0 {
+                        let mut items = vec![(0, Token::StartStruct)];
+                        items.extend(
+                            body[..header]
+                                .iter()
+                                .filter(|t| !matches!(t, Token::EndOfLine | Token::LineNumber(_)))
+                                .cloned()
+                                .map(|t| (0, t)),
+                        );
+                        items.push((0, Token::EndStruct));
+                        let mut at = 0;
+                        if let Ok(Value::Struct(parsed)) = parse_value(&items, &mut at) {
+                            // A header written as a struct gives its fields.
+                            let mut defaults = Vec::new();
+                            for (k, v) in parsed {
+                                match (k, v) {
+                                    (None, Value::Struct(fields)) => defaults.extend(fields),
+                                    item => defaults.push(item),
+                                }
+                            }
+                            self.defaults.insert(name, defaults);
+                        }
+                        body.drain(..header);
+                    }
                     self.scripts.insert(name, body);
                 }
                 Definition::Value { name, value } => {
@@ -81,6 +127,15 @@ impl Program {
         self.scripts.get(&name).map(Vec::as_slice)
     }
 
+    /// A script's default for a parameter, from its header.
+    pub fn default_param(&self, script: u32, key: u32) -> Option<&Value> {
+        self.defaults
+            .get(&script)?
+            .iter()
+            .find(|(k, _)| *k == Some(key))
+            .map(|(_, v)| v)
+    }
+
     pub fn has_script(&self, name: u32) -> bool {
         self.scripts.contains_key(&name)
     }
@@ -106,6 +161,9 @@ pub enum Outcome {
     Done(bool),
     /// The thread should pause this long before going on.
     Wait(f32),
+    /// Finished, handing the script these parameters (as
+    /// `GoalManager_GetGoalParams` does): true in an `if`.
+    Params(Params),
 }
 
 /// Runs commands that aren't scripts: the game (or a viewer) implements
@@ -114,6 +172,25 @@ pub trait Host {
     /// `target` is the object named before a `:`, if any; `args` is a
     /// [`Value::Struct`].
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome;
+
+    /// Whether `target` (before a `:`) is the object this thread runs as:
+    /// `self_object:script` is then an ordinary call.
+    fn is_self(&self, _target: u32) -> bool {
+        false
+    }
+
+    /// A script about to be called: true if the host takes the call
+    /// itself (the script isn't run), as a viewer does for the game's
+    /// screens it doesn't have.
+    fn calling(&mut self, _script: u32, _args: &Value) -> bool {
+        false
+    }
+
+    /// The tags `SetTags` and `GetTags` work on, if the host keeps them
+    /// (a screen element's own); else the thread's.
+    fn tags(&mut self) -> Option<&mut Params> {
+        None
+    }
 }
 
 /// Statements a thread runs at most per [`Thread::run`], so a loop that
@@ -129,11 +206,15 @@ struct Frame {
     /// Open `begin` loops: where the body starts, and how many more times
     /// it runs (`None` until the `repeat` is first reached).
     loops: Vec<(usize, Option<i64>)>,
+    /// Whether the header's defaults are in yet.
+    started: bool,
 }
 
 pub struct Thread {
     frames: Vec<Frame>,
     wait: f32,
+    /// The object's tags (`SetTags`), read back with `GetTags`.
+    tags: Params,
 }
 
 impl Thread {
@@ -144,13 +225,21 @@ impl Thread {
                 pc: 0,
                 params,
                 loops: Vec::new(),
+                started: false,
             }],
             wait: 0.0,
+            tags: Vec::new(),
         }
     }
 
     pub fn is_finished(&self) -> bool {
         self.frames.is_empty()
+    }
+
+    /// The script it was started with (`TerminateObjectsScripts
+    /// script_name = x`), while it runs.
+    pub fn script(&self) -> Option<u32> {
+        self.frames.first().map(|f| f.script)
     }
 
     /// Runs `dt` seconds' worth: counts down a wait, then runs statements
@@ -175,6 +264,21 @@ impl Thread {
             self.frames.pop();
             return;
         };
+        // Starting: the header's defaults for what wasn't passed.
+        if frame.pc == 0 && !frame.started {
+            frame.started = true;
+            for (key, value) in program.defaults.get(&frame.script).into_iter().flatten() {
+                match key {
+                    Some(k) if !frame.params.iter().any(|(p, _)| *p == Some(*k)) => {
+                        frame.params.push((Some(*k), value.clone()));
+                    }
+                    None if !frame.params.iter().any(|(p, v)| p.is_none() && v == value) => {
+                        frame.params.push((None, value.clone()));
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Skip line breaks.
         while matches!(
             body.get(frame.pc),
@@ -216,6 +320,43 @@ impl Thread {
                 frame.pc = skip_branch(body, frame.pc + 1, false);
             }
             Token::EndIf => frame.pc = line_end,
+            // `switch <x>` / `case a` / `default` / `endswitch`: on to the
+            // case that matches (or the default), and from the end of a
+            // case's body out past the endswitch.
+            Token::Switch => {
+                let value = first_value(
+                    frame_line(body, frame.pc + 1, line_end),
+                    &frame.params,
+                    program,
+                );
+                let mut at = line_end;
+                let mut depth = 0;
+                let mut default = None;
+                let target = loop {
+                    let Some(t) = body.get(at) else {
+                        break body.len();
+                    };
+                    match t {
+                        Token::Switch => depth += 1,
+                        Token::EndSwitch if depth > 0 => depth -= 1,
+                        Token::EndSwitch => break default.unwrap_or(self::line_end(body, at)),
+                        Token::Case if depth == 0 => {
+                            let end = self::line_end(body, at);
+                            let case =
+                                first_value(frame_line(body, at + 1, end), &frame.params, program);
+                            if case == value {
+                                break end;
+                            }
+                        }
+                        Token::Default if depth == 0 => default = Some(self::line_end(body, at)),
+                        _ => {}
+                    }
+                    at += 1;
+                };
+                frame.pc = target;
+            }
+            Token::Case | Token::Default => frame.pc = after_switch(body, frame.pc + 1),
+            Token::EndSwitch => frame.pc = line_end,
             Token::Begin => {
                 frame.pc = line_end;
                 frame.loops.push((frame.pc, None));
@@ -261,6 +402,43 @@ impl Thread {
                 set_param(&mut frame.params, name, value);
                 frame.pc = line_end;
             }
+            // `<x> = value`: a parameter set, as `x = value` is.
+            Token::Arg
+                if matches!(body.get(frame.pc + 1), Some(Token::Name(_)))
+                    && body.get(frame.pc + 2) == Some(&Token::Equals) =>
+            {
+                let Some(&Token::Name(name)) = body.get(frame.pc + 1) else {
+                    unreachable!()
+                };
+                let mut args = frame_line(body, frame.pc + 3, line_end).to_vec();
+                args.insert(0, Token::StartStruct);
+                args.push(Token::EndStruct);
+                let value = match resolve(&args, &frame.params, program) {
+                    Value::Struct(mut items) if items.len() == 1 => items.remove(0).1,
+                    other => other,
+                };
+                set_param(&mut frame.params, name, value);
+                frame.pc = line_end;
+            }
+            // `<script> args` or `<object>:command args`: the call named by
+            // a parameter (`<goal_outro_script> <goal_outro_script_params>`).
+            Token::Arg => {
+                let line = frame_line(body, frame.pc, line_end).to_vec();
+                frame.pc = line_end;
+                let named = match line.get(1) {
+                    Some(Token::Name(n)) => frame
+                        .params
+                        .iter()
+                        .find(|(k, _)| *k == Some(*n))
+                        .and_then(|(_, v)| v.as_name()),
+                    _ => None,
+                };
+                if let Some(named) = named {
+                    let mut call = vec![Token::Name(named)];
+                    call.extend_from_slice(&line[2..]);
+                    self.call(program, host, &call);
+                }
+            }
             Token::Name(_) => {
                 let line = frame_line(body, frame.pc, line_end).to_vec();
                 frame.pc = line_end;
@@ -282,16 +460,38 @@ impl Thread {
         tokens.extend_from_slice(args);
         tokens.push(Token::EndStruct);
         let args = resolve(&tokens, &frame.params, program);
-        if target.is_none() && program.has_script(name) {
+        let own = target.is_none_or(|t| host.is_self(t));
+        if own && program.has_script(name) && host.calling(name, &args) {
+            return true;
+        }
+        if own && program.has_script(name) {
             if self.frames.len() < MAX_DEPTH {
-                let Value::Struct(params) = args else {
+                let Value::Struct(items) = args else {
                     return false;
                 };
+                // A struct passed whole (`script { a = 1 b = 2 }`) gives
+                // its fields as the script's parameters.
+                let mut params = Vec::with_capacity(items.len());
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Struct(fields)) => {
+                            for (fk, fv) in fields {
+                                match fk {
+                                    Some(fk) => set_param(&mut params, fk, fv),
+                                    None => params.push((None, fv)),
+                                }
+                            }
+                        }
+                        (Some(k), v) => set_param(&mut params, k, v),
+                        (None, v) => params.push((None, v)),
+                    }
+                }
                 self.frames.push(Frame {
                     script: name,
                     pc: 0,
                     params,
                     loops: Vec::new(),
+                    started: false,
                 });
             }
             return true;
@@ -300,10 +500,232 @@ impl Thread {
             self.wait += wait_seconds(&args);
             return true;
         }
+        // Built in: whether the script was given a parameter, and the
+        // object's tags.
+        if target.is_none() && name == checksum("GotParam") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let Some(Value::Name(wanted)) = items.iter().find(|(k, _)| k.is_none()).map(|(_, v)| v)
+            else {
+                return false;
+            };
+            let frame = self.frames.last().unwrap();
+            return frame
+                .params
+                .iter()
+                .any(|(k, v)| *k == Some(*wanted) || (k.is_none() && *v == Value::Name(*wanted)));
+        }
+        if target.is_none() && name == checksum("SetTags") {
+            // (The host's tags if it keeps them: a screen element's.)
+            let tags = match host.tags() {
+                Some(tags) => tags,
+                None => &mut self.tags,
+            };
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    if let Some(k) = k {
+                        set_param(tags, k, v);
+                    }
+                }
+            }
+            return true;
+        }
+        if target.is_none() && name == checksum("GetTags") {
+            let tags = match host.tags() {
+                Some(tags) => tags.clone(),
+                None => self.tags.clone(),
+            };
+            let frame = self.frames.last_mut().unwrap();
+            for (k, v) in tags {
+                if let Some(k) = k {
+                    set_param(&mut frame.params, k, v);
+                }
+            }
+            return true;
+        }
+        if target.is_none() && (name == checksum("printf") || name == checksum("printstruct")) {
+            return true;
+        }
+        // Built in: text made from a pattern (`FormatText TextName = msg
+        // "%i of %n" i = 3 n = 10`), or a name made so (`ChecksumName`).
+        if target.is_none() && name == checksum("FormatText") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let pattern = items.iter().find_map(|(k, v)| match (k, v) {
+                (None, Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                _ => None,
+            });
+            let (Some(pattern), Some((into, as_name))) = (
+                pattern,
+                args.get(checksum("TextName"))
+                    .and_then(Value::as_name)
+                    .map(|n| (n, false))
+                    .or_else(|| {
+                        args.get(checksum("ChecksumName"))
+                            .and_then(Value::as_name)
+                            .map(|n| (n, true))
+                    }),
+            ) else {
+                return false;
+            };
+            let mut text = String::new();
+            let mut chars = pattern.chars();
+            while let Some(ch) = chars.next() {
+                if ch != '%' {
+                    text.push(ch);
+                    continue;
+                }
+                let Some(key) = chars.next() else { break };
+                match args.get(checksum(&key.to_string())) {
+                    Some(Value::Integer(i)) => text.push_str(&i.to_string()),
+                    Some(Value::Float(f)) => text.push_str(&f.to_string()),
+                    Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
+                    Some(Value::Name(n)) => {
+                        if let Some(Value::String(s) | Value::LocalString(s)) = program.value(*n) {
+                            text.push_str(s);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let value = if as_name {
+                Value::Name(checksum(&text))
+            } else {
+                Value::String(text)
+            };
+            let frame = self.frames.last_mut().unwrap();
+            set_param(&mut frame.params, into, value);
+            return true;
+        }
+        // Built in: whether two names are the same (`ChecksumEquals a = x
+        // b = y`).
+        if target.is_none() && name == checksum("ChecksumEquals") {
+            let (a, b) = (args.get(checksum("a")), args.get(checksum("b")));
+            return a.is_some() && a == b;
+        }
+        // Built in: an array's items one by one (`GetNextArrayElement
+        // array` gives `element`, counting with `index`; false past the
+        // end).
+        if target.is_none() && name == checksum("GetNextArrayElement") {
+            let array = match &args {
+                Value::Struct(items) => match items.iter().find(|(k, _)| k.is_none()) {
+                    Some((_, Value::Array(a))) => Some(a.clone()),
+                    Some((_, Value::Name(n))) => match program.value(*n) {
+                        Some(Value::Array(a)) => Some(a.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(array) = array else {
+                return false;
+            };
+            let frame = self.frames.last_mut().unwrap();
+            let index = frame
+                .params
+                .iter()
+                .find(|(k, _)| *k == Some(checksum("index")))
+                .and_then(|(_, v)| v.as_int())
+                .unwrap_or(0)
+                .max(0) as usize;
+            let Some(element) = array.get(index) else {
+                frame.params.retain(|(k, _)| *k != Some(checksum("index")));
+                return false;
+            };
+            set_param(&mut frame.params, checksum("element"), element.clone());
+            set_param(
+                &mut frame.params,
+                checksum("index"),
+                Value::Integer(index as i32 + 1),
+            );
+            return true;
+        }
+        // Built in: whether a value is an array (`IsArray <x>`, a global
+        // named by it too).
+        if target.is_none() && name == checksum("IsArray") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            return match items.iter().find(|(k, _)| k.is_none()).map(|(_, v)| v) {
+                Some(Value::Array(_)) => true,
+                Some(Value::Name(n)) => matches!(program.value(*n), Some(Value::Array(_))),
+                _ => false,
+            };
+        }
+        // Built in: an array's length (`GetArraySize name`, giving
+        // `array_size`), and a script run for each item of one
+        // (`ForEachIn array do = script params = {...}`).
+        if target.is_none() && (name == checksum("GetArraySize") || name == checksum("ForEachIn")) {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let array = match items.iter().find(|(k, _)| k.is_none()).map(|(_, v)| v) {
+                Some(Value::Array(a)) => a.clone(),
+                Some(Value::Name(n)) => match program.value(*n) {
+                    Some(Value::Array(a)) => a.clone(),
+                    _ => return false,
+                },
+                _ => return false,
+            };
+            if name == checksum("GetArraySize") {
+                let frame = self.frames.last_mut().unwrap();
+                set_param(
+                    &mut frame.params,
+                    checksum("array_size"),
+                    Value::Integer(array.len() as i32),
+                );
+                return true;
+            }
+            let Some(Value::Name(script)) = args.get(checksum("do")) else {
+                return false;
+            };
+            if !program.has_script(*script) {
+                return false;
+            }
+            let base = match args.get(checksum("params")) {
+                Some(Value::Struct(p)) => p.clone(),
+                _ => Vec::new(),
+            };
+            // The last item's frame deepest, so they run in order.
+            for item in array.iter().rev() {
+                if self.frames.len() >= MAX_DEPTH {
+                    break;
+                }
+                let mut params = base.clone();
+                if let Value::Struct(fields) = item {
+                    for (k, v) in fields {
+                        match k {
+                            Some(k) => set_param(&mut params, *k, v.clone()),
+                            None => params.push((None, v.clone())),
+                        }
+                    }
+                }
+                self.frames.push(Frame {
+                    script: *script,
+                    pc: 0,
+                    params,
+                    loops: Vec::new(),
+                    started: false,
+                });
+            }
+            return true;
+        }
         match host.command(target, name, &args) {
             Outcome::Done(result) => result,
             Outcome::Wait(seconds) => {
                 self.wait += seconds;
+                true
+            }
+            Outcome::Params(params) => {
+                let frame = self.frames.last_mut().unwrap();
+                for (k, v) in params {
+                    if let Some(k) = k {
+                        set_param(&mut frame.params, k, v);
+                    }
+                }
                 true
             }
         }
@@ -311,11 +733,44 @@ impl Thread {
 
     /// Evaluates an `if` line: `[NOT] call` or `(expression)`.
     fn condition(&mut self, program: &Program, host: &mut dyn Host, line: &[Token]) -> bool {
+        // `a OR b`, `a AND b` (left to right) at the top level.
+        let mut depth = 0;
+        let mut split = None;
+        for (i, t) in line.iter().enumerate() {
+            match t {
+                Token::OpenParen => depth += 1,
+                Token::CloseParen => depth -= 1,
+                Token::Or | Token::And if depth == 0 => split = Some(i),
+                _ => {}
+            }
+        }
+        if let Some(i) = split {
+            let left = self.condition(program, host, &line[..i]);
+            return match line[i] {
+                Token::Or => left || self.condition(program, host, &line[i + 1..]),
+                _ => left && self.condition(program, host, &line[i + 1..]),
+            };
+        }
         let (negate, rest) = match line {
             [Token::Not, rest @ ..] => (true, rest),
             _ => (false, line),
         };
         let value = match rest.first() {
+            // One group in parentheses: a condition of its own if it holds
+            // a command or AND/OR (`((LevelIs a) OR (LevelIs b))`), else
+            // arithmetic (`(<n> > 3)`).
+            Some(Token::OpenParen) if matching_paren(rest, 0) == rest.len() - 1 => {
+                let inner = &rest[1..rest.len() - 1];
+                let logic = inner.iter().any(|t| matches!(t, Token::Or | Token::And))
+                    || matches!(inner.first(), Some(Token::OpenParen | Token::Not))
+                    || is_command(inner, program);
+                if logic {
+                    self.condition(program, host, inner)
+                } else {
+                    let params = &self.frames.last().unwrap().params;
+                    first_number(rest, params, program).is_some_and(|v| v != 0.0)
+                }
+            }
             Some(Token::OpenParen) => {
                 let params = &self.frames.last().unwrap().params;
                 first_number(rest, params, program).is_some_and(|v| v != 0.0)
@@ -334,6 +789,32 @@ impl Thread {
             }
         };
         value != negate
+    }
+}
+
+/// Whether tokens are a command (a name not followed by an operator, nor
+/// a global value): `LevelIs load_skateshop`, `skater:IsAlive`.
+fn is_command(tokens: &[Token], program: &Program) -> bool {
+    match tokens {
+        [Token::Name(_), Token::Colon, Token::Name(_), ..] => true,
+        [Token::Name(n), rest @ ..] => {
+            program.value(*n).is_none()
+                && !matches!(
+                    rest.first(),
+                    Some(
+                        Token::Equals
+                            | Token::LessThan
+                            | Token::LessThanEqual
+                            | Token::GreaterThan
+                            | Token::GreaterThanEqual
+                            | Token::Add
+                            | Token::Minus
+                            | Token::Multiply
+                            | Token::Divide
+                    )
+                )
+        }
+        _ => false,
     }
 }
 
@@ -379,6 +860,68 @@ fn skip_branch(body: &[Token], mut at: usize, stop_at_else: bool) -> usize {
 }
 
 /// After the `repeat` that closes the loop containing `at`.
+/// `array [ index ]` (then `.field`s) alone: the array a global's, or a
+/// parameter holding one or naming a global that is. The item, if it's
+/// all the tokens are.
+fn indexed(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
+    let (array, mut i) = match tokens {
+        [Token::Arg, Token::Name(n), ..] => {
+            let v = params
+                .iter()
+                .find(|(k, _)| *k == Some(*n))
+                .map(|(_, v)| v)?;
+            let v = match v {
+                Value::Name(g) => program.value(*g)?,
+                v => v,
+            };
+            (v, 2)
+        }
+        [Token::Name(n), ..] => (program.value(*n)?, 1),
+        _ => return None,
+    };
+    if tokens.get(i) != Some(&Token::StartArray) {
+        return None;
+    }
+    let close = i + tokens[i..].iter().position(|t| *t == Token::EndArray)?;
+    let index = evaluate_num(&tokens[i + 1..close], params, program)?.scalar();
+    let Value::Array(items) = array else {
+        return None;
+    };
+    let mut value = items.get(index.max(0.0) as usize)?.clone();
+    i = close + 1;
+    while let (Some(Token::Dot), Some(Token::Name(field))) = (tokens.get(i), tokens.get(i + 1)) {
+        value = value.get(*field)?.clone();
+        i += 2;
+    }
+    (i == tokens.len()).then_some(value)
+}
+
+/// Past the `endswitch` closing the switch `at` is inside.
+fn after_switch(body: &[Token], mut at: usize) -> usize {
+    let mut depth = 0;
+    while let Some(t) = body.get(at) {
+        match t {
+            Token::Switch => depth += 1,
+            Token::EndSwitch if depth == 0 => return line_end(body, at),
+            Token::EndSwitch => depth -= 1,
+            _ => {}
+        }
+        at += 1;
+    }
+    body.len()
+}
+
+/// The first value on a line, `<params>` and arithmetic resolved.
+fn first_value(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
+    let mut wrapped = vec![Token::StartStruct];
+    wrapped.extend_from_slice(tokens);
+    wrapped.push(Token::EndStruct);
+    match resolve(&wrapped, params, program) {
+        Value::Struct(mut items) if !items.is_empty() => Some(items.remove(0).1),
+        _ => None,
+    }
+}
+
 fn after_repeat(body: &[Token], mut at: usize) -> usize {
     let mut depth = 0;
     while let Some(t) = body.get(at) {
@@ -410,15 +953,22 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
         match &tokens[i] {
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
-                let value = evaluate(&tokens[i + 1..close], params, program);
-                flat.push(match value {
-                    Some(v) if v.fract() == 0.0 && v.abs() < 1e9 => Token::Integer(v as i32),
-                    Some(v) => Token::Float(v as f32),
-                    None => Token::Integer(0),
-                });
+                // `(<array> [ i ].field)`: the item itself (text too).
+                if let Some(item) = indexed(&tokens[i + 1..close], params, program) {
+                    flat.extend(value_tokens(&item));
+                    i = close + 1;
+                    continue;
+                }
+                let value = evaluate_num(&tokens[i + 1..close], params, program);
+                flat.push(value.map_or(Token::Integer(0), Num::token));
                 i = close + 1;
             }
             Token::AllArgs => {
+                // `key = <...>`: all of them as one struct; alone, each.
+                let as_value = matches!(flat.last(), Some(Token::Equals));
+                if as_value {
+                    flat.push(Token::StartStruct);
+                }
                 for (k, v) in params {
                     if let Some(k) = k {
                         flat.push(Token::Name(*k));
@@ -426,22 +976,55 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
                     }
                     flat.extend(value_tokens(v));
                 }
+                if as_value {
+                    flat.push(Token::EndStruct);
+                }
                 i += 1;
             }
             Token::Arg => {
                 if let Some(Token::Name(n)) = tokens.get(i + 1) {
-                    let value = params
-                        .iter()
-                        .find(|(k, _)| *k == Some(*n))
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Name(0));
-                    flat.extend(value_tokens(&value));
+                    match params.iter().find(|(k, _)| *k == Some(*n)) {
+                        Some((_, value)) => flat.extend(value_tokens(value)),
+                        // Not given: nothing passed (`num_items = <num_items>`
+                        // leaves the script its default), a bare one too.
+                        None => {
+                            if matches!(flat.as_slice(), [.., Token::Name(_), Token::Equals]) {
+                                flat.truncate(flat.len() - 2);
+                            }
+                        }
+                    }
                     i += 2;
                 } else {
                     i += 1;
                 }
             }
             Token::EndOfLine | Token::LineNumber(_) => i += 1,
+            // `Random(@a @b @c)`: one of the choices. They're separated by
+            // jumps past the rest; the last has no end of its own, so it's
+            // taken to be as long as the first (they're single values here).
+            Token::Random(_, offsets) if !offsets.is_empty() => {
+                let mut choices: Vec<&[Token]> = Vec::new();
+                let mut at = i + 1;
+                for _ in 0..offsets.len() - 1 {
+                    let end = tokens[at..]
+                        .iter()
+                        .position(|t| matches!(t, Token::Jump(_)))
+                        .map_or(tokens.len(), |j| at + j);
+                    choices.push(&tokens[at..end]);
+                    at = (end + 1).min(tokens.len());
+                }
+                let last = choices.first().map_or(1, |c| c.len()).max(1);
+                let end = (at + last).min(tokens.len());
+                choices.push(&tokens[at..end]);
+                let pick = next_random() as usize % choices.len();
+                flat.extend(
+                    choices[pick]
+                        .iter()
+                        .filter(|t| !matches!(t, Token::At))
+                        .cloned(),
+                );
+                i = end;
+            }
             t => {
                 flat.push(t.clone());
                 i += 1;
@@ -451,6 +1034,18 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
     let with_offsets: Vec<(usize, Token)> = flat.into_iter().map(|t| (0, t)).collect();
     let mut at = 0;
     parse_value(&with_offsets, &mut at).unwrap_or(Value::Struct(Vec::new()))
+}
+
+/// A number for picking among `Random` choices (xorshift, shared).
+fn next_random() -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEED: AtomicU32 = AtomicU32::new(0x2545_F491);
+    let mut x = SEED.load(Ordering::Relaxed);
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    SEED.store(x, Ordering::Relaxed);
+    x
 }
 
 fn matching_paren(tokens: &[Token], open: usize) -> usize {
@@ -470,17 +1065,72 @@ fn matching_paren(tokens: &[Token], open: usize) -> usize {
     tokens.len().saturating_sub(1)
 }
 
-/// Simple arithmetic and comparisons over numbers and `<params>`.
-fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64> {
-    let mut values: Vec<f64> = Vec::new();
+/// A value in arithmetic: a number, or a pair or vector (`(0.0, 12.0)`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Num {
+    Scalar(f64),
+    /// The components and how many there are (2 for a pair, 3).
+    Vector([f64; 3], usize),
+}
+
+impl Num {
+    fn of(value: &Value) -> Option<Num> {
+        match value {
+            Value::Pair([x, y]) => Some(Num::Vector([f64::from(*x), f64::from(*y), 0.0], 2)),
+            Value::Vector([x, y, z]) => Some(Num::Vector(
+                [f64::from(*x), f64::from(*y), f64::from(*z)],
+                3,
+            )),
+            Value::Name(n) => Some(Num::Scalar(f64::from(*n))),
+            v => v.as_f32().map(|f| Num::Scalar(f64::from(f))),
+        }
+    }
+
+    fn scalar(self) -> f64 {
+        match self {
+            Num::Scalar(v) => v,
+            Num::Vector(v, _) => v[0],
+        }
+    }
+
+    /// Componentwise, a number applying to every component.
+    fn zip(self, other: Num, f: impl Fn(f64, f64) -> f64) -> Num {
+        match (self, other) {
+            (Num::Scalar(a), Num::Scalar(b)) => Num::Scalar(f(a, b)),
+            (Num::Vector(a, n), Num::Scalar(b)) => Num::Vector(a.map(|c| f(c, b)), n),
+            (Num::Scalar(a), Num::Vector(b, n)) => Num::Vector(b.map(|c| f(a, c)), n),
+            (Num::Vector(a, n), Num::Vector(b, m)) => {
+                Num::Vector([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2])], n.max(m))
+            }
+        }
+    }
+
+    fn token(self) -> Token {
+        match self {
+            Num::Scalar(v) if v.fract() == 0.0 && v.abs() < 1e9 => Token::Integer(v as i32),
+            Num::Scalar(v) => Token::Float(v as f32),
+            Num::Vector(v, 2) => Token::Pair([v[0] as f32, v[1] as f32]),
+            Num::Vector(v, _) => Token::Vector(v.map(|c| c as f32)),
+        }
+    }
+}
+
+/// Arithmetic and comparisons over numbers, pairs, vectors and
+/// `<params>`: `*`, `/` and `.` (the dot product) before `+` and `-`,
+/// before comparisons. A name compares as its checksum.
+fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<Num> {
+    // Operands and operators in order.
+    let mut values: Vec<Num> = Vec::new();
     let mut ops: Vec<&Token> = Vec::new();
     let mut i = 0;
     let mut negative = false;
     while i < tokens.len() {
         let v = match &tokens[i] {
-            Token::Integer(v) => Some(f64::from(*v)),
-            Token::HexInteger(v) => Some(f64::from(*v)),
-            Token::Float(v) => Some(f64::from(*v)),
+            Token::Integer(v) => Some(Num::Scalar(f64::from(*v))),
+            Token::HexInteger(v) => Some(Num::Scalar(f64::from(*v))),
+            Token::Float(v) => Some(Num::Scalar(f64::from(*v))),
+            Token::Pair(p) => Num::of(&Value::Pair(*p)),
+            Token::Vector(p) => Num::of(&Value::Vector(*p)),
             Token::Arg => {
                 i += 1;
                 let Some(Token::Name(n)) = tokens.get(i) else {
@@ -489,13 +1139,38 @@ fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64>
                 params
                     .iter()
                     .find(|(k, _)| *k == Some(*n))
-                    .and_then(|(_, v)| v.as_f32())
-                    .map(f64::from)
+                    .and_then(|(_, v)| Num::of(v))
             }
-            Token::Name(n) => program.value(*n).and_then(Value::as_f32).map(f64::from),
+            // `global [ index ].member`: an array's item, a struct's field.
+            Token::Name(n) if tokens.get(i + 1) == Some(&Token::StartArray) => {
+                let close = tokens[i + 1..]
+                    .iter()
+                    .position(|t| *t == Token::EndArray)
+                    .map(|c| i + 1 + c)?;
+                let index = evaluate_num(&tokens[i + 2..close], params, program)?.scalar();
+                let mut value = match program.value(*n) {
+                    Some(Value::Array(items)) => items.get(index.max(0.0) as usize).cloned(),
+                    _ => None,
+                }?;
+                i = close;
+                while let (Some(Token::Dot), Some(Token::Name(field))) =
+                    (tokens.get(i + 1), tokens.get(i + 2))
+                {
+                    value = value.get(*field)?.clone();
+                    i += 2;
+                }
+                Num::of(&value)
+            }
+            Token::Name(n) => Some(match program.value(*n).and_then(Num::of) {
+                Some(Num::Scalar(_)) | None => program
+                    .value(*n)
+                    .and_then(Value::as_f32)
+                    .map_or(Num::Scalar(f64::from(*n)), |f| Num::Scalar(f64::from(f))),
+                Some(v) => v,
+            }),
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
-                let v = evaluate(&tokens[i + 1..close], params, program);
+                let v = evaluate_num(&tokens[i + 1..close], params, program);
                 i = close;
                 v
             }
@@ -508,6 +1183,7 @@ fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64>
             | Token::Minus
             | Token::Multiply
             | Token::Divide
+            | Token::Dot
             | Token::Equals
             | Token::LessThan
             | Token::LessThanEqual
@@ -520,25 +1196,58 @@ fn evaluate(tokens: &[Token], params: &Params, program: &Program) -> Option<f64>
             _ => return None,
         };
         let v = v?;
-        values.push(if negative { -v } else { v });
+        values.push(if negative {
+            v.zip(Num::Scalar(-1.0), |a, b| a * b)
+        } else {
+            v
+        });
         negative = false;
         i += 1;
     }
-    // Left to right, which is all these scripts need.
-    let mut acc = *values.first()?;
-    for (op, v) in ops.iter().zip(values.iter().skip(1)) {
-        acc = match op {
-            Token::Add => acc + v,
-            Token::Minus => acc - v,
-            Token::Multiply => acc * v,
-            Token::Divide if *v != 0.0 => acc / v,
-            Token::Equals => f64::from(u8::from(acc == *v)),
-            Token::LessThan => f64::from(u8::from(acc < *v)),
-            Token::LessThanEqual => f64::from(u8::from(acc <= *v)),
-            Token::GreaterThan => f64::from(u8::from(acc > *v)),
-            Token::GreaterThanEqual => f64::from(u8::from(acc >= *v)),
+    if values.is_empty() || values.len() != ops.len() + 1 {
+        return values.first().copied().filter(|_| ops.is_empty());
+    }
+    let apply = |a: Num, op: &Token, b: Num| -> Option<Num> {
+        let bool_of = |x: bool| Num::Scalar(f64::from(u8::from(x)));
+        Some(match op {
+            Token::Add => a.zip(b, |x, y| x + y),
+            Token::Minus => a.zip(b, |x, y| x - y),
+            Token::Multiply => a.zip(b, |x, y| x * y),
+            Token::Divide => a.zip(b, |x, y| if y != 0.0 { x / y } else { 0.0 }),
+            Token::Dot => match (a, b) {
+                (Num::Vector(x, _), Num::Vector(y, _)) => {
+                    Num::Scalar(x[0] * y[0] + x[1] * y[1] + x[2] * y[2])
+                }
+                _ => a.zip(b, |x, y| x * y),
+            },
+            Token::Equals => bool_of(a == b),
+            Token::LessThan => bool_of(a.scalar() < b.scalar()),
+            Token::LessThanEqual => bool_of(a.scalar() <= b.scalar()),
+            Token::GreaterThan => bool_of(a.scalar() > b.scalar()),
+            Token::GreaterThanEqual => bool_of(a.scalar() >= b.scalar()),
             _ => return None,
-        };
+        })
+    };
+    // By precedence: products, then sums, then comparisons.
+    for level in [
+        &[Token::Multiply, Token::Divide, Token::Dot][..],
+        &[Token::Add, Token::Minus][..],
+    ] {
+        let mut k = 0;
+        while k < ops.len() {
+            if level.contains(ops[k]) {
+                let v = apply(values[k], ops[k], values[k + 1])?;
+                values[k] = v;
+                values.remove(k + 1);
+                ops.remove(k);
+            } else {
+                k += 1;
+            }
+        }
+    }
+    let mut acc = values[0];
+    for (op, v) in ops.iter().zip(values.iter().skip(1)) {
+        acc = apply(acc, op, *v)?;
     }
     Some(acc)
 }
@@ -554,16 +1263,21 @@ fn first_number(tokens: &[Token], params: &Params, program: &Program) -> Option<
     }
 }
 
-/// `wait n`, `wait n seconds`, `wait n frames`.
+/// `wait n seconds`, `wait n frames` (or `gameframes`), and `wait n`:
+/// milliseconds (`Wait 1500` in the panel messages).
 fn wait_seconds(args: &Value) -> f32 {
     let Value::Struct(items) = args else {
         return 0.0;
     };
     let n = items.iter().find_map(|(_, v)| v.as_f32()).unwrap_or(1.0);
-    let in_seconds = [checksum("seconds"), checksum("second")]
-        .iter()
-        .any(|&s| args.has_flag(s));
-    if in_seconds { n } else { n / 60.0 }
+    let unit = |names: &[&str]| names.iter().any(|s| args.has_flag(checksum(s)));
+    if unit(&["seconds", "second"]) {
+        n
+    } else if unit(&["frame", "frames", "gameframe", "gameframes", "game"]) {
+        n / 60.0
+    } else {
+        n / 1000.0
+    }
 }
 
 /// Tokens that parse back into `value`.
@@ -624,6 +1338,294 @@ mod tests {
 
     fn names(log: &Log) -> Vec<u32> {
         log.calls.iter().map(|c| c.1).collect()
+    }
+
+    #[test]
+    fn random_picks_one_choice() {
+        use crate::token::RandomKind;
+        let mut program = Program::new();
+        // script Say: Speak stream = Random(@LineA @LineB) Vol = 3
+        program.add_script(
+            checksum("Say"),
+            vec![
+                n("Speak"),
+                n("stream"),
+                Token::Equals,
+                Token::Random(RandomKind::Plain, vec![0, 0]),
+                Token::At,
+                n("LineA"),
+                Token::Jump(0),
+                Token::At,
+                n("LineB"),
+                n("Vol"),
+                Token::Equals,
+                Token::Integer(3),
+                Token::EndOfLine,
+            ],
+        );
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..20 {
+            let mut log = Log::default();
+            let mut thread = Thread::new(checksum("Say"), Vec::new());
+            thread.run(&program, &mut log, 0.0);
+            let args = &log.calls[0].2;
+            let stream = args
+                .get(checksum("stream"))
+                .and_then(Value::as_name)
+                .unwrap();
+            assert!(stream == checksum("LineA") || stream == checksum("LineB"));
+            assert_eq!(args.get(checksum("Vol")), Some(&Value::Integer(3)));
+            seen.insert(stream);
+        }
+        assert_eq!(seen.len(), 2, "both choices come up");
+    }
+
+    #[test]
+    fn got_param_and_tags() {
+        let mut program = Program::new();
+        // script Car: if GotParam Fast / Fast_Car / endif / SetTags Speed = 3
+        // / GetTags / Report <Speed>
+        program.add_script(
+            checksum("Car"),
+            vec![
+                Token::If,
+                n("GotParam"),
+                n("Fast"),
+                Token::EndOfLine,
+                n("Fast_Car"),
+                Token::EndOfLine,
+                Token::EndIf,
+                Token::EndOfLine,
+                n("SetTags"),
+                n("Speed"),
+                Token::Equals,
+                Token::Integer(3),
+                Token::EndOfLine,
+                n("GetTags"),
+                Token::EndOfLine,
+                n("Report"),
+                Token::Arg,
+                n("Speed"),
+                Token::EndOfLine,
+            ],
+        );
+        for (params, fast) in [
+            (vec![(None, Value::Name(checksum("Fast")))], true),
+            (vec![], false),
+        ] {
+            let mut log = Log::default();
+            let mut thread = Thread::new(checksum("Car"), params);
+            thread.run(&program, &mut log, 0.0);
+            assert_eq!(names(&log).contains(&checksum("Fast_Car")), fast);
+            let report = log
+                .calls
+                .iter()
+                .find(|c| c.1 == checksum("Report"))
+                .unwrap();
+            assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
+        }
+    }
+
+    #[test]
+    fn switch_takes_the_matching_case() {
+        let mut program = Program::new();
+        // switch <kind> / case apple / Report 1 / case pear / Report 2 /
+        // default / Report 3 / endswitch / Report 4
+        let line = |t: Vec<Token>| {
+            let mut t = t;
+            t.push(Token::EndOfLine);
+            t
+        };
+        let body: Vec<Token> = [
+            line(vec![Token::Switch, Token::Arg, n("kind")]),
+            line(vec![Token::Case, n("apple")]),
+            line(vec![n("Report"), Token::Integer(1)]),
+            line(vec![Token::Case, n("pear")]),
+            line(vec![n("Report"), Token::Integer(2)]),
+            line(vec![Token::Default]),
+            line(vec![n("Report"), Token::Integer(3)]),
+            line(vec![Token::EndSwitch]),
+            line(vec![n("Report"), Token::Integer(4)]),
+        ]
+        .concat();
+        program.add_script(checksum("Pick"), body);
+        for (kind, want) in [
+            ("pear", vec![2, 4]),
+            ("apple", vec![1, 4]),
+            ("plum", vec![3, 4]),
+        ] {
+            let mut log = Log::default();
+            let params = vec![(Some(checksum("kind")), Value::Name(checksum(kind)))];
+            Thread::new(checksum("Pick"), params).run(&program, &mut log, 0.0);
+            let got: Vec<i32> = log
+                .calls
+                .iter()
+                .filter(|c| c.1 == checksum("Report"))
+                .filter_map(|c| match &c.2 {
+                    Value::Struct(items) => items.first().and_then(|(_, v)| v.as_int()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got, want, "{kind}");
+        }
+    }
+
+    #[test]
+    fn pairs_in_arithmetic() {
+        let program = Program::new();
+        let params = vec![
+            (Some(checksum("pos")), Value::Pair([100.0, 20.0])),
+            (Some(checksum("h")), Value::Integer(32)),
+        ];
+        let eval = |tokens: Vec<Token>| evaluate_num(&tokens, &params, &program);
+        // (<pos> + (0.0, 12.0))
+        assert_eq!(
+            eval(vec![
+                Token::Arg,
+                n("pos"),
+                Token::Add,
+                Token::Pair([0.0, 12.0])
+            ]),
+            Some(Num::Vector([100.0, 32.0, 0.0], 2))
+        );
+        // (1.0, 0.0) * 2 + (0.0, 1.0) * <h> / 16: products first.
+        assert_eq!(
+            eval(vec![
+                Token::Pair([1.0, 0.0]),
+                Token::Multiply,
+                Token::Integer(2),
+                Token::Add,
+                Token::Pair([0.0, 1.0]),
+                Token::Multiply,
+                Token::Arg,
+                n("h"),
+                Token::Divide,
+                Token::Integer(16),
+            ]),
+            Some(Num::Vector([2.0, 2.0, 0.0], 2))
+        );
+        // (0.0, 1.0).<pos>: the dot product.
+        assert_eq!(
+            eval(vec![
+                Token::Pair([0.0, 1.0]),
+                Token::Dot,
+                Token::Arg,
+                n("pos")
+            ]),
+            Some(Num::Scalar(20.0))
+        );
+    }
+
+    #[test]
+    fn statements_through_params() {
+        let mut program = Program::new();
+        // script Outer: <n> = 2 / <n> = (<n> + 1) / <then> <n>
+        program.add_script(
+            checksum("Outer"),
+            vec![
+                Token::Arg,
+                n("n"),
+                Token::Equals,
+                Token::Integer(2),
+                Token::EndOfLine,
+                Token::Arg,
+                n("n"),
+                Token::Equals,
+                Token::OpenParen,
+                Token::Arg,
+                n("n"),
+                Token::Add,
+                Token::Integer(1),
+                Token::CloseParen,
+                Token::EndOfLine,
+                Token::Arg,
+                n("then"),
+                Token::Arg,
+                n("n"),
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        let params = vec![(Some(checksum("then")), Value::Name(checksum("Report")))];
+        let mut thread = Thread::new(checksum("Outer"), params);
+        thread.run(&program, &mut log, 0.0);
+        let report = log
+            .calls
+            .iter()
+            .find(|c| c.1 == checksum("Report"))
+            .unwrap();
+        assert_eq!(report.2, Value::Struct(vec![(None, Value::Integer(3))]));
+    }
+
+    #[test]
+    fn array_size_and_for_each() {
+        let mut program = Program::new();
+        let spot =
+            |id: &str| Value::Struct(vec![(Some(checksum("id")), Value::Name(checksum(id)))]);
+        program.add_value(
+            checksum("Spots"),
+            Value::Array(vec![spot("SpotA"), spot("SpotB")]),
+        );
+        // script Count: GetArraySize Spots / Report <array_size> /
+        // ForEachIn Spots do = Visit params = { Goal = g }
+        program.add_script(
+            checksum("Count"),
+            vec![
+                n("GetArraySize"),
+                n("Spots"),
+                Token::EndOfLine,
+                n("Report"),
+                Token::Arg,
+                n("array_size"),
+                Token::EndOfLine,
+                n("ForEachIn"),
+                n("Spots"),
+                n("do"),
+                Token::Equals,
+                n("Visit"),
+                n("params"),
+                Token::Equals,
+                Token::StartStruct,
+                n("Goal"),
+                Token::Equals,
+                n("g"),
+                Token::EndStruct,
+                Token::EndOfLine,
+            ],
+        );
+        // script Visit: Seen <id> <Goal>
+        program.add_script(
+            checksum("Visit"),
+            vec![
+                n("Seen"),
+                Token::Arg,
+                n("id"),
+                Token::Arg,
+                n("Goal"),
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        let mut thread = Thread::new(checksum("Count"), Vec::new());
+        thread.run(&program, &mut log, 0.0);
+        let args = |name: &str| -> Vec<Value> {
+            log.calls
+                .iter()
+                .filter(|c| c.1 == checksum(name))
+                .map(|c| c.2.clone())
+                .collect()
+        };
+        assert_eq!(
+            args("Report"),
+            vec![Value::Struct(vec![(None, Value::Integer(2))])]
+        );
+        let seen = |id: &str| {
+            Value::Struct(vec![
+                (None, Value::Name(checksum(id))),
+                (None, Value::Name(checksum("g"))),
+            ])
+        };
+        assert_eq!(args("Seen"), vec![seen("SpotA"), seen("SpotB")]);
     }
 
     #[test]

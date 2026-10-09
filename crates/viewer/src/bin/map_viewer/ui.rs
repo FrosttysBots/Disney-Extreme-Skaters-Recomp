@@ -5,6 +5,19 @@ use desa_viewer::collision::CollisionView;
 use desa_viewer::nodes::Spawn;
 use desa_viewer::source::LevelInfo;
 
+/// The game's cheats this viewer has (`CHEAT_PERFECT_MANUAL`...).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct Cheats {
+    pub perfect_manual: bool,
+    pub perfect_rail: bool,
+    pub perfect_skitch: bool,
+    pub always_special: bool,
+    pub moon: bool,
+    pub slomo: bool,
+    pub stats_13: bool,
+}
+
+#[derive(Clone, Copy)]
 pub enum Action {
     OpenDisc,
     OpenFolder,
@@ -20,9 +33,35 @@ pub enum Action {
     StartRun(Option<bool>),
     /// The level's S-K-A-T-E letters goal (again).
     StartLetters,
+    /// Pause or go on skating, or start again from the start (the run or
+    /// goal again, if one's on).
+    Pause,
+    Restart,
+    /// The level's race goal (again).
+    StartRace,
+    /// One of the level's other goals (by its place in the goal list),
+    /// played from its own scripts.
+    StartGoal(usize),
+    /// A movie (by its place in the list) played, or the one playing
+    /// skipped; and whether the opening movies play at the start.
+    PlayMovie(usize),
+    SkipMovie,
+    SetIntro(bool),
+    /// The game's main menu (in the Skate Shop), and whether it's where
+    /// the viewer starts.
+    MainMenu,
+    SetStartMenu(bool),
+    /// The goal offered by its pro, or not now.
+    TakeGoal,
+    NotNow,
+    /// Through the warp the skater's at, or not.
+    Warp,
+    StayHere,
     /// Watch the run just skated again, or stop watching.
     Replay,
     StopReplay,
+    /// The replay's next camera.
+    ReplayCamera,
     PlayCameraPath(usize),
     StopCameraPath,
 }
@@ -60,9 +99,17 @@ pub struct CharacterModel {
     pub special: (f32, bool),
     /// The AutoKick option.
     pub auto_kick: bool,
+    /// Wallriding on any steep wall (else only the game's few
+    /// wall-ridable faces, all in Canyon).
+    pub wallride_anywhere: bool,
+    /// The game's cheats (its cheat menu's).
+    pub cheats: Cheats,
     /// The skater's sounds (and the level's ambience) on, and the songs.
     pub sound: bool,
     pub music: bool,
+    /// Their volumes, 0 to 1.
+    pub effects_volume: f32,
+    pub music_volume: f32,
     /// The gamepad rumbles where the game's does.
     pub rumble: bool,
     /// In a two-minute run: the seconds left, and once it's over the
@@ -74,18 +121,66 @@ pub struct CharacterModel {
     pub run_goal: Option<(bool, String, u32)>,
     pub run_goal_won: Option<bool>,
     pub score_goals: [Option<String>; 2],
-    /// Watching the run again.
+    /// The character's collectibles shown while skating, and how many of
+    /// this level's are got.
+    pub collect: bool,
+    pub collected: Option<(u32, u32)>,
+    /// Watching the run again, and through which camera.
     pub replaying: bool,
+    pub replay_camera: String,
+    /// The level's goals (type, text), for the list in the panel.
+    pub goals: Vec<(String, String)>,
+    /// Which of them are won.
+    pub goals_won: Vec<bool>,
+    /// The goal played from its scripts: its name, what it asks, the flags
+    /// got and needed; and how it ended (won?).
+    pub goal_progress: Option<(String, String, usize, usize)>,
+    pub goal_result: Option<(String, bool)>,
+    /// The game's own menu (its screen elements) is up, taking the keys;
+    /// and its own panel (score, trick text, special bar, balance meter,
+    /// clock) is, in place of these.
+    pub game_menu: bool,
+    pub game_hud: bool,
     /// The level has S-K-A-T-E letters; while collecting them, which are
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
     pub can_letters: bool,
+    /// The level's race (its name); while racing, the waypoint reached
+    /// and how many; once over, whether won and in how long.
+    pub race_name: Option<String>,
+    pub race: Option<(usize, usize)>,
+    pub race_result: Option<(bool, f32)>,
     pub letters: Option<[bool; 5]>,
     pub letters_result: Option<(bool, f32, Option<f32>)>,
     /// Where the skater is and what it's doing, for bug reports.
     pub skate_status: String,
     /// The character's tricks and how to do them (while skating).
     pub trick_list: Vec<String>,
+    /// The level's gaps (name, points) and whether each has been landed.
+    pub gap_list: Vec<(String, u32, bool)>,
+    /// The level's records for the character (shown in the panel), and a
+    /// new one being announced.
+    pub records: Vec<String>,
+    pub record_message: Option<String>,
+    /// At a warp: the level it goes to.
+    pub warp_prompt: Option<String>,
+    /// Skating paused.
+    pub paused: bool,
+    /// At a goal's pro: what they offer.
+    pub goal_prompt: Option<String>,
+    /// This session's skating, line by line.
+    pub session: Vec<String>,
+    /// The map in the corner: shown or not, a new level's picture to
+    /// upload, the uploaded picture, and what's round the skater.
+    pub show_map: bool,
+    pub map_image: Option<egui::ColorImage>,
+    pub map_texture: Option<egui::TextureHandle>,
+    pub map: Option<MapView>,
+    /// Riding switch (the game's `switch_icon`).
+    pub switch: bool,
+    /// The game's chase cameras by name, and the one picked.
+    pub cameras: Vec<String>,
+    pub camera: usize,
     pub combo: Option<String>,
     /// A message flashed up while skating ("Sketchy", a gap's name).
     pub message: Option<String>,
@@ -95,6 +190,14 @@ pub struct CharacterModel {
 pub struct Model {
     pub data_path: Option<String>,
     pub levels: Vec<LevelInfo>,
+    /// The disc's movies, by name, and whether the opening ones play at
+    /// the start.
+    pub movies: Vec<String>,
+    pub intro: bool,
+    pub start_menu: bool,
+    /// Each level's progress for the character shown (collectibles got,
+    /// gaps landed), beside its name.
+    pub level_progress: Vec<String>,
     pub current: Option<usize>,
     pub loading: Option<String>,
     pub stats: Option<String>,
@@ -146,8 +249,9 @@ Skating: W push, S brake, A/D steer,
   in the air Q flip, F grab (+ W/S/A/D),
   R revert (tap on the ground: 180 slide;
   hold going up a quarter pipe: spine transfer),
-  S held: step off the board, Tab next spawn; or a gamepad
-  (stick, A ollie, X flip, B grab, Y grind),
+  S held: step off the board, Tab next spawn, J/L look round,
+  C camera, M map, P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
+  right stick look round, Start pause),
   Esc stop";
 
 /// The score (top right) and the combo (bottom centre, above the balance
@@ -399,7 +503,7 @@ fn letters_result(
 }
 
 /// While a replay plays: a label saying so, and a button to stop it.
-fn replay_banner(ctx: &egui::Context, actions: &mut Vec<Action>) {
+fn replay_banner(ctx: &egui::Context, camera: &str, actions: &mut Vec<Action>) {
     egui::Area::new(egui::Id::new("replay"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
@@ -411,6 +515,13 @@ fn replay_banner(ctx: &egui::Context, actions: &mut Vec<Action>) {
                         .color(egui::Color32::from_rgb(255, 80, 60))
                         .background_color(egui::Color32::from_black_alpha(140)),
                 );
+                if ui
+                    .button(format!("Camera: {camera}"))
+                    .on_hover_text("The game's replay cameras (C)")
+                    .clicked()
+                {
+                    actions.push(Action::ReplayCamera);
+                }
                 if ui.button("Stop").clicked() {
                     actions.push(Action::StopReplay);
                 }
@@ -446,7 +557,97 @@ fn balance_meter(ctx: &egui::Context, meter: f32) {
         });
 }
 
+/// The map round the skater: where on the level's picture (pixels), which
+/// way it faces, the picture's size, and what's marked (where, and what).
+pub struct MapView {
+    pub centre: (f32, f32),
+    pub heading: f32,
+    pub size: (f32, f32),
+    pub markers: Vec<((f32, f32), MapMark)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MapMark {
+    Collectible,
+    Letter,
+    Warp,
+    /// A gap's end, landed or not yet.
+    Gap(bool),
+    /// A goal's pro.
+    Pro,
+    /// Something the goal on wants gone near.
+    Target,
+}
+
+/// The map in the corner: the level from above round the skater (north
+/// up), what's to find on it, and the skater as an arrow.
+fn minimap(ctx: &egui::Context, texture: &egui::TextureHandle, view: &MapView) {
+    const SIDE: f32 = 190.0;
+    /// Map pixels across the panel.
+    const SPAN: f32 = 150.0;
+    egui::Area::new(egui::Id::new("minimap"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -56.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(SIDE, SIDE), egui::Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 6.0, egui::Color32::from_black_alpha(170));
+            let (w, h) = view.size;
+            let half = SPAN / 2.0;
+            let uv = egui::Rect::from_min_max(
+                egui::pos2((view.centre.0 - half) / w, (view.centre.1 - half) / h),
+                egui::pos2((view.centre.0 + half) / w, (view.centre.1 + half) / h),
+            );
+            painter.image(texture.id(), rect.shrink(3.0), uv, egui::Color32::WHITE);
+            let to_screen = |(x, z): (f32, f32)| {
+                let inner = rect.shrink(3.0);
+                egui::pos2(
+                    inner.left() + (x - (view.centre.0 - half)) / SPAN * inner.width(),
+                    inner.top() + (z - (view.centre.1 - half)) / SPAN * inner.height(),
+                )
+            };
+            for &(at, mark) in &view.markers {
+                let p = to_screen(at);
+                if !rect.shrink(4.0).contains(p) {
+                    continue;
+                }
+                let (colour, radius) = match mark {
+                    MapMark::Collectible => (egui::Color32::from_rgb(120, 170, 255), 2.5),
+                    MapMark::Letter => (egui::Color32::from_rgb(255, 205, 50), 4.0),
+                    MapMark::Warp => (egui::Color32::from_rgb(200, 120, 255), 4.5),
+                    MapMark::Gap(false) => (egui::Color32::from_rgb(235, 235, 235), 2.0),
+                    MapMark::Gap(true) => (egui::Color32::from_rgb(110, 220, 110), 2.0),
+                    MapMark::Pro => (egui::Color32::from_rgb(255, 150, 40), 5.0),
+                    MapMark::Target => (egui::Color32::from_rgb(255, 90, 160), 3.5),
+                };
+                painter.circle_filled(p, radius, colour);
+                painter.circle_stroke(p, radius, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
+            }
+            // The skater: an arrow the way it faces (heading 0 along +z,
+            // which is down the map).
+            let centre = to_screen(view.centre);
+            let (s, c) = view.heading.sin_cos();
+            let forward = egui::vec2(s, c);
+            let side = egui::vec2(c, -s);
+            let points = vec![
+                centre + forward * 8.0,
+                centre - forward * 5.0 + side * 5.0,
+                centre - forward * 2.5,
+                centre - forward * 5.0 - side * 5.0,
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                egui::Color32::from_rgb(255, 80, 60),
+                egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
+            ));
+        });
+}
+
 pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
+    // A new level's map, uploaded once.
+    if let Some(image) = model.character.map_image.take() {
+        model.character.map_texture = Some(ctx.load_texture("minimap", image, Default::default()));
+    }
     let mut actions = Vec::new();
     if let Some(title) = &model.loading {
         egui::Area::new(egui::Id::new("loading"))
@@ -457,11 +658,15 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
             });
     }
-    if let Some(meter) = model.character.balance {
+    // (The game's own panel, when it's up, has these.)
+    let game_hud = model.character.game_hud;
+    if let (Some(meter), false) = (model.character.balance, game_hud) {
         balance_meter(ctx, meter);
     }
     if model.character.skating {
-        trick_text(ctx, model.character.score, model.character.combo.as_deref());
+        if !game_hud {
+            trick_text(ctx, model.character.score, model.character.combo.as_deref());
+        }
         if let Some(message) = &model.character.message {
             egui::Area::new(egui::Id::new("message"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
@@ -476,8 +681,59 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     );
                 });
         }
-        special_meter(ctx, model.character.special);
-        if let Some(left) = model.character.run_clock {
+        if !game_hud {
+            special_meter(ctx, model.character.special);
+        }
+        if let (true, Some(texture), Some(view)) = (
+            model.character.show_map,
+            &model.character.map_texture,
+            &model.character.map,
+        ) {
+            minimap(ctx, texture, view);
+        }
+        if model.character.switch {
+            egui::Area::new(egui::Id::new("switch"))
+                .anchor(egui::Align2::RIGHT_TOP, [-180.0, 47.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new("SWITCH")
+                            .size(13.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(255, 150, 60))
+                            .background_color(egui::Color32::from_black_alpha(140)),
+                    );
+                });
+        }
+        if let Some(text) = &model.character.record_message {
+            egui::Area::new(egui::Id::new("record"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 130.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(text)
+                            .size(22.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(110, 230, 110))
+                            .background_color(egui::Color32::from_black_alpha(140)),
+                    );
+                });
+        }
+        if let Some((got, of)) = model.character.collected {
+            egui::Area::new(egui::Id::new("collected"))
+                .anchor(egui::Align2::RIGHT_TOP, [-16.0, 74.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{got}/{of}"))
+                            .size(16.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(170, 190, 255))
+                            .background_color(egui::Color32::from_black_alpha(120)),
+                    );
+                });
+        }
+        if let (Some(left), false) = (model.character.run_clock, game_hud) {
             run_clock(ctx, left);
         }
         if let Some((_, _, score)) = &model.character.run_goal {
@@ -486,11 +742,184 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if let Some(got) = model.character.letters {
             letters_hud(ctx, got);
         }
+        if let Some((reached, of)) = model.character.race {
+            egui::Area::new(egui::Id::new("race"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Checkpoint {}/{of}", (reached + 1).min(of)))
+                            .size(18.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(120, 220, 255))
+                            .background_color(egui::Color32::from_black_alpha(120)),
+                    );
+                });
+        }
+        if let Some((won, time)) = model.character.race_result {
+            egui::Area::new(egui::Id::new("race_result"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(model.character.race_name.as_deref().unwrap_or("Race"));
+                            if won {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Finished in {}",
+                                        clock_text(time)
+                                    ))
+                                    .size(20.0)
+                                    .color(egui::Color32::from_rgb(90, 230, 90)),
+                                );
+                            } else {
+                                ui.label(
+                                    egui::RichText::new("Out of time")
+                                        .size(20.0)
+                                        .color(egui::Color32::from_rgb(255, 90, 70)),
+                                );
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Again").clicked() {
+                                    actions.push(Action::StartRace);
+                                }
+                                if ui.button("Done").clicked() {
+                                    actions.push(Action::ToggleSkate);
+                                }
+                            });
+                        });
+                    });
+                });
+        }
+        if let (Some((name, text, got, needed)), false) =
+            (&model.character.goal_progress, model.character.game_hud)
+        {
+            egui::Area::new(egui::Id::new("goal_progress"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        let line = if *needed > 0 {
+                            format!("{name}  {got}/{needed}")
+                        } else {
+                            name.clone()
+                        };
+                        ui.label(
+                            egui::RichText::new(line)
+                                .size(18.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(120, 220, 255))
+                                .background_color(egui::Color32::from_black_alpha(120)),
+                        );
+                        if !text.is_empty() {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(13.0)
+                                    .color(egui::Color32::WHITE)
+                                    .background_color(egui::Color32::from_black_alpha(120)),
+                            );
+                        }
+                    });
+                });
+        }
+        if let Some((name, won)) = &model.character.goal_result {
+            egui::Area::new(egui::Id::new("goal_result"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(name);
+                            let (text, color) = if *won {
+                                ("Goal complete!", egui::Color32::from_rgb(90, 230, 90))
+                            } else {
+                                ("Out of time", egui::Color32::from_rgb(255, 90, 70))
+                            };
+                            ui.label(egui::RichText::new(text).size(20.0).color(color));
+                            ui.horizontal(|ui| {
+                                if ui.button("Again").clicked() {
+                                    actions.push(Action::Restart);
+                                }
+                                if ui.button("Done").clicked() {
+                                    actions.push(Action::ToggleSkate);
+                                }
+                            });
+                        });
+                    });
+                });
+        }
         if let Some(result) = model.character.letters_result {
             letters_result(ctx, result, &mut actions);
         }
+        if model.character.paused && !model.character.game_menu {
+            egui::Area::new(egui::Id::new("pause"))
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading("Paused");
+                            ui.horizontal(|ui| {
+                                if ui.button("Resume").clicked() {
+                                    actions.push(Action::Pause);
+                                }
+                                if ui.button("Restart").clicked() {
+                                    actions.push(Action::Restart);
+                                }
+                                if ui.button("Stop skating").clicked() {
+                                    actions.push(Action::ToggleSkate);
+                                }
+                            });
+                            ui.label(
+                                egui::RichText::new(
+                                    "P resumes. Photo mode: W A S D fly, right-drag looks, F12 takes a picture (without the panel)",
+                                )
+                                .small(),
+                            );
+                        });
+                    });
+                });
+        }
+        if let Some(goal) = &model.character.goal_prompt {
+            egui::Area::new(egui::Id::new("goal_offer"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(goal);
+                            ui.horizontal(|ui| {
+                                if ui.button("Start").clicked() {
+                                    actions.push(Action::TakeGoal);
+                                }
+                                if ui.button("Not now").clicked() {
+                                    actions.push(Action::NotNow);
+                                }
+                            });
+                            ui.label(egui::RichText::new("Enter to start, Esc not now").small());
+                        });
+                    });
+                });
+        }
+        if let Some(title) = &model.character.warp_prompt {
+            egui::Area::new(egui::Id::new("warp"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(format!("Warp to {title}?"));
+                            ui.horizontal(|ui| {
+                                if ui.button("Warp").clicked() {
+                                    actions.push(Action::Warp);
+                                }
+                                if ui.button("Stay").clicked() {
+                                    actions.push(Action::StayHere);
+                                }
+                            });
+                            ui.label(egui::RichText::new("Enter to warp, Esc to stay").small());
+                        });
+                    });
+                });
+        }
         if model.character.replaying {
-            replay_banner(ctx, &mut actions);
+            replay_banner(ctx, &model.character.replay_camera, &mut actions);
         } else if let Some(result) = model.character.run_result {
             let goal = model
                 .character
@@ -535,10 +964,59 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 ui.separator();
                 ui.label(egui::RichText::new("Levels").strong());
                 for (i, level) in model.levels.iter().enumerate() {
-                    if ui.selectable_label(model.current == Some(i), &level.title).clicked() && model.loading.is_none() {
-                        actions.push(Action::LoadLevel(i));
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(model.current == Some(i), &level.title).clicked()
+                            && model.loading.is_none()
+                        {
+                            actions.push(Action::LoadLevel(i));
+                        }
+                        if let Some(progress) = model.level_progress.get(i).filter(|p| !p.is_empty()) {
+                            ui.label(egui::RichText::new(progress).small().weak());
+                        }
+                    });
                 }
+            }
+
+            if !model.levels.is_empty() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Main menu")
+                        .on_hover_text("The game's own main menu, in the Skate Shop. Arrows choose, Enter picks, Esc goes back.")
+                        .clicked()
+                    {
+                        actions.push(Action::MainMenu);
+                    }
+                    let mut start = model.start_menu;
+                    if ui.checkbox(&mut start, "at the start").changed() {
+                        actions.push(Action::SetStartMenu(start));
+                    }
+                });
+            }
+            if !model.movies.is_empty() {
+                egui::CollapsingHeader::new(format!("Movies ({})", model.movies.len()))
+                    .id_salt("movies")
+                    .show(ui, |ui| {
+                        let mut intro = model.intro;
+                        if ui
+                            .checkbox(&mut intro, "Opening movies at the start")
+                            .on_hover_text("The logos and the intro, as the game boots (needs ffmpeg).")
+                            .changed()
+                        {
+                            actions.push(Action::SetIntro(intro));
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for (i, name) in model.movies.iter().enumerate() {
+                                if ui.small_button(name).clicked() {
+                                    actions.push(Action::PlayMovie(i));
+                                }
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new("Any key or a click skips one; Esc skips them all.")
+                                .small()
+                                .weak(),
+                        );
+                    });
             }
 
             if model.current.is_some() {
@@ -722,6 +1200,58 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             });
         }
     });
+    if !model.goals.is_empty() {
+        egui::CollapsingHeader::new(format!("Goals ({})", model.goals.len()))
+            .id_salt("goals")
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "The level's goals as the career has them; those with Play work here so far.",
+                    )
+                    .small(),
+                );
+                for (i, (kind, text)) in model.goals.iter().enumerate() {
+                    let won = model.goals_won.get(i).copied().unwrap_or(false);
+                    ui.horizontal(|ui| {
+                        let action = match kind.as_str() {
+                            "Skate" => Some(Action::StartLetters),
+                            "Race" => Some(Action::StartRace),
+                            "HighScore" => Some(Action::StartRun(Some(false))),
+                            "ProScore" => Some(Action::StartRun(Some(true))),
+                            _ => Some(Action::StartGoal(i)),
+                        };
+                        let playable = action.is_some() && model.can_skate;
+                        if ui.add_enabled(playable, egui::Button::new("Play").small()).clicked() {
+                            actions.extend(action);
+                        }
+                        let text = egui::RichText::new(if won {
+                            format!("✔ {text}")
+                        } else {
+                            text.clone()
+                        })
+                        .small();
+                        ui.label(if won {
+                            text.color(egui::Color32::from_rgb(120, 220, 120))
+                        } else {
+                            text
+                        });
+                    });
+                }
+            });
+    }
+    if let Some(name) = &model.race_name {
+        ui.add_enabled_ui(model.can_skate, |ui| {
+            if ui
+                .button("Race")
+                .on_hover_text(format!(
+                    "The level's race, \"{name}\": reach each checkpoint before the clock runs out; each one adds its time."
+                ))
+                .clicked()
+            {
+                actions.push(Action::StartRace);
+            }
+        });
+    }
     ui.add_enabled_ui(model.can_skate && model.can_letters, |ui| {
         if ui
             .button("S-K-A-T-E letters")
@@ -739,13 +1269,56 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
         ui.checkbox(&mut model.sound, "Sound").on_hover_text(
             "The skater's sounds (rolling, ollies, landings, grinds, bails) and the level's ambience.",
         );
+        ui.add(egui::Slider::new(&mut model.effects_volume, 0.0..=1.0).show_value(false))
+            .on_hover_text("How loud the sounds are.");
+    });
+    ui.horizontal(|ui| {
         ui.checkbox(&mut model.music, "Music")
             .on_hover_text("The game's soundtrack, one song after another.");
-        ui.checkbox(&mut model.rumble, "Rumble")
-            .on_hover_text("The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.");
+        ui.add(egui::Slider::new(&mut model.music_volume, 0.0..=1.0).show_value(false))
+            .on_hover_text("How loud the music is.");
     });
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut model.show_map, "Map")
+            .on_hover_text("The level from above round the skater, with what's to find (M).");
+        ui.checkbox(&mut model.collect, "Collectibles")
+            .on_hover_text(
+                "The character's 25 collectibles on each level of its world (Jessie's \
+             Cowgirl Boots, Woody's Badges...), there to pick up while skating. \
+             What's collected is kept.",
+            );
+        ui.checkbox(&mut model.rumble, "Rumble").on_hover_text(
+            "The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.",
+        );
+    });
+    if !model.cameras.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Camera").on_hover_text(
+                "The game's chase cameras (its \"Camera Angle 1\" to \"4\"); C or the pad's Back changes it.",
+            );
+            for (i, name) in model.cameras.iter().enumerate() {
+                ui.selectable_value(&mut model.camera, i, name);
+            }
+        });
+    }
+    egui::CollapsingHeader::new("Cheats")
+        .id_salt("cheats")
+        .show(ui, |ui| {
+            let c = &mut model.cheats;
+            ui.checkbox(&mut c.perfect_manual, "Perfect Manual");
+            ui.checkbox(&mut c.perfect_rail, "Perfect Rail");
+            ui.checkbox(&mut c.perfect_skitch, "Perfect Skitch");
+            ui.checkbox(&mut c.always_special, "Always Special");
+            ui.checkbox(&mut c.moon, "Moon Gravity");
+            ui.checkbox(&mut c.slomo, "Slomo");
+            ui.checkbox(&mut c.stats_13, "Stats 13")
+                .on_hover_text("Every stat at 13 (takes effect from the next skate)");
+        });
     ui.checkbox(&mut model.auto_kick, "AutoKick").on_hover_text(
         "The game's controller option: the skater pushes by itself while under its kick speed. Off, hold W to push.",
+    );
+    ui.checkbox(&mut model.wallride_anywhere, "Wallride any wall").on_hover_text(
+        "Jump at a wall alongside it holding Grind to ride it; let go of crouch to wallie off (with W held, a wallplant).          The game only lets you ride faces flagged wall-ridable, and only Canyon has any: off, so does this.",
     );
     if model.skating {
         if !model.trick_list.is_empty() {
@@ -760,6 +1333,40 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
                     );
                     for line in &model.trick_list {
                         ui.label(egui::RichText::new(line).small().monospace());
+                    }
+                });
+        }
+        if !model.session.is_empty() {
+            egui::CollapsingHeader::new("Session")
+                .id_salt("session")
+                .show(ui, |ui| {
+                    for line in &model.session {
+                        ui.label(egui::RichText::new(line).small());
+                    }
+                });
+        }
+        if !model.records.is_empty() {
+            egui::CollapsingHeader::new("Records")
+                .id_salt("records")
+                .show(ui, |ui| {
+                    for line in &model.records {
+                        ui.label(egui::RichText::new(line).small());
+                    }
+                });
+        }
+        if !model.gap_list.is_empty() {
+            let found = model.gap_list.iter().filter(|g| g.2).count();
+            egui::CollapsingHeader::new(format!("Gaps ({found}/{})", model.gap_list.len()))
+                .id_salt("gap_list")
+                .show(ui, |ui| {
+                    for (name, score, got) in &model.gap_list {
+                        let text = format!("{} {name} ({score})", if *got { "✔" } else { "  " });
+                        let text = egui::RichText::new(text).small();
+                        ui.label(if *got {
+                            text.color(egui::Color32::from_rgb(120, 220, 120))
+                        } else {
+                            text.weak()
+                        });
                     }
                 });
         }

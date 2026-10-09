@@ -32,6 +32,11 @@ character. This page is for anyone trying it out.
 | W held going up a quarter pipe | Stick up held | Launch out over the lip instead of straight up |
 | R tapped on the ground | Shoulder button tapped | 180 slide (A or D for backside/frontside), riding on the other way round |
 | Two directions, then Q (or E in a manual) | Two directions, then X (or Y) | Special trick, when the special meter is full |
+| J / L | Right stick | Look round (springs back when let go) |
+| P | Start | Pause (Resume, Restart, Stop skating); paused, W A S D fly the camera and right-drag looks, for pictures |
+| M | | Show or hide the map |
+| C | Back | Next chase camera (the game's Near, Standard, Far, Standard LTG; also in the panel) |
+| F12 | | Save a picture (`Pictures\DESA Map Viewer`), handy for bug reports |
 | Tab | | Jump to the next spawn point |
 | Esc | | Stop skating |
 
@@ -57,6 +62,21 @@ skater is and what it's doing.
 - Birds: skate up to a perched seagull (Beach's ship deck), crow
   (Graveyard) or bird and it takes off. Bumping into an animal (Scar on
   Pride Rock, the hyenas) knocks the skater into a flail.
+- Records: your best combo, longest grind, manual and lip trick, and
+  most tricks in a combo on each level, in the panel's Records list; a
+  new one past the game's mark (10,000 points, 10 seconds, 5 tricks) is
+  announced as the game does ("Record Combo Score!").
+- The Session list in the panel: time skated, distance, combos and
+  tricks landed, points, best combo, gaps and bails since you started.
+- The Gaps list in the panel while skating: every gap the level names,
+  ticked off as you land each one (kept between sessions).
+- Races (the panel's Race button on Andy's Room, the Hub and Scar's
+  Canyon): through the level's gates in order before the clock runs out,
+  each gate adding its seconds.
+- Skitching (Andy's Room): roll up behind one of the toy cars and hold W
+  (up): you hitch on ("Skitchin'", balance with A / D) and it sets off at
+  its skitch speed towing you; let go of W, fall off the meter or ollie
+  to come off.
 - Teleporters and water: falling in the Hub's harbour puts you back on
   the dock, as in the game.
 - Coming down a quarter pipe or landing a 180: you turn round and ride
@@ -71,7 +91,8 @@ skater is and what it's doing.
   runs out, the combo you're in still counts once it lands, then the
   skater brakes to a stop and the score goes against your best for that
   level and character (kept between runs). Replay watches the run again,
-  through the same camera, with the score and combos as they were.
+  with the score and combos as they were, as played or through the game's
+  replay cameras (behind, front, left, right: C or the Camera button).
 - S-K-A-T-E letters (the panel's button, on every level that has them):
   the level's letters goal, its own time (a minute on Beach and Canyon,
   two elsewhere) to collect the five spinning letters from the goal's
@@ -80,14 +101,39 @@ skater is and what it's doing.
   score goals, like Pride Rock's "Beat Scar's High Score!" (15,000) or
   Beach's 150,000 Extreme Score, in two minutes from the goal's start.
   The goal's won the moment the score's there.
+- Collectibles: each character's 25 on every level of its world
+  (Jessie's Cowgirl Boots on Pizza, the Bedroom and Zurg's Home; the Kid's
+  Medals everywhere), and the world's special item (the Toy Story
+  Special...), spinning and hovering while you skate. Roll through
+  one to collect it; what's collected stays collected (the Collectibles
+  box in the panel hides them).
+- Warps: on the Hub, skate up to a level's portal (the film strips in
+  the walls, which open as you come near) to be offered that level; on
+  each level, the glowing ring is the way back to the Hub. Enter warps
+  (you go on skating there), Esc stays.
+- Goal pros: while skating, the people who give the High Score, Pro
+  Score, letters and race goals stand where the career has them; roll up
+  to one and they offer it (Enter to start, Esc not now).
+- The Goals list in the panel: every goal the level has in the career,
+  by the game's own words ("Push 10 Henchmen into the ocean"), with Play
+  on those the viewer runs so far (the letters and the score goals).
+- Breakables: skate into the crates on Tarzan's Treehouse's walkways or
+  the plants in Scar's Canyon and they smash, with the game's sound.
+  Through the Hub's grocery doors the shelves are stocked to smash too.
+- Bouncy things (the Graveyard's bones, rocks in the Canyon and on Zurg's
+  world): skate into them and they're knocked flying.
+- Particle effects there from the start, like Camp's campfires and the
+  steam off Clayton's ship, run from the levels' own emit scripts.
+- Cheats (the panel's Cheats list, the game's own): Perfect Manual, Rail
+  and Skitch, Always Special, Moon Gravity and Slomo (the game's
+  Moon_gravity and slomo_speed, both 0.5), Stats 13.
 - Every level, and a few characters (each has its own tricks and stats).
 
 ## Known differences from the game
 
-- Not yet: wall rides (the game barely uses them), skitching, the
-  Simplified controls, goals besides the letters and scores and the other gameplay
-  modes, and the level's
-  other triggers (breakables, goal pickups).
+- Not yet: wall rides (the game barely uses them), the
+  Simplified controls, goals besides the letters, scores and races and the
+  other gameplay modes, and goal pickups.
 - Approximations of our own: the camera follows the game's camera
   update (a lagging focus, turning, the quick swing after vert, zooming
   for big air tricks, grinds and lips) but sees past walls its own way

@@ -35,6 +35,14 @@ pub enum GameData {
     Folder(PathBuf),
 }
 
+/// The screen's sprites and fonts, by lowercase name (see
+/// [`GameData::ui_files`]).
+#[derive(Clone, Debug, Default)]
+pub struct UiFiles {
+    pub images: HashMap<String, Vec<u8>>,
+    pub fonts: HashMap<String, Vec<u8>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelInfo {
     /// The archive name, e.g. `ToyStory_Bedroom`.
@@ -66,6 +74,9 @@ pub struct LevelFiles {
     pub key_tables: Option<(Vec<u8>, Vec<u8>)>,
     /// The level's own scripts (every `.qb` in `X.prg`).
     pub scripts: Vec<Vec<u8>>,
+    /// Particle textures (`images/particles/NAME.img.ngc`) by name's
+    /// checksum, as `CreateParticleSystem ... texture = NAME` names them.
+    pub particle_images: HashMap<u32, Vec<u8>>,
 }
 
 /// The raw files for one playable character.
@@ -277,6 +288,7 @@ impl GameData {
         let mut models = HashMap::new();
         let mut animations: HashMap<String, Vec<u8>> = HashMap::new();
         let mut scripts = Vec::new();
+        let mut particle_images = HashMap::new();
         let (nodes, cameras) = match self.read_archive(&format!("{id}.prg"))? {
             Some(data) => {
                 let archive =
@@ -284,8 +296,16 @@ impl GameData {
                 let nodes = entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?;
                 collect_models(&archive, &mut models)?;
                 for e in archive.entries() {
-                    if e.path().to_ascii_lowercase().ends_with(".qb") {
+                    let path = e.path().replace('\\', "/").to_ascii_lowercase();
+                    if path.ends_with(".qb") {
                         scripts.push(e.contents()?.into_owned());
+                    }
+                    if let Some(name) = path
+                        .split("images/particles/")
+                        .nth(1)
+                        .and_then(|n| n.strip_suffix(".img.ngc"))
+                    {
+                        particle_images.insert(qb::checksum(name), e.contents()?.into_owned());
                     }
                 }
                 let mut cameras = Vec::new();
@@ -331,6 +351,7 @@ impl GameData {
             skeletons,
             key_tables,
             scripts,
+            particle_images,
         })
     }
 
@@ -488,23 +509,60 @@ impl GameData {
         Ok(out)
     }
 
+    /// The goal pedestrians' voice lines (`streams/goalpeds/NAME`): where
+    /// each is in `streams.wad`, by its name's checksum (as goal scripts
+    /// name them: `S_Stream = hench_beach_Letter_S`).
+    pub fn goal_streams(&mut self) -> Result<HashMap<u32, (u64, u64)>> {
+        let prefix = r"\streams\goalpeds\";
+        let Some(index) = self.stream_file("streams.hed", None)? else {
+            return Ok(HashMap::new());
+        };
+        let mut out = HashMap::new();
+        let mut at = 0;
+        while at + 8 <= index.len() {
+            let offset = u32::from_le_bytes(index[at..at + 4].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(index[at + 4..at + 8].try_into().unwrap()) as u64;
+            at += 8;
+            let Some(end) = index[at..].iter().position(|&b| b == 0) else {
+                break;
+            };
+            let name = String::from_utf8_lossy(&index[at..at + end]).to_ascii_lowercase();
+            at = (at + end + 4) & !3;
+            if name.is_empty() {
+                break;
+            }
+            if let Some(stem) = name.strip_prefix(prefix) {
+                out.insert(qb::checksum(stem), (offset, size));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One voice line out of `streams.wad`.
+    pub fn stream(&mut self, (offset, size): (u64, u64)) -> Result<Option<Vec<u8>>> {
+        self.stream_file("streams.wad", Some((offset, size)))
+    }
+
     /// A file of the `streams` folder, or a range of it.
     fn stream_file(&mut self, name: &str, range: Option<(u64, u64)>) -> Result<Option<Vec<u8>>> {
         use std::io::{Read, Seek, SeekFrom};
         let data = match self {
             GameData::Disc { disc, .. } => {
-                let path = disc
+                let file = disc
                     .fst()
                     .files()
                     .find(|n| n.path.to_ascii_lowercase() == format!("streams/{name}"))
-                    .map(|n| n.path.clone());
-                let Some(path) = path else { return Ok(None) };
-                let whole = disc.read_file(&path)?;
+                    .and_then(|n| Some((n.path.clone(), n.file_range()?)));
+                let Some((path, (start, length))) = file else {
+                    return Ok(None);
+                };
                 match range {
-                    Some((offset, size)) => whole
-                        .get(offset as usize..(offset + size) as usize)
-                        .map(<[u8]>::to_vec),
-                    None => Some(whole),
+                    // Just the part wanted, straight off the disc.
+                    Some((offset, size)) if offset + size <= length => {
+                        Some(disc.read_range(start + offset, size)?)
+                    }
+                    Some(_) => None,
+                    None => Some(disc.read_file(&path)?),
                 }
             }
             GameData::Folder(dir) => {
@@ -526,6 +584,108 @@ impl GameData {
             }
         };
         Ok(data)
+    }
+
+    /// Where a movie is (`movies/NAME.bik`, ignoring case): the disc's
+    /// range of it, or the file in an extracted folder (`movies` beside
+    /// `pre`).
+    pub fn movie(&self, name: &str) -> Option<crate::movie::MovieSource> {
+        let file = format!("{}.bik", name.to_ascii_lowercase());
+        match self {
+            GameData::Disc { path, disc } => {
+                let (offset, size) = disc
+                    .fst()
+                    .files()
+                    .find(|n| n.path.to_ascii_lowercase() == format!("movies/{file}"))?
+                    .file_range()?;
+                Some(crate::movie::MovieSource {
+                    path: path.clone(),
+                    offset,
+                    size,
+                })
+            }
+            GameData::Folder(dir) => {
+                let movies = dir.parent()?.join("movies");
+                let path = fs::read_dir(&movies).ok()?.find_map(|e| {
+                    let e = e.ok()?;
+                    e.file_name()
+                        .to_str()?
+                        .eq_ignore_ascii_case(&file)
+                        .then(|| e.path())
+                })?;
+                let size = fs::metadata(&path).ok()?.len();
+                Some(crate::movie::MovieSource {
+                    path,
+                    offset: 0,
+                    size,
+                })
+            }
+        }
+    }
+
+    /// The screen's pieces: the panel sprites (`images/PanelSprites/...`,
+    /// by lowercase file name without `.img.ngc`) and fonts (by lowercase
+    /// name without `.fnt.ngc`) of the archives named, later ones over
+    /// earlier (`panelsprites.prg` for every level, then a theme's:
+    /// `hubpanel.prg`). Languages' own copies (`French/`...) are left out.
+    pub fn ui_files(&mut self, archives: &[&str]) -> Result<UiFiles> {
+        let mut out = UiFiles::default();
+        for name in archives {
+            let Some(data) = self.read_archive(name)? else {
+                continue;
+            };
+            let archive =
+                Archive::parse(&data).with_context(|| format!("could not read {name}"))?;
+            for e in archive.entries() {
+                let path = e.path().to_ascii_lowercase().replace('\\', "/");
+                if ["/french/", "/german/", "/italian/", "/spanish/"]
+                    .iter()
+                    .any(|l| path.contains(l))
+                {
+                    continue;
+                }
+                let file = path.rsplit('/').next().unwrap_or(&path).to_string();
+                if let Some(image) = file.strip_suffix(".img.ngc") {
+                    out.images
+                        .insert(image.to_string(), e.contents()?.into_owned());
+                } else if let Some(font) = file.strip_suffix(".fnt.ngc") {
+                    out.fonts
+                        .insert(font.to_string(), e.contents()?.into_owned());
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The movies on the disc (`movies/*.bik`), by name, sorted.
+    pub fn movies(&self) -> Vec<String> {
+        let mut names: Vec<String> = match self {
+            GameData::Disc { disc, .. } => disc
+                .fst()
+                .files()
+                .filter(|n| {
+                    let p = n.path.to_ascii_lowercase();
+                    p.starts_with("movies/") && p.ends_with(".bik")
+                })
+                .map(|n| n.name.trim_end_matches(".bik").to_string())
+                .collect(),
+            GameData::Folder(dir) => dir
+                .parent()
+                .and_then(|d| fs::read_dir(d.join("movies")).ok())
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| {
+                            let name = e.ok()?.file_name().into_string().ok()?;
+                            name.to_ascii_lowercase()
+                                .ends_with(".bik")
+                                .then(|| name[..name.len() - 4].to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        names.sort_by_key(|n| n.to_ascii_lowercase());
+        names
     }
 
     /// A streamed music track (`music/dtk/NAME.dtk`, ignoring case), or

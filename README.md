@@ -141,10 +141,16 @@ around takes over from wherever it is.
 | E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
 | R as you land from vert | Revert (keeps the combo going into a manual) |
 | Tab | While skating: to the next spawn point |
+| J / L | While skating: look round (springs back) |
+| P | While skating: pause (Resume, Restart, Stop skating) |
+| M | While skating: show or hide the map (the level from above round the skater, drawn from its collision, with collectibles, letters and warps marked) |
+| C | While skating: the next of the game's chase cameras (`Skater_Camera_Array`: near, standard, far, standard LTG) |
+| F12 | Save a picture of the window to `Pictures\DESA Map Viewer` |
 
 A gamepad works too while skating, laid out like the GameCube game: the
 left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
-X flips, B grabs, Y grinds, and the shoulder buttons revert. It rumbles
+X flips, B grabs, Y grinds, the shoulder buttons revert, the right stick
+looks round and Start pauses. It rumbles
 where the game's does (ollies, landings, grinds, reverts, flails, bails);
 the panel's Rumble box turns that off, and the `pad_check` example
 checks that a pad can rumble.
@@ -161,7 +167,23 @@ up within 8 feet, as `SkateLetter_InitLetter` sets. `--letters` with
 `--skate` screenshots it. The **High Score** and **Pro Score goals** read
 `AddGoal_HighScore` and `AddGoal_ProScore` the same way: the score (a
 global such as `pride_highscore_score`), the time and the goal's name;
-`--score-goal high|pro` screenshots one. `--run SECONDS`
+`--score-goal high|pro` screenshots one. **Collectibles** are the
+character's `AddGoal_Collect25` objects (`jessie_collect25_objects`: 25 on
+each level of its world), shown spinning (`Obj_RotY speed = 250`) and
+hovering (`Obj_Hover`) while skating, picked up within 7 feet with the
+gap sound, and kept collected in the settings file. **Warps** come from
+the levels' scripts too: the Hub's portals are the sectors whose scripts
+call `LevelWarp level_num = N filmStrip = ...` (the level being the `N`th
+of `level_select_menu_level_info`), opening as the skater comes within 60
+feet; each level's `Warp_Master_Hub` (`HubWarp`, the Kid's way back in the
+game) is shown to everyone with the game's own sparkle
+(`TRG_Warp_Particle_Hub`), and each Hub portal starts its `warpParticle`
+as it opens. **Particle effects**
+(campfires, steam) come from the levels' `ParticleEmitter` nodes: their
+scripts' `CreateParticleSystem` names an emit script, which the
+interpreter runs (`setlife`, `setspeedrange`, `setemittarget`,
+`setcolor`, `emit`...) to throw soft glowing blobs; most emitters are
+made later by goals, so the ones there at the start show. `--run SECONDS`
 with `--skate` screenshots one with that much time left, and `--replay-at
 SECONDS` the replay of it that far in.
 | P | Play or pause the character |

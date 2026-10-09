@@ -171,12 +171,35 @@ pub struct Physics {
     pub rail_corner_leave_angle: f32,
     pub rail_jump_angle: f32,
     pub regrind_time: f32,
+    /// Wallriding (`Wall_Ride_*`, main.dol 0x800FDB6C and 0x800FE664):
+    /// gravity on the wall, the slowest along it, the widest angle onto it
+    /// and the furthest overhang (degrees), how long after the grind
+    /// button it still catches and how soon after one another starts
+    /// (seconds), and the push off it, out and up. An ollie off it with
+    /// up held is a wallplant, at the boneless jump speed.
+    pub wall_ride_gravity: f32,
+    pub wall_ride_min_speed: f32,
+    pub wall_ride_max_incident_angle: f32,
+    pub wall_ride_upside_down_angle: f32,
+    pub wall_ride_triangle_window: f32,
+    pub wall_ride_delay: f32,
+    pub wall_ride_jump_out_speed: f32,
+    pub wall_ride_jump_up_speed: f32,
+    pub boneless_jump_speed: f32,
     /// Balancing manuals (`ManualParams`, by the manual stat) and grinds
     /// (`GrindParams`, by the rail balance stat).
     pub manual_balance: BalanceParams,
     pub grind_balance: BalanceParams,
     /// Balancing lip tricks (`LipParams`, by the lip balance stat).
     pub lip_balance: BalanceParams,
+    /// Skitching (`SkitchParams`): balancing on the car, how far behind a
+    /// car it can start (`Skitch_Max_Distance`), how far behind its back
+    /// the skater hangs (`Skitch_Offset`), and how long up has to be held
+    /// (`skitch_hold_time`, seconds).
+    pub skitch_balance: BalanceParams,
+    pub skitch_max_distance: f32,
+    pub skitch_offset: f32,
+    pub skitch_hold_time: f32,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -264,9 +287,22 @@ impl Physics {
             rail_corner_leave_angle: plain("Rail_Corner_Leave_Angle", 50.0),
             rail_jump_angle: plain("Rail_Jump_Angle", 15.0),
             regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
+            wall_ride_gravity: plain("Wall_Ride_Gravity", -969.0),
+            wall_ride_min_speed: plain("Wall_Ride_Min_Speed", 200.0),
+            wall_ride_max_incident_angle: plain("Wall_Ride_Max_Incident_Angle", 60.0),
+            wall_ride_upside_down_angle: plain("Wall_Ride_Upside_Down_Angle", 53.0),
+            wall_ride_triangle_window: plain("Wall_Ride_Triangle_Window", 0.333),
+            wall_ride_delay: plain("Wall_Ride_Delay", 0.666),
+            wall_ride_jump_out_speed: plain("Wall_Ride_Jump_Out_Speed", 40.0),
+            wall_ride_jump_up_speed: plain("Wall_Ride_Jump_Up_Speed", 80.0),
+            boneless_jump_speed: scaled("Physics_Boneless_Jump_Speed_Stat", 500.0),
             manual_balance: BalanceParams::new(program, "ManualParams", stats),
             grind_balance: BalanceParams::new(program, "GrindParams", stats),
             lip_balance: BalanceParams::new(program, "LipParams", stats),
+            skitch_balance: BalanceParams::new(program, "SkitchParams", stats),
+            skitch_max_distance: plain("Skitch_Max_Distance", 120.0),
+            skitch_offset: plain("Skitch_Offset", 27.0),
+            skitch_hold_time: plain("skitch_hold_time", 200.0) / 1000.0,
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),
@@ -283,6 +319,61 @@ impl Physics {
             camera_grind_zoom: camera_value("grind_zoom", 1.0),
             camera_lip_trick_zoom: camera_value("lip_trick_zoom", 1.25),
         }
+    }
+}
+
+impl Physics {
+    /// The game's chase cameras the player picks between
+    /// (`Skater_Camera_Array` after the undefined one, up to the replay
+    /// cameras: near, standard, far and standard LTG, the pause menu's
+    /// "Camera Angle 1" to "4"): each one's name and setting.
+    pub fn camera_choices(program: &Program) -> Vec<(String, u32)> {
+        let Some(Value::Array(cameras)) = program.value(checksum("Skater_Camera_Array")) else {
+            return Vec::new();
+        };
+        cameras
+            .iter()
+            .skip(1)
+            .take(4)
+            .filter_map(Value::as_name)
+            .filter_map(|setting| {
+                let name = match program.value(setting)?.get(checksum("Name"))? {
+                    Value::String(s) | Value::LocalString(s) => s.clone(),
+                    _ => return None,
+                };
+                Some((name, setting))
+            })
+            .collect()
+    }
+
+    /// Follows the skater with another of the game's camera settings
+    /// (`Skater_Camera_Standard_Far`...): what it doesn't say stays.
+    pub fn set_camera(&mut self, program: &Program, setting: u32) {
+        let Some(camera) = program.value(setting) else {
+            return;
+        };
+        let get = |key: &str, now: f32| {
+            camera
+                .get(checksum(key))
+                .and_then(Value::as_f32)
+                .unwrap_or(now)
+        };
+        self.camera_behind = get("behind", self.camera_behind);
+        self.camera_above = get("above", self.camera_above);
+        self.camera_fov = get("horiz_fov", self.camera_fov);
+        self.camera_tilt = get("Tilt", self.camera_tilt);
+        self.camera_slerp = get("slerp", self.camera_slerp);
+        self.camera_vert_air_slerp = get("vert_air_slerp", self.camera_vert_air_slerp);
+        self.camera_lerp_xz = get("lerp_xz", self.camera_lerp_xz);
+        self.camera_lerp_y = get("lerp_y", self.camera_lerp_y);
+        self.camera_vert_air_lerp_xz = get("vert_air_lerp_xz", self.camera_vert_air_lerp_xz);
+        self.camera_vert_air_lerp_y = get("vert_air_lerp_y", self.camera_vert_air_lerp_y);
+        self.camera_vert_air_landed_slerp =
+            get("vert_air_landed_slerp", self.camera_vert_air_landed_slerp);
+        self.camera_zoom_lerp = get("zoom_lerp", self.camera_zoom_lerp);
+        self.camera_big_air_trick_zoom = get("big_air_trick_zoom", self.camera_big_air_trick_zoom);
+        self.camera_grind_zoom = get("grind_zoom", self.camera_grind_zoom);
+        self.camera_lip_trick_zoom = get("lip_trick_zoom", self.camera_lip_trick_zoom);
     }
 }
 

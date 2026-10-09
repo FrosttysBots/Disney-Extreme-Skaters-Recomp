@@ -18,7 +18,7 @@
 //! open later, invisible trigger boxes and most pedestrians, which goals
 //! create.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -159,6 +159,65 @@ pub struct LevelNodes {
     /// trigger faces: the node's name (its collision object's checksum)
     /// and the `TriggerScript`.
     pub geometry_scripts: Vec<(u32, u32)>,
+    /// Particle emitters (`ParticleEmitter`): where, their `TriggerScript`
+    /// (which makes the particle system), whether there at the start, and
+    /// how far off they're drawn (`CutOff`).
+    pub emitters: Vec<Emitter>,
+    /// Every named node's name as written, by its checksum (for `create
+    /// prefix = "..."`).
+    pub labels: HashMap<u32, String>,
+    /// Bouncy objects (`LevelObject ... Bouncy`): knocked flying when the
+    /// skater runs into them.
+    pub bouncies: Vec<Bouncy>,
+    /// The level's own pieces that scripts can move, turn, make and take
+    /// away (`LevelObject`s that aren't bouncy: Beach's cargo doors,
+    /// Pizza's alien heads).
+    pub movers: Vec<Mover>,
+}
+
+/// A `LevelObject` node that isn't bouncy: where it's placed (mesh space),
+/// which way (its `Angles` heading), and whether it's there at the start.
+#[derive(Clone, Debug)]
+pub struct Mover {
+    pub name: u32,
+    pub position: Vec3,
+    pub heading: f32,
+    pub created_at_start: bool,
+}
+
+impl Mover {
+    /// As `ObjectNode::rotation`.
+    pub fn rotation(&self) -> Quat {
+        Quat::from_rotation_y(-self.heading)
+    }
+}
+
+/// A bouncy object's node and how it bounces (`UpMagnitude`,
+/// `Bounciness`, `MinBounceVel`, `Gravity`, `ConstRot`, `BounceSound`).
+#[derive(Clone, Debug)]
+pub struct Bouncy {
+    pub name: u32,
+    pub position: Vec3,
+    pub created_at_start: bool,
+    pub up: f32,
+    pub bounciness: f32,
+    pub min_bounce: f32,
+    pub gravity: f32,
+    pub spin: f32,
+    pub sound: Option<u32>,
+    /// Run when the skater knocks it (`CollideScript`: a counter goal's
+    /// thing got).
+    pub collide_script: Option<u32>,
+}
+
+/// A `ParticleEmitter` node.
+#[derive(Clone, Debug)]
+pub struct Emitter {
+    pub name: u32,
+    pub position: Vec3,
+    pub script: u32,
+    pub created_at_start: bool,
+    pub cutoff: f32,
 }
 
 impl LevelNodes {
@@ -214,6 +273,14 @@ impl LevelNodes {
                 .collect(),
             ..LevelNodes::default()
         };
+        for node in nodes.iter() {
+            if let (Some(name), Some(label)) = (
+                node.get(key("Name")).and_then(Value::as_name),
+                name_of(node, "Name"),
+            ) {
+                out.labels.insert(name, label);
+            }
+        }
         for (index, node) in nodes.iter().enumerate() {
             let Some(pos) = position(node).map(Vec3::from) else {
                 continue;
@@ -243,6 +310,43 @@ impl LevelNodes {
                     }
                 }
                 Some(c) if c == key("LevelGeometry") || c == key("LevelObject") => {
+                    if c == key("LevelObject") && !node.has_flag(key("Bouncy")) {
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.movers.push(Mover {
+                                name,
+                                position: pos,
+                                heading: node
+                                    .get(key("Angles"))
+                                    .and_then(Value::as_vector)
+                                    .map_or(0.0, |a| a[1]),
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
+                            });
+                        }
+                    }
+                    if node.has_flag(key("Bouncy")) {
+                        let get =
+                            |k: &str, d: f32| node.get(key(k)).and_then(Value::as_f32).unwrap_or(d);
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.bouncies.push(Bouncy {
+                                name,
+                                position: pos,
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
+                                up: get("UpMagnitude", 24.0),
+                                bounciness: get("Bounciness", 0.5),
+                                min_bounce: get("MinBounceVel", 1.0),
+                                gravity: get("Gravity", 32.0),
+                                spin: get("ConstRot", 180.0),
+                                sound: node
+                                    .get(key("BounceSound"))
+                                    .and_then(Value::as_name)
+                                    .filter(|s| *s != 0),
+                                collide_script: node
+                                    .get(key("CollideScript"))
+                                    .and_then(Value::as_name)
+                                    .filter(|s| *s != 0),
+                            });
+                        }
+                    }
                     if let (Some(name), Some(script)) = (
                         node.get(key("Name")).and_then(Value::as_name),
                         node.get(key("TriggerScript")).and_then(Value::as_name),
@@ -282,6 +386,20 @@ impl LevelNodes {
                         node: index,
                         script: node.get(key("TriggerScript")).and_then(Value::as_name),
                     });
+                }
+                Some(c) if c == key("ParticleEmitter") => {
+                    if let Some(script) = node.get(key("TriggerScript")).and_then(Value::as_name) {
+                        out.emitters.push(Emitter {
+                            name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                            position: pos,
+                            script,
+                            created_at_start: node.has_flag(key("CreatedAtStart")),
+                            cutoff: node
+                                .get(key("CutOff"))
+                                .and_then(Value::as_f32)
+                                .unwrap_or(500.0),
+                        });
+                    }
                 }
                 Some(c) if c == key("Restart") => {
                     let heading = node

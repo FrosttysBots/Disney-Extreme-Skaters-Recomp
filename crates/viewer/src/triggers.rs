@@ -16,10 +16,10 @@
 
 use std::collections::HashMap;
 
-use qb::checksum;
 use qb::token::Token;
-use qb::vm::Program;
-use skate::{GapFlags, GapTrigger};
+use qb::vm::{Host, Outcome, Program, Thread};
+use qb::{Value, checksum};
+use skate::{GapFlags, GapTrick, GapTrigger, TrickNeed};
 
 use crate::nodes::LevelNodes;
 
@@ -42,6 +42,158 @@ pub fn teleports(nodes: &LevelNodes, program: &Program) -> HashMap<u32, usize> {
         .filter_map(|&(object, script)| {
             let target = restart_named(program, script, &restarts, DEPTH)?;
             Some((object, target))
+        })
+        .collect()
+}
+
+/// What a teleporter does besides moving the skater: the sound it plays
+/// (`playsound bigsplash` for water, `arc5` for Pizza Planet's) and the
+/// message it shows (`Create_Panel_Message text = ...`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TeleportEffect {
+    pub sound: Option<u32>,
+    pub message: Option<String>,
+    /// What it creates or kills on the way (`create prefix = "toiletpaper"`
+    /// restocks the Hub's grocery store): a name or a name's start, and
+    /// whether it's created.
+    pub creates: Vec<(CreateTarget, bool)>,
+}
+
+/// What a `create` or `kill` names.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CreateTarget {
+    Name(u32),
+    Prefix(String),
+}
+
+/// Catches a trigger script's sound and message.
+struct Catch<'a> {
+    program: &'a Program,
+    effect: TeleportEffect,
+}
+
+impl Host for Catch<'_> {
+    fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if name == checksum("playsound") || name == checksum("obj_playsound") {
+            if let Value::Struct(items) = args {
+                let sound = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                });
+                self.effect.sound = self.effect.sound.or(sound);
+            }
+        } else if name == checksum("create") || name == checksum("kill") {
+            let created = name == checksum("create");
+            let target = match (args.get(checksum("Name")), args.get(checksum("prefix"))) {
+                (Some(Value::Name(n)), _) => Some(CreateTarget::Name(*n)),
+                (_, Some(Value::String(p) | Value::LocalString(p))) => {
+                    Some(CreateTarget::Prefix(p.clone()))
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.effect.creates.push((target, created));
+            }
+        } else if name == checksum("Create_Panel_Message")
+            || name == checksum("CreateScreenElement")
+        {
+            // (The text may sit in a struct of its own: `CreateScreenElement
+            // { ... text = ... }`.)
+            let field = args.get(checksum("text")).or_else(|| match args {
+                Value::Struct(items) => items
+                    .iter()
+                    .find_map(|(k, v)| k.is_none().then(|| v.get(checksum("text"))).flatten()),
+                _ => None,
+            });
+            let text = match field {
+                Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                Some(Value::Name(n)) => match self.program.value(*n) {
+                    Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            self.effect.message = self.effect.message.take().or(text);
+        }
+        Outcome::Done(false)
+    }
+}
+
+/// Each teleporter's sound and message, run from its trigger script.
+pub fn teleport_effects(nodes: &LevelNodes, program: &Program) -> HashMap<u32, TeleportEffect> {
+    let teleports = teleports(nodes, program);
+    nodes
+        .geometry_scripts
+        .iter()
+        .filter(|(object, _)| teleports.contains_key(object))
+        .map(|&(object, script)| {
+            let mut host = Catch {
+                program,
+                effect: TeleportEffect::default(),
+            };
+            let mut thread = Thread::new(script, Vec::new());
+            // Through any waits (a panel message's) to the end.
+            for _ in 0..20 {
+                if thread.is_finished() {
+                    break;
+                }
+                thread.run(program, &mut host, 1.0);
+            }
+            (object, host.effect)
+        })
+        .collect()
+}
+
+/// Catches what a trigger script shatters (`ShatterAndDie Name = Box03`:
+/// `kill` and `Shatter` the box).
+#[derive(Default)]
+struct Breaks {
+    killed: Vec<u32>,
+    sound: Option<u32>,
+}
+
+impl Host for Breaks {
+    fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if (name == checksum("playsound") || name == checksum("obj_playsound"))
+            && self.sound.is_none()
+        {
+            if let Value::Struct(items) = args {
+                self.sound = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                });
+            }
+        }
+        if name == checksum("Shatter") {
+            if let Some(n) = args.get(checksum("Name")).and_then(Value::as_name) {
+                if !self.killed.contains(&n) {
+                    self.killed.push(n);
+                }
+            }
+        }
+        Outcome::Done(false)
+    }
+}
+
+/// The level's breakables: for each trigger object (not a teleporter or a
+/// gap) whose script shatters things when the skater touches it, its
+/// script, what it shatters (sector or object names) and the sound it
+/// plays.
+pub fn breakables(
+    nodes: &LevelNodes,
+    program: &Program,
+) -> HashMap<u32, (u32, Vec<u32>, Option<u32>)> {
+    let teleports = teleports(nodes, program);
+    let gaps = gaps(nodes, program);
+    nodes
+        .geometry_scripts
+        .iter()
+        .filter(|(object, _)| !teleports.contains_key(object) && !gaps.contains_key(object))
+        .filter_map(|&(object, script)| {
+            let mut host = Breaks::default();
+            let mut thread = Thread::new(script, Vec::new());
+            thread.run(program, &mut host, 0.0);
+            (!host.killed.is_empty()).then_some((object, (script, host.killed, host.sound)))
         })
         .collect()
 }
@@ -91,6 +243,8 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     let mut flags = GapFlags::default();
     let mut text = None;
     let mut score = None;
+    let mut script = None;
+    let (mut trick_script, mut lip, mut trick_text) = (None, false, None);
     let mut i = 0;
     while i + 2 < args.len() + 1 {
         let (Some(Token::Name(k)), Some(Token::Equals)) = (args.get(i), args.get(i + 1)) else {
@@ -127,7 +281,26 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
                     flags.require_rail = true;
                 } else if flag == key("REQUIRE_LIP") {
                     flags.require_lip = true;
+                } else if flag == key("PURE_RAIL") {
+                    flags.pure_rail = true;
                 }
+            }
+        } else if *k == key("trickscript") {
+            if let Some(Token::Name(v)) = value {
+                trick_script = Some(*v);
+            }
+        } else if *k == key("KeyCombo") {
+            if let Some(Token::Name(_)) = value {
+                // (`Lip_TriangleL`: the lip tricks are the only ones asked.)
+                lip = true;
+            }
+        } else if *k == key("TrickText") {
+            if let Some(Token::String(s)) = value {
+                trick_text = Some(s.clone());
+            }
+        } else if *k == key("Gapscript") {
+            if let Some(Token::Name(v)) = value {
+                script = Some(*v);
             }
         } else if *k == key("text") {
             if let Some(Token::String(s)) = value {
@@ -144,12 +317,28 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     }
     let id = id?;
     if start {
-        Some(GapTrigger::Start { id, flags })
+        // A trick spot: what it asks, and its script.
+        let trick = trick_script.map(|script| GapTrick {
+            needs: if lip {
+                TrickNeed::Lip
+            } else if let Some(text) = trick_text {
+                TrickNeed::Named(text)
+            } else {
+                TrickNeed::Any
+            },
+            script,
+        });
+        Some(GapTrigger::Start { id, flags, trick })
     } else {
+        // A goal's gap ends without a name or points, but with its script.
+        if script.is_none() && (text.is_none() || score.is_none()) {
+            return None;
+        }
         Some(GapTrigger::End {
             id,
-            text: text?,
-            score: score?,
+            text: text.unwrap_or_default(),
+            score: score.unwrap_or(0),
+            script,
         })
     }
 }
@@ -253,7 +442,8 @@ mod tests {
                 flags: GapFlags {
                     cancel_ground: true,
                     ..GapFlags::default()
-                }
+                },
+                trick: None,
             })
         );
         assert_eq!(
@@ -261,7 +451,8 @@ mod tests {
             Some(&GapTrigger::End {
                 id: checksum("ChainLinkGap"),
                 text: "Chain Link Gap".into(),
-                score: 100
+                score: 100,
+                script: None,
             })
         );
     }

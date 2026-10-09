@@ -60,6 +60,53 @@ impl Source for Stream {
     }
 }
 
+/// A movie's sound as ffmpeg decodes it: interleaved stereo, taken from
+/// the channel as it comes (silence when it's behind), ending when the
+/// channel does.
+struct MovieSound {
+    from: std::sync::mpsc::Receiver<Vec<f32>>,
+    buffer: Vec<f32>,
+    at: usize,
+}
+
+impl Iterator for MovieSound {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        use std::sync::mpsc::TryRecvError;
+        while self.at >= self.buffer.len() {
+            match self.from.try_recv() {
+                Ok(more) => {
+                    self.buffer = more;
+                    self.at = 0;
+                }
+                Err(TryRecvError::Empty) => return Some(0.0),
+                Err(TryRecvError::Disconnected) => return None,
+            }
+        }
+        self.at += 1;
+        Some(self.buffer[self.at - 1])
+    }
+}
+
+impl Source for MovieSound {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> ChannelCount {
+        NonZero::new(desa_viewer::movie::AUDIO_CHANNELS).unwrap()
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        NonZero::new(desa_viewer::movie::AUDIO_RATE).unwrap()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
 /// A decoded sound, ready to play.
 struct Clip {
     rate: u32,
@@ -99,7 +146,13 @@ pub struct Audio {
     /// The character's voice lines by kind (`bail`, `trick`), the line
     /// playing, and a little randomness for which and whether.
     voices: HashMap<String, Vec<Clip>>,
+    /// The panel's volumes, 0 to 1: the effects (and ambience and voices)
+    /// and the music.
+    effects: f32,
+    music_level: f32,
     voice: Option<Player>,
+    /// A movie's sound playing.
+    movie: Option<Player>,
     seed: u64,
 }
 
@@ -119,7 +172,10 @@ impl Audio {
             music: None,
             ambience: None,
             voices: HashMap::new(),
+            effects: 1.0,
+            music_level: 1.0,
             voice: None,
+            movie: None,
             seed: 0x9E37_79B9_7F4A_7C15,
         })
     }
@@ -193,9 +249,41 @@ impl Audio {
             return;
         };
         let player = Player::connect_new(self.sink.mixer());
-        player.set_volume(MASTER * 1.2);
+        player.set_volume(MASTER * 1.2 * self.effects);
         player.append(clip.buffer());
         self.voice = Some(player);
+    }
+
+    /// A goal pedestrian's line (a `.dsp` sound), over whatever the
+    /// character was saying.
+    pub fn say_line(&mut self, data: &[u8]) {
+        let Ok(sound) = Sound::parse(data) else {
+            return;
+        };
+        let clip = Clip {
+            rate: sound.sample_rate,
+            samples: sound.floats(),
+        };
+        let player = Player::connect_new(self.sink.mixer());
+        player.set_volume(MASTER * 1.3 * self.effects);
+        player.append(clip.buffer());
+        self.voice = Some(player);
+    }
+
+    /// The panel's volumes, 0 to 1: the effects and the music (playing
+    /// ones follow at once).
+    pub fn set_volumes(&mut self, effects: f32, music: f32) {
+        if (effects, music) == (self.effects, self.music_level) {
+            return;
+        }
+        self.effects = effects;
+        self.music_level = music;
+        if let Some(player) = &self.music {
+            player.set_volume(MUSIC_VOLUME * music);
+        }
+        if let Some((player, _)) = &self.ambience {
+            player.set_volume(AMBIENCE_VOLUME * effects);
+        }
     }
 
     /// Silences the loops and the music (skating stopped).
@@ -209,9 +297,24 @@ impl Audio {
     /// Plays a song (a `.dtk` track) in place of the last.
     pub fn play_music(&mut self, track: Vec<u8>) {
         let player = Player::connect_new(self.sink.mixer());
-        player.set_volume(MUSIC_VOLUME);
+        player.set_volume(MUSIC_VOLUME * self.music_level);
         player.append(Stream(Dtk::new(track)));
         self.music = Some(player);
+    }
+
+    /// Plays a movie's sound (`samples` as ffmpeg decodes them), or stops
+    /// the one playing (`None`).
+    pub fn play_movie(&mut self, samples: Option<std::sync::mpsc::Receiver<Vec<f32>>>) {
+        self.movie = samples.map(|from| {
+            let player = Player::connect_new(self.sink.mixer());
+            player.set_volume(MASTER * self.music_level.max(self.effects));
+            player.append(MovieSound {
+                from,
+                buffer: Vec::new(),
+                at: 0,
+            });
+            player
+        });
     }
 
     pub fn stop_music(&mut self) {
@@ -227,7 +330,7 @@ impl Audio {
     pub fn set_ambience(&mut self, track: Option<Vec<u8>>) {
         self.ambience = track.map(|track| {
             let player = Player::connect_new(self.sink.mixer());
-            player.set_volume(AMBIENCE_VOLUME);
+            player.set_volume(AMBIENCE_VOLUME * self.effects);
             player.append(Stream(Dtk::new(track.clone())));
             (player, track)
         });
@@ -259,10 +362,24 @@ impl Audio {
             return;
         };
         let player = Player::connect_new(self.sink.mixer());
-        player.set_volume(volume * MASTER);
+        player.set_volume(volume * MASTER * self.effects);
         player.set_speed(speed.max(0.05));
         player.append(clip.buffer());
         player.detach();
+    }
+
+    /// A rail sound, falling back to the grind's for a slide's the level
+    /// hasn't.
+    fn play_rail(&self, terrain: u16, moment: Moment) {
+        let fallback = match moment {
+            Moment::SlideJump => Moment::GrindJump,
+            Moment::SlideLand => Moment::GrindLand,
+            other => other,
+        };
+        match self.terrain_sound(terrain, moment) {
+            Some(sound) => self.play(&sound.file, sound.volume, 1.0),
+            None => self.play_terrain(terrain, fallback),
+        }
     }
 
     fn play_terrain(&self, terrain: u16, moment: Moment) {
@@ -287,18 +404,26 @@ impl Audio {
         let rail = skater
             .grind
             .map(|g| self.rail_terrain.get(g.segment).copied().unwrap_or(0));
+        // A slide (a 50-50 on its side): the slide sounds, where the rail's
+        // surface has them.
+        let slide = skater.balance_trick.as_ref().is_some_and(|t| t.slide);
+        let rail_moment = |grind: Moment, slide_moment: Moment| {
+            if slide { slide_moment } else { grind }
+        };
         for sound in std::mem::take(&mut skater.sounds) {
             match sound {
-                SkateSound::Jump { from_rail: true } => {
-                    self.play_terrain(rail.unwrap_or(skater.terrain), Moment::GrindJump)
-                }
+                SkateSound::Jump { from_rail: true } => self.play_rail(
+                    rail.unwrap_or(skater.terrain),
+                    rail_moment(Moment::GrindJump, Moment::SlideJump),
+                ),
                 SkateSound::Jump { from_rail: false } => {
                     self.play_terrain(skater.terrain, Moment::Jump)
                 }
                 SkateSound::Land => self.play_terrain(skater.terrain, Moment::Land),
-                SkateSound::RailOn => {
-                    self.play_terrain(rail.unwrap_or(skater.terrain), Moment::GrindLand)
-                }
+                SkateSound::RailOn => self.play_rail(
+                    rail.unwrap_or(skater.terrain),
+                    rail_moment(Moment::GrindLand, Moment::SlideLand),
+                ),
                 SkateSound::Cess => self.play_terrain(skater.terrain, Moment::Cess),
                 SkateSound::Bail => {
                     self.play("bail_knee1", 1.0, 1.0);
@@ -319,8 +444,10 @@ impl Audio {
                     self.play("copinghit3_11", 0.8, pitch);
                 }
                 SkateSound::Smack => self.play("bodysmacka", 1.0, 1.0),
+                SkateSound::Bonk { terrain } => self.play_terrain(terrain, Moment::Bonk),
                 SkateSound::Gap => self.play("hud_jumpgap", 1.0, 1.0),
-                SkateSound::Teleport => self.play("bigsplash", 1.0, 1.0),
+                // The teleporter's own sound (the viewer plays it).
+                SkateSound::Teleport => {}
             }
         }
         // Rolling on the ground (not bailing or off the board).
@@ -338,10 +465,27 @@ impl Audio {
         let roll = rolling
             .then(|| self.terrain_sound(skater.terrain, Moment::Roll))
             .flatten();
-        Self::keep_looping(&self.clips, &self.sink, &mut self.roll, roll, speed);
-        let grind = rail.and_then(|t| self.terrain_sound(t, Moment::Grind));
+        Self::keep_looping(
+            &self.clips,
+            &self.sink,
+            &mut self.roll,
+            roll,
+            speed,
+            self.effects,
+        );
+        let grind = rail.and_then(|t| {
+            self.terrain_sound(t, rail_moment(Moment::Grind, Moment::Slide))
+                .or_else(|| self.terrain_sound(t, Moment::Grind))
+        });
         let grind_speed = skater.grind.map_or(0.0, |g| g.speed);
-        Self::keep_looping(&self.clips, &self.sink, &mut self.grind, grind, grind_speed);
+        Self::keep_looping(
+            &self.clips,
+            &self.sink,
+            &mut self.grind,
+            grind,
+            grind_speed,
+            self.effects,
+        );
     }
 
     /// Keeps `slot` playing `wanted` (starting it or changing it over),
@@ -352,6 +496,7 @@ impl Audio {
         slot: &mut Option<Loop>,
         wanted: Option<TerrainSound>,
         speed: f32,
+        effects: f32,
     ) {
         let Some(sound) = wanted else {
             *slot = None;
@@ -375,7 +520,7 @@ impl Audio {
         if let Some(l) = slot {
             l.player.set_speed(pitch.max(0.05));
             l.player
-                .set_volume(sound.volume * loudness * MASTER * (0.3 + 0.7 * f));
+                .set_volume(sound.volume * loudness * MASTER * effects * (0.3 + 0.7 * f));
         }
     }
 }

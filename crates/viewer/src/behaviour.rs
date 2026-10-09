@@ -25,7 +25,24 @@
 //!   [orient]` (at once without a speed), `Obj_MoveToRelPos (x, y, z) time
 //!   = seconds` (relative to the object's facing), `Obj_LookAtNode`,
 //!   `Obj_WaitMove` and `Obj_IsMoving`.
-//! - `Obj_RotY speed = degrees a second` and `Obj_StopRotating`.
+//! - `Obj_StickToGround distAbove distBelow [pitch]` (feet; `off`): kept
+//!   on the ground below as it goes, tipped with the slope.
+//! - Object flags: `Obj_SetFlag`, `Obj_ClearFlag`, `Obj_FlagSet`,
+//!   `Obj_FlagNotSet`.
+//! - Looking at the skater: `Obj_ObjectInRadius radius = n feet Type =
+//!   skater`, `Obj_AngleToNearestSkaterGreaterThan degrees`,
+//!   `Obj_LookAtObject Type = skater time = seconds` (turning smoothly)
+//!   and `Obj_WaitRotate`.
+//! - `GoalManager_HasWonGoal Name = goal`, from the goals won.
+//! - The goal on, for scripts that aren't any object's (a gap's
+//!   `Gapscript`, a goal's own): `GoalManager_GoalIsActive`,
+//!   `GoalManager_SetGoalFlag Name = goal flag 1`, `GoalManager_GoalFlagSet`,
+//!   `GoalManager_AllFlagsSet`, `GoalManager_GotCounterObject` (a counter
+//!   goal's), `GoalManager_WinGoal`, `GoalManager_GoalExists`, and
+//!   `IsCareerMode` (always: the levels are as the career has them).
+//! - `LocalSkaterExists` (skating), `Obj_LookAtObject Name = object`.
+//! - `Obj_RotY speed = degrees a second`, `Obj_StopRotating` and
+//!   `Obj_Hover Amp = units Freq = hertz`.
 //! - `playsound` / `obj_playsound name [Vol = percent]`: collected in
 //!   [`Behaviour::sounds`] for the viewer to play.
 //!
@@ -71,6 +88,20 @@ struct State {
     exceptions: Vec<(u32, u32, Params)>,
     /// Turning about Y (radians a second; `Obj_RotY`).
     spin: f32,
+    /// Bobbing up and down (`Obj_Hover Amp = units Freq = hertz`), shown
+    /// only: where it is stays put.
+    hover: Option<(f32, f32)>,
+    /// Its flags (`Obj_SetFlag`, `Obj_ClearFlag`; `Obj_FlagSet` asks).
+    flags: Vec<u32>,
+    /// Turning to face something: from, to, seconds in and how long.
+    turn: Option<(Quat, Quat, f32, f32)>,
+    /// Moving to a spot without turning to face the way (`Obj_MoveToPos`:
+    /// a door sliding open).
+    slide: bool,
+    /// Kept on the ground below as it moves (`Obj_StickToGround distAbove
+    /// distBelow [pitch]`): how far up and down to look (units), and
+    /// whether to tip with the slope.
+    stick: Option<(f32, f32, bool)>,
 }
 
 #[derive(Default)]
@@ -115,6 +146,52 @@ pub struct Behaviour {
     /// Sounds the scripts played since the viewer last took them: the
     /// sound's name (checksum), where, and the volume (1 is full).
     pub sounds: Vec<(u32, Vec3, f32)>,
+    /// Names scripts created or killed that aren't objects (particle
+    /// emitters, sectors), for the viewer: (name, created?).
+    pub other_creates: Vec<(u32, bool)>,
+    /// Voice lines scripts asked for (`midgoalvoiceover stream = name`).
+    pub voice_lines: Vec<u32>,
+    /// Text scripts put on screen (`Create_Panel_Message`,
+    /// `create_panel_block`: a goal's messages), for the viewer to show.
+    pub messages: Vec<String>,
+    /// The scripts' screen-element commands (a goal's panel messages, its
+    /// text and counters), for the viewer to pass to the game's screen:
+    /// (command, its arguments).
+    pub screen_calls: Vec<(u32, Value)>,
+    /// The game's UI scripts the level's called (`create_speech_box`,
+    /// `create_panel_block`...), for the viewer to run on the game's
+    /// screen, where they can see what they've made.
+    pub screen_scripts: Vec<(u32, Params)>,
+    next_screen_id: u32,
+    /// Camera paths scripts asked to play (`PlaySkaterCamAnim Name =
+    /// path`), for the viewer.
+    pub cameras: Vec<u32>,
+    /// The goals won (their ids), for `GoalManager_HasWonGoal`.
+    pub won_goals: std::collections::HashSet<u32>,
+    /// The level's own runner (an extra state past the objects).
+    level_runner: usize,
+    /// Where the level's moving pieces start among the objects (one each,
+    /// in `LevelNodes::movers` order).
+    movers: usize,
+    /// Every named node's name as written (for `create prefix = "..."`).
+    labels: Vec<(u32, String)>,
+    /// The goal manager: the goal on (its id), the flags its scripts have
+    /// set (`GoalManager_SetGoalFlag`), how many win it, and whether a
+    /// script has won it (`GoalManager_WinGoal`).
+    pub active_goal: Option<u32>,
+    /// The goal just ended, whose end scripts still ask for its settings.
+    pub ended_goal: Option<u32>,
+    pub goal_flags: std::collections::HashSet<u32>,
+    /// A counter goal's things got (`GoalManager_GotCounterObject`).
+    pub goal_count: usize,
+    pub goal_needed: usize,
+    pub goal_won: bool,
+    /// The goal on's parameters, as `GoalManager_GetGoalParams` gives
+    /// them (and `GoalManager_EditGoal` changes them).
+    pub goal_params: Params,
+    /// Scripts to run alongside what objects are running
+    /// (`RunScriptOnObject`, `SpawnScript`).
+    spawning: Vec<(usize, Thread)>,
 }
 
 impl Behaviour {
@@ -146,8 +223,59 @@ impl Behaviour {
                 was_outside: true,
                 exceptions: Vec::new(),
                 spin: 0.0,
+                hover: None,
+                stick: None,
+                flags: Vec::new(),
+                turn: None,
+                slide: false,
             })
             .collect();
+        // Then the level's pieces that move (`LevelObject`s), objects too.
+        let mut states: Vec<State> = states;
+        let movers = states.len();
+        for m in &nodes.movers {
+            states.push(State {
+                position: m.position,
+                rotation: m.rotation(),
+                alive: m.created_at_start,
+                dirty: false,
+                path: Path::default(),
+                moving: None,
+                inner: 0.0,
+                outer: 0.0,
+                was_inside: false,
+                was_outside: true,
+                exceptions: Vec::new(),
+                spin: 0.0,
+                hover: None,
+                stick: None,
+                flags: Vec::new(),
+                turn: None,
+                slide: false,
+            });
+        }
+        // One more, the level's own: what runs scripts that are nobody's
+        // (a gap's, a goal's).
+        let level_runner = states.len();
+        states.push(State {
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            alive: true,
+            dirty: false,
+            path: Path::default(),
+            moving: None,
+            inner: 0.0,
+            outer: 0.0,
+            was_inside: false,
+            was_outside: true,
+            exceptions: Vec::new(),
+            spin: 0.0,
+            hover: None,
+            stick: None,
+            flags: Vec::new(),
+            turn: None,
+            slide: false,
+        });
         let threads = nodes
             .objects
             .iter()
@@ -163,24 +291,67 @@ impl Behaviour {
             by_name: nodes
                 .objects
                 .iter()
+                .map(|o| o.name)
+                .chain(nodes.movers.iter().map(|m| m.name))
                 .enumerate()
-                .map(|(i, o)| (o.name, i))
+                .map(|(i, name)| (name, i))
                 .collect(),
+            movers,
             node_by_name: nodes
                 .nodes
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (n.name, i))
                 .collect(),
-            object_node: nodes.objects.iter().map(|o| o.node).collect(),
+            object_node: nodes
+                .objects
+                .iter()
+                .map(|o| o.node)
+                .chain(nodes.movers.iter().map(|_| 0))
+                .chain([0])
+                .collect(),
+            level_runner,
+            labels: nodes
+                .labels
+                .iter()
+                .map(|(n, l)| (*n, l.to_ascii_lowercase()))
+                .collect(),
+            active_goal: None,
+            ended_goal: None,
+            goal_flags: Default::default(),
+            goal_count: 0,
+            goal_needed: 0,
+            goal_won: false,
+            goal_params: Vec::new(),
+            spawning: Vec::new(),
             random: 0x2545_F491,
             unknown: HashMap::new(),
-            scripts: nodes.objects.iter().map(|o| o.script).collect(),
-            goal: nodes.objects.iter().map(|o| !o.created_at_start).collect(),
+            scripts: nodes
+                .objects
+                .iter()
+                .map(|o| o.script)
+                .chain(nodes.movers.iter().map(|_| None))
+                .chain([None])
+                .collect(),
+            goal: nodes
+                .objects
+                .iter()
+                .map(|o| !o.created_at_start)
+                .chain(nodes.movers.iter().map(|_| false))
+                .chain([false])
+                .collect(),
             goal_shown: None,
             skater: None,
             starting: Vec::new(),
             sounds: Vec::new(),
+            other_creates: Vec::new(),
+            voice_lines: Vec::new(),
+            messages: Vec::new(),
+            screen_calls: Vec::new(),
+            screen_scripts: Vec::new(),
+            next_screen_id: 0,
+            cameras: Vec::new(),
+            won_goals: Default::default(),
         }
     }
 
@@ -197,13 +368,56 @@ impl Behaviour {
         state.dirty = true;
         state.moving = None;
         state.spin = 0.0;
+        state.hover = None;
         state.exceptions.clear();
         self.threads.retain(|(o, _)| *o != object);
+    }
+
+    /// A vehicle the skater's skitching on: no more stopping for the
+    /// skater, off at its `SkitchSpeed` (the car script's header default,
+    /// in miles an hour).
+    pub fn skitch(&mut self, object: usize) {
+        let speed = self.scripts[object]
+            .and_then(|s| self.program.script(s))
+            .and_then(|body| {
+                body.iter().find_map(|t| match t {
+                    qb::Token::Name(n) if self.program.has_script(*n) => Some(*n),
+                    _ => None,
+                })
+            })
+            .and_then(|called| self.program.default_param(called, checksum("SkitchSpeed")))
+            .and_then(Value::as_f32)
+            .unwrap_or(30.0);
+        let state = &mut self.states[object];
+        state.exceptions.clear();
+        state.path.top_speed = speed * MPH;
+    }
+
+    /// Lets the vehicle go back to what its own script has it do.
+    pub fn unskitch(&mut self, object: usize) {
+        if let Some(script) = self.scripts[object] {
+            self.start(object, Thread::new(script, Vec::new()));
+        }
     }
 
     /// Runs `script` as the object's script.
     pub fn run_script(&mut self, object: usize, script: u32) {
         self.start(object, Thread::new(script, Vec::new()));
+    }
+
+    /// Turns an object to face `at` (across), over `seconds`.
+    pub fn look_at(&mut self, object: usize, at: Vec3, seconds: f32) {
+        let state = &mut self.states[object];
+        let flat = (at - state.position).with_y(0.0).normalize_or_zero();
+        if flat != Vec3::ZERO {
+            let to = Quat::from_rotation_arc(Vec3::Z, flat);
+            state.turn = Some((state.rotation, to, 0.0, seconds.max(1e-3)));
+        }
+    }
+
+    /// Sets an object bobbing up and down so far, so often a second.
+    pub fn set_hover(&mut self, object: usize, amplitude: f32, frequency: f32) {
+        self.states[object].hover = Some((amplitude, frequency));
     }
 
     /// Sets an object spinning about Y (radians a second).
@@ -251,18 +465,94 @@ impl Behaviour {
         }
     }
 
+    /// Where the objects are that do something when the skater comes
+    /// near (their `SkaterInRadius` exception set), now.
+    pub fn radius_triggers(&self) -> Vec<Vec3> {
+        self.radius_trigger_objects()
+            .into_iter()
+            .map(|i| self.states[i].position)
+            .collect()
+    }
+
+    /// The objects that do something when the skater comes near.
+    pub fn radius_trigger_objects(&self) -> Vec<usize> {
+        let key = checksum("SkaterInRadius");
+        self.states
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                s.alive && s.inner > 0.0 && s.exceptions.iter().any(|(e, ..)| *e == key)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// How far the goal on's got: its flags set and things counted.
+    pub fn goal_progress(&self) -> usize {
+        self.goal_flags.len() + self.goal_count
+    }
+
+    /// Runs a script that's nobody's (a gap's `Gapscript`, a goal's
+    /// scripts) alongside whatever else the level's running.
+    pub fn run_level_script(&mut self, script: u32, params: Params) {
+        self.starting
+            .push((self.level_runner, Thread::new(script, params)));
+    }
+
     /// Runs `thread` as object `i`'s script, in place of what it was
     /// running.
     fn start(&mut self, i: usize, thread: Thread) {
+        // The level's runner runs any number side by side.
+        if i == self.level_runner {
+            self.threads.push((i, thread));
+            return;
+        }
         match self.threads.iter_mut().find(|(o, _)| *o == i) {
             Some((_, t)) => *t = thread,
             None => self.threads.push((i, thread)),
         }
     }
 
+    /// Keeps an object that sticks to the ground on it, tipped with the
+    /// slope if it says so.
+    fn stick_to_ground(&mut self, i: usize, world: &skate::World) {
+        let state = &mut self.states[i];
+        let (Some((above, below, pitch)), true, true) = (state.stick, state.alive, state.dirty)
+        else {
+            return;
+        };
+        let from = state.position + Vec3::Y * above;
+        let Some(hit) = world.ray(from, state.position - Vec3::Y * below) else {
+            return;
+        };
+        state.position = hit.point;
+        if pitch && hit.normal.y > 0.3 {
+            // Facing the same way round, along the slope.
+            let forward = state.rotation * Vec3::Z;
+            let along = (forward - hit.normal * forward.dot(hit.normal)).normalize_or(forward);
+            state.rotation = Quat::from_mat3(&glam::Mat3::from_cols(
+                hit.normal.cross(along).normalize_or(Vec3::X),
+                hit.normal,
+                along,
+            ));
+        }
+    }
+
     /// Moves objects heading straight for a spot.
     fn move_straight(&mut self, i: usize, dt: f32) {
         let state = &mut self.states[i];
+        if let Some((from, to, t, length)) = &mut state.turn {
+            *t += dt;
+            let k = (*t / length.max(1e-3)).min(1.0);
+            state.rotation = from.slerp(*to, k);
+            state.dirty = true;
+            if k >= 1.0 {
+                state.turn = None;
+            }
+        }
+        if state.hover.is_some() && state.alive {
+            state.dirty = true;
+        }
         if state.spin != 0.0 && state.alive {
             state.rotation = Quat::from_rotation_y(state.spin * dt) * state.rotation;
             state.dirty = true;
@@ -273,7 +563,7 @@ impl Behaviour {
         let along = to - state.position;
         let distance = along.length();
         let step = speed * dt;
-        if distance > 1e-3 {
+        if distance > 1e-3 && !state.slide {
             let direction = if orient {
                 along / distance
             } else {
@@ -295,6 +585,29 @@ impl Behaviour {
     /// Where an object is now (in mesh space).
     pub fn position(&self, object: usize) -> Vec3 {
         self.states[object].position
+    }
+
+    /// The object standing for the level's moving piece `i` (in
+    /// `LevelNodes::movers` order).
+    pub fn mover(&self, i: usize) -> usize {
+        self.movers + i
+    }
+
+    /// How an object's turned now.
+    pub fn rotation(&self, object: usize) -> Quat {
+        self.states[object].rotation
+    }
+
+    /// Which way an object faces (models face +Z) and how fast it's going
+    /// (along a path or straight to a spot).
+    pub fn motion(&self, object: usize) -> (Vec3, f32) {
+        let state = &self.states[object];
+        let speed = match state.moving {
+            Some((_, speed, _)) => speed,
+            None if state.path.target.is_some() => state.path.speed,
+            None => 0.0,
+        };
+        (state.rotation * Vec3::Z, speed)
     }
 
     /// Whether an object exists now (created and not killed).
@@ -324,6 +637,7 @@ impl Behaviour {
         now: f32,
         dt: f32,
         show_goal: bool,
+        ground: Option<&skate::World>,
     ) -> Vec<(bool, usize, Mat4)> {
         // Goals' objects show when made (or all of them, previewing).
         if self.goal_shown != Some(show_goal) {
@@ -344,6 +658,7 @@ impl Behaviour {
                 objects,
                 object: *object,
                 now,
+                program: &program,
             };
             thread.run(&program, &mut host, dt);
         }
@@ -354,11 +669,15 @@ impl Behaviour {
         for (i, thread) in std::mem::take(&mut self.starting) {
             self.start(i, thread);
         }
+        self.threads.append(&mut self.spawning);
         self.program = program;
 
         for i in 0..self.states.len() {
             self.follow_path(i, dt);
             self.move_straight(i, dt);
+            if let Some(world) = ground {
+                self.stick_to_ground(i, world);
+            }
         }
 
         // Push changes to the models.
@@ -368,8 +687,11 @@ impl Behaviour {
                 continue;
             }
             let shown = state.alive || (self.goal[i] && show_goal);
+            let bob = state.hover.map_or(0.0, |(amplitude, frequency)| {
+                amplitude * (now * frequency * std::f32::consts::TAU).sin()
+            });
             let placement = if shown {
-                Mat4::from_rotation_translation(state.rotation, state.position)
+                Mat4::from_rotation_translation(state.rotation, state.position + Vec3::Y * bob)
             } else {
                 // Gone: shrink it to nothing.
                 Mat4::from_scale(Vec3::ZERO)
@@ -459,11 +781,31 @@ impl Behaviour {
 }
 
 /// The host commands for one object's script.
+/// The game's UI scripts, run on its screen rather than by the level's
+/// scripts (they look at what they've made: `GetScreenElementDims`).
+const UI_SCRIPTS: &[&str] = &[
+    "create_speech_box",
+    "speech_box_exit",
+    "create_panel_block",
+    "Create_Panel_Message",
+    "create_panel_sprite",
+    "goal_create_counter",
+    "goal_update_counter",
+    "Goal_Destroy_Counter",
+    "destroy_goal_panel_messages",
+    "create_dialog_box",
+    "Dialog_Box_Exit",
+    "kill_panel_message_if_it_exists",
+    "hide_panel_message",
+];
+
 struct Commands<'a> {
     behaviour: &'a mut Behaviour,
     objects: &'a mut LevelObjects,
     object: usize,
     now: f32,
+    /// The scripts and globals (the localized texts scripts name).
+    program: &'a Program,
 }
 
 impl Commands<'_> {
@@ -503,6 +845,32 @@ impl Commands<'_> {
 }
 
 impl Host for Commands<'_> {
+    fn is_self(&self, target: u32) -> bool {
+        self.behaviour.object_named(target) == Some(self.object)
+    }
+
+    /// The game's UI scripts go to its screen, whole.
+    fn calling(&mut self, script: u32, args: &Value) -> bool {
+        if !UI_SCRIPTS.iter().any(|s| checksum(s) == script) {
+            return false;
+        }
+        let b = &mut *self.behaviour;
+        if b.screen_scripts.len() < 64 {
+            // (A struct passed whole gives its fields, as for any call.)
+            let mut params = Vec::new();
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Struct(fields)) => params.extend(fields.iter().cloned()),
+                        item => params.push((*item.0, item.1.clone())),
+                    }
+                }
+            }
+            b.screen_scripts.push((script, params));
+        }
+        true
+    }
+
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
         let object = match target {
             Some(t) => match self.behaviour.object_named(t) {
@@ -514,6 +882,17 @@ impl Host for Commands<'_> {
         let named = |key: &str| args.get(checksum(key)).and_then(Value::as_name);
         let c = |s: &str| checksum(s);
         let b = &mut *self.behaviour;
+
+        // `object:script args`: the script run as that object, alongside
+        // what it's doing (the wildebeest's `HerdWildebeast_Waiting`).
+        if target.is_some() && self.program.has_script(name) {
+            let params = match args {
+                Value::Struct(items) => items.clone(),
+                _ => Vec::new(),
+            };
+            b.spawning.push((object, Thread::new(name, params)));
+            return Outcome::Done(true);
+        }
 
         if name == c("Obj_FollowPathLinked") {
             let state = &mut b.states[object];
@@ -546,6 +925,7 @@ impl Host for Commands<'_> {
                 match args.get(c("speed")).and_then(Value::as_f32) {
                     Some(speed) if speed > 0.0 => {
                         state.moving = Some((p, speed * MPH, args.has_flag(c("orient"))));
+                        state.slide = false;
                     }
                     _ => {
                         state.position = p;
@@ -571,6 +951,59 @@ impl Host for Commands<'_> {
                     .filter(|t| *t > 0.0)
                     .unwrap_or(10.0);
                 state.moving = Some((to, offset.length() / time, true));
+                state.slide = false;
+            }
+        } else if name == c("Obj_MoveToPos") {
+            // `Obj_MoveToPos (x, y, z) time = t seconds`: to a spot, over
+            // that long, facing as it was. (These come from the levels'
+            // animation exports, already in mesh space: Pizza's alien
+            // heads move to where their nodes put them with Z unmirrored.)
+            let to = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Vector(v)) => Some(Vec3::from(*v)),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(to) = to {
+                let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
+                let state = &mut b.states[object];
+                let distance = state.position.distance(to);
+                if time <= 0.0 || distance < 1e-3 {
+                    state.position = to;
+                    state.moving = None;
+                    state.dirty = true;
+                } else {
+                    state.moving = Some((to, distance / time, false));
+                    state.slide = true;
+                }
+            }
+        } else if name == c("Obj_Rotate") {
+            // `Obj_Rotate absolute = (axis) axis_angle = degrees time = t`:
+            // to that orientation in the world, over that long. The axis
+            // is the animation export's, Z up: Pizza's alien heads, placed
+            // turned half round, start at about 180 degrees round (0, 0,
+            // 1). In mesh space that's about Y, the other way round, as
+            // the nodes' headings are.
+            let axis = match args.get(c("absolute")) {
+                Some(Value::Vector([x, y, z])) => Vec3::new(*x, *z, *y).normalize_or_zero(),
+                _ => Vec3::ZERO,
+            };
+            if axis != Vec3::ZERO {
+                let angle = args
+                    .get(c("axis_angle"))
+                    .and_then(Value::as_f32)
+                    .unwrap_or(0.0)
+                    .to_radians();
+                let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
+                let state = &mut b.states[object];
+                let to = Quat::from_axis_angle(axis, -angle);
+                if time > 0.0 {
+                    state.turn = Some((state.rotation, to, 0.0, time));
+                } else {
+                    state.rotation = to;
+                    state.dirty = true;
+                }
             }
         } else if name == c("Obj_LookAtNode") {
             let node = named("Name").and_then(|n| b.node_by_name.get(&n).copied());
@@ -631,8 +1064,372 @@ impl Host for Commands<'_> {
         } else if name == c("Obj_RotY") {
             let speed = args.get(c("speed")).and_then(Value::as_f32).unwrap_or(0.0);
             b.states[object].spin = speed.to_radians();
+        } else if name == c("Obj_Hover") {
+            let amp = args.get(c("Amp")).and_then(Value::as_f32).unwrap_or(0.0);
+            let freq = args.get(c("Freq")).and_then(Value::as_f32).unwrap_or(1.0);
+            b.states[object].hover = Some((amp, freq));
+        } else if name == c("Obj_StickToGround") {
+            b.states[object].stick = if args.has_flag(c("off")) {
+                None
+            } else {
+                Some((
+                    args.get(c("distAbove"))
+                        .and_then(Value::as_f32)
+                        .unwrap_or(10.0)
+                        * FOOT,
+                    args.get(c("distBelow"))
+                        .and_then(Value::as_f32)
+                        .unwrap_or(30.0)
+                        * FOOT,
+                    args.has_flag(c("pitch")),
+                ))
+            };
         } else if name == c("Obj_StopRotating") {
             b.states[object].spin = 0.0;
+        } else if [
+            "Obj_SetFlag",
+            "Obj_ClearFlag",
+            "Obj_FlagSet",
+            "Obj_FlagNotSet",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            // The flag's the first bare name (`Obj_FlagSet Expired`).
+            let flag = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    (Some(k), Value::Name(n)) if *k == c("flag") => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(flag) = flag else {
+                return Outcome::Done(false);
+            };
+            let flags = &mut b.states[object].flags;
+            if name == c("Obj_SetFlag") {
+                if !flags.contains(&flag) {
+                    flags.push(flag);
+                }
+            } else if name == c("Obj_ClearFlag") {
+                flags.retain(|f| *f != flag);
+            } else {
+                let set = flags.contains(&flag);
+                return Outcome::Done(if name == c("Obj_FlagSet") { set } else { !set });
+            }
+        } else if name == c("midgoalvoiceover") || name == c("obj_playstream") {
+            // `midgoalvoiceover stream = name`, `obj_playstream name`.
+            let stream = named("stream").or_else(|| match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            if let Some(stream) = stream {
+                b.voice_lines.push(stream);
+            }
+        } else if name == c("LocalSkaterExists") {
+            return Outcome::Done(b.skater.is_some());
+        } else if name == c("Obj_LookAtObject") {
+            // At another object, or the skater (`Type = skater`), over
+            // `time` seconds.
+            let at = if named("Type") == Some(c("skater")) {
+                b.skater
+            } else {
+                named("Name")
+                    .and_then(|n| b.object_named(n))
+                    .map(|o| b.states[o].position)
+            };
+            if let Some(at) = at {
+                let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
+                let state = &mut b.states[object];
+                let flat = (at - state.position).with_y(0.0).normalize_or_zero();
+                if flat != Vec3::ZERO {
+                    let to = Quat::from_rotation_arc(Vec3::Z, flat);
+                    if time > 0.0 {
+                        state.turn = Some((state.rotation, to, 0.0, time));
+                    } else {
+                        state.rotation = to;
+                        state.dirty = true;
+                    }
+                }
+            }
+        } else if name == c("Obj_WaitRotate") {
+            if let Some((_, _, t, length)) = b.states[object].turn {
+                return Outcome::Wait((length - t).max(0.0));
+            }
+        } else if name == c("Obj_ObjectInRadius") {
+            // `radius = 80 feet Type = skater`: the skater that near.
+            let radius = args.get(c("radius")).and_then(Value::as_f32).unwrap_or(0.0);
+            let radius = if args.has_flag(c("feet")) {
+                radius * FOOT
+            } else {
+                radius
+            };
+            let near = b
+                .skater
+                .is_some_and(|s| s.distance(b.states[object].position) < radius);
+            return Outcome::Done(near);
+        } else if name == c("Obj_AngleToNearestSkaterGreaterThan") {
+            let Some(skater) = b.skater else {
+                return Outcome::Done(false);
+            };
+            let degrees = Self::number(args).unwrap_or(0.0);
+            let state = &b.states[object];
+            let facing = (state.rotation * Vec3::Z).with_y(0.0).normalize_or_zero();
+            let to = (skater - state.position).with_y(0.0).normalize_or_zero();
+            let angle = facing.dot(to).clamp(-1.0, 1.0).acos().to_degrees();
+            return Outcome::Done(angle > degrees);
+        } else if name == c("GoalManager_GoalIsActive") {
+            return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
+        } else if name == c("GoalManager_HasSeenGoal") {
+            return Outcome::Done(true);
+        } else if name == c("IsCareerMode") || name == c("GoalManager_GoalExists") {
+            // The levels are played as the career has them (their set-up
+            // scripts leave things as the goals won say), with all their
+            // goals.
+            return Outcome::Done(true);
+        } else if name == c("GoalManager_SetGoalFlag") || name == c("GoalManager_GoalFlagSet") {
+            // `GoalManager_SetGoalFlag Name = goal Got_1 1`.
+            let (mut flag, mut value) = (None, 1);
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Name(n)) => flag = flag.or(Some(*n)),
+                        (None, Value::Integer(i)) => value = *i,
+                        (Some(k), Value::Name(n)) if *k == c("flag") => flag = Some(*n),
+                        _ => {}
+                    }
+                }
+            }
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            let Some(flag) = flag.filter(|_| ours) else {
+                return Outcome::Done(false);
+            };
+            if name == c("GoalManager_GoalFlagSet") {
+                return Outcome::Done(b.goal_flags.contains(&flag));
+            }
+            if value != 0 {
+                b.goal_flags.insert(flag);
+            } else {
+                b.goal_flags.remove(&flag);
+            }
+        } else if name == c("GoalManager_GotCounterObject") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            if ours {
+                b.goal_count += 1;
+            }
+        } else if name == c("PlaySkaterCamAnim") {
+            // A camera path played (not `STOP`ped), unless it's the goal's
+            // own (`virtual_cam`, made up round the pro).
+            let path = named("Name");
+            // (Only a goal's: the one on, or just over.)
+            let goal = b.active_goal.is_some() || b.ended_goal.is_some();
+            if let (Some(path), false, false, true) = (
+                path,
+                args.has_flag(c("STOP")),
+                args.has_flag(c("virtual_cam")),
+                goal,
+            ) {
+                if b.cameras.len() < 8 {
+                    b.cameras.push(path);
+                }
+            }
+        } else if name == c("SkaterCamAnimFinished") {
+            // (The viewer plays them as cutscenes; scripts needn't wait.)
+            return Outcome::Done(true);
+        } else if [
+            "SetScreenElementProps",
+            "DoScreenElementMorph",
+            "DestroyScreenElement",
+            "RunScriptOnScreenElement",
+            "AssignAlias",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            // For the game's screen.
+            if b.screen_calls.len() < 256 {
+                b.screen_calls.push((name, args.clone()));
+            }
+        } else if name == c("CreateScreenElement") {
+            // Passed on with an id (one made up if it has none), handed
+            // back as the game does, for the script's next steps (its
+            // style run on it).
+            let mut forwarded = args.clone();
+            let given = args
+                .get(c("id"))
+                .or_else(|| match args {
+                    Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                        (None, inner @ Value::Struct(_)) => inner.get(c("id")),
+                        _ => None,
+                    }),
+                    _ => None,
+                })
+                .and_then(Value::as_name)
+                .filter(|id| *id != 0);
+            let id = given.unwrap_or_else(|| {
+                b.next_screen_id += 1;
+                checksum(&format!("level_screen_element_{}", b.next_screen_id))
+            });
+            if given.is_none() {
+                if let Value::Struct(items) = &mut forwarded {
+                    items.push((Some(c("id")), Value::Name(id)));
+                }
+            }
+            if b.screen_calls.len() < 256 {
+                b.screen_calls.push((name, forwarded));
+            }
+            let made = id;
+            // Text put on screen (a panel message): its words, the goal's
+            // own text block aside (the viewer shows that already). (Its
+            // settings come in a struct of their own.)
+            let args = match args {
+                Value::Struct(items) => items
+                    .iter()
+                    .find_map(|(k, v)| match (k, v) {
+                        (None, inner @ Value::Struct(_)) => Some(inner),
+                        _ => None,
+                    })
+                    .unwrap_or(args),
+                _ => args,
+            };
+            let named = |key: &str| args.get(checksum(key)).and_then(Value::as_name);
+            let kind = args.get(c("Type")).and_then(Value::as_name);
+            let text_kind = kind == Some(c("TextElement")) || kind == Some(c("TextBlockElement"));
+            let goal_block = named("id") == Some(c("current_goal"));
+            let text = match args.get(c("text")) {
+                Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                Some(Value::Name(n)) => match self.program.value(*n) {
+                    Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let (true, false, Some(text)) = (text_kind, goal_block, text) {
+                if !text.trim().is_empty() {
+                    // (Kept few, for when nobody's taking them.)
+                    if b.messages.len() >= 8 {
+                        b.messages.remove(0);
+                    }
+                    b.messages.push(text);
+                }
+            }
+            return Outcome::Params(vec![(Some(c("id")), Value::Name(made))]);
+        } else if name == c("SendFlag") || name == c("QueryFlag") || name == c("ClearFlag") {
+            // An object's flags, by `Name = object`: `SendFlag Name = obj
+            // flag` sets one, `QueryFlag flag Name = obj` asks.
+            let on = named("Name")
+                .and_then(|n| b.object_named(n))
+                .unwrap_or(object);
+            let flag = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(f)) => Some(*f),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(flag) = flag else {
+                return Outcome::Done(false);
+            };
+            let flags = &mut b.states[on].flags;
+            if name == c("QueryFlag") {
+                return Outcome::Done(flags.contains(&flag));
+            } else if name == c("SendFlag") {
+                if !flags.contains(&flag) {
+                    flags.push(flag);
+                }
+            } else {
+                flags.retain(|f| *f != flag);
+            }
+        } else if name == c("GoalManager_CanStartGoal") {
+            // The goal on starts (`goal_start` then makes its things); with
+            // no goal named, whether a goal's cutscene can play now (yes:
+            // Graveyard's happy skulls wait on it).
+            return Outcome::Done(match named("Name") {
+                Some(goal) => Some(goal) == b.active_goal,
+                None => true,
+            });
+        } else if name == c("GoalManager_GetGoalParams")
+            || name == c("GoalManager_GetNumberCollected")
+        {
+            // The goal on's settings, with how far it's got.
+            let ours = named("Name").is_some()
+                && (named("Name") == b.active_goal || named("Name") == b.ended_goal);
+            if !ours {
+                return Outcome::Done(false);
+            }
+            let mut params = b.goal_params.clone();
+            params.push((
+                Some(c("num_flags_set")),
+                Value::Integer(b.goal_flags.len() as i32),
+            ));
+            params.push((
+                Some(c("number_collected")),
+                Value::Integer(b.goal_count as i32),
+            ));
+            return Outcome::Params(params);
+        } else if name == c("GoalManager_EditGoal") {
+            let ours = named("Name").is_some()
+                && (named("Name") == b.active_goal || named("Name") == b.ended_goal);
+            if let (true, Some(Value::Struct(items))) = (ours, args.get(c("params"))) {
+                for (k, v) in items.iter().filter(|(k, _)| k.is_some()) {
+                    b.goal_params.retain(|(o, _)| o != k);
+                    b.goal_params.push((*k, v.clone()));
+                }
+            }
+        } else if name == c("RunScriptOnObject")
+            || name == c("SpawnScript")
+            || name == c("Obj_SpawnScript")
+        {
+            // A script run alongside: on the object named (`id`), or on
+            // this one.
+            let on = if name == c("RunScriptOnObject") {
+                match named("id").and_then(|n| b.object_named(n)) {
+                    Some(o) => o,
+                    None => return Outcome::Done(false),
+                }
+            } else {
+                object
+            };
+            let script = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(script) = script else {
+                return Outcome::Done(false);
+            };
+            let params = match args.get(c("params")) {
+                Some(Value::Struct(p)) => p.clone(),
+                _ => Vec::new(),
+            };
+            b.spawning.push((on, Thread::new(script, params)));
+        } else if name == c("GoalManager_AllFlagsSet") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            return Outcome::Done(ours && b.goal_flags.len() >= b.goal_needed.max(1));
+        } else if name == c("GoalManager_WinGoal") {
+            let ours = named("Name").is_some() && named("Name") == b.active_goal;
+            if ours {
+                b.goal_won = true;
+            }
+            return Outcome::Done(ours);
+        } else if name == c("GoalManager_HasWonGoal") {
+            let won = named("Name").is_some_and(|g| b.won_goals.contains(&g));
+            return Outcome::Done(won);
+        } else if [
+            "Obj_SetPathTurnDist",
+            "Obj_SetPathMinStopVel",
+            "Obj_SetGroundOffset",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            // Fine points of following a path: close enough as it is.
         } else if name == c("Obj_ShadowOff") || name == c("Obj_ShadowOn") {
             // Pedestrians cast no shadows here anyway.
         } else if name == c("Obj_PlayAnim") {
@@ -649,6 +1446,9 @@ impl Host for Commands<'_> {
             }
         } else if name == c("Obj_WaitMove") {
             let state = &b.states[object];
+            if let (None, Some((_, _, t, length))) = (state.moving, state.turn) {
+                return Outcome::Wait((length - t).max(0.0));
+            }
             if let Some((to, speed, _)) = state.moving {
                 if speed > 0.0 {
                     return Outcome::Wait((to - state.position).length() / speed + 1.0 / 60.0);
@@ -660,8 +1460,25 @@ impl Host for Commands<'_> {
                 }
             }
         } else if name == c("create") || name == c("kill") {
-            if let Some(o) = named("Name").and_then(|n| b.object_named(n)) {
-                let create = name == c("create");
+            // By name, or every node whose name starts so
+            // (`create prefix = "seaweed"`).
+            let targets: Vec<u32> = match args.get(c("prefix")) {
+                Some(Value::String(p) | Value::LocalString(p)) => {
+                    let p = p.to_ascii_lowercase();
+                    b.labels
+                        .iter()
+                        .filter(|(_, l)| l.starts_with(&p))
+                        .map(|(n, _)| *n)
+                        .collect()
+                }
+                _ => named("Name").into_iter().collect(),
+            };
+            let create = name == c("create");
+            for target in targets {
+                let Some(o) = b.object_named(target) else {
+                    b.other_creates.push((target, create));
+                    continue;
+                };
                 // A new object runs its own script.
                 if create && !b.states[o].alive {
                     if let Some(script) = b.scripts[o] {

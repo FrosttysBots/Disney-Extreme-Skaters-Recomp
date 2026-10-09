@@ -9,12 +9,13 @@
 //! spawn point and play their animations.
 
 mod audio;
+mod minimap;
 mod rumble;
 mod settings;
 mod sparks;
 mod ui;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -65,6 +66,10 @@ struct Args {
     /// Character to show, by id (e.g. jessie, buzz, simba)
     #[arg(long)]
     character: Option<String>,
+    /// Don't play the game's opening movies (the logos and the intro) at
+    /// the start
+    #[arg(long)]
+    no_intro: bool,
     /// Render one frame, panel included, to this PNG and exit
     #[arg(long)]
     screenshot: Option<PathBuf>,
@@ -113,7 +118,7 @@ struct Args {
     #[arg(long, requires = "character", default_value_t = 0.0)]
     skate: f32,
     /// For --skate: keys pressed and let go at times, as "seconds:+Key" and
-    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R);
+    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R J L);
     /// without it W is held throughout
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
@@ -125,13 +130,44 @@ struct Args {
     /// its clock
     #[arg(long, requires = "skate")]
     run: Option<f32>,
+    /// For --skate: which of the game's chase cameras, 0 to 3 (near,
+    /// standard, far, standard LTG; default standard)
+    #[arg(long, requires = "skate")]
+    chase_camera: Option<usize>,
     /// For --skate: play the level's score goal, `high` or `pro` (from its
     /// start)
     #[arg(long, requires = "skate", value_parser = ["high", "pro"])]
     score_goal: Option<String>,
+    /// For --skate: cheats on (perfect_manual, perfect_rail,
+    /// perfect_skitch, always_special, moon, slomo, stats_13)
+    #[arg(long, requires = "skate", value_delimiter = ',')]
+    cheat: Vec<String>,
+    /// For --skate: play the level's race (from its start)
+    #[arg(long, requires = "skate")]
+    race: bool,
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
+    /// For --skate: bring up the game's pause menu at the end
+    #[arg(long, requires = "skate")]
+    pause: bool,
+    /// For --skate: presses to the game's screen at the end, in order (u up,
+    /// d down, c choose, b back): its pause menu with --pause, else
+    /// whatever it shows (a goal's speech box)
+    #[arg(long, requires = "skate", default_value = "")]
+    pause_keys: String,
+    /// For --skate: play another of the level's goals from its own
+    /// scripts, by its type (`Gaps`, `Gaps2`...)
+    #[arg(long, requires = "skate")]
+    goal: Option<String>,
+    /// For --goal: scripts to run as it starts, as if the skater had done
+    /// what runs them (a gap's script: `StrengthGrind`)
+    #[arg(long, requires = "goal", value_delimiter = ',')]
+    goal_script: Vec<String>,
+    /// For --replay-at: which replay camera (0 as played, 1 behind, 2
+    /// front, 3 left, 4 right)
+    #[arg(long, requires = "replay_at")]
+    replay_camera: Option<usize>,
     /// For --run: once skated, show the run's replay this many seconds in
     #[arg(long, requires = "run")]
     replay_at: Option<f32>,
@@ -183,6 +219,13 @@ fn main() -> Result<()> {
     if let Some(path) = data_path {
         app.open_data(&path);
     }
+    // The game's opening, as it boots (`startup_loading_screen`): the
+    // publisher's, Disney Interactive's and Toys for Bob's logos, then
+    // the intro.
+    if !args.no_intro && app.model.intro {
+        app.movie_queue
+            .extend(["ATVI", "DI_Logo", "TFBlogo", "intro"].map(String::from));
+    }
     // Show the requested character, else the last one shown.
     if let Some(id) = args
         .character
@@ -193,8 +236,13 @@ fn main() -> Result<()> {
             app.load_character(Some(i));
         }
     }
-    // Open the requested level, else the last one viewed, else the hub.
-    if let Some(level) = args
+    // As the game boots: the Skate Shop and its main menu (unless a level
+    // was asked for, or the panel says not to). Else the last level
+    // viewed, else the hub.
+    let main_menu = args.level.is_none() && app.model.start_menu;
+    if main_menu {
+        app.open_main_menu();
+    } else if let Some(level) = args
         .level
         .or_else(|| app.settings.last_level.clone())
         .or_else(|| Some("HUB".into()))
@@ -239,6 +287,36 @@ struct LoadedLevel {
     world: Option<World>,
     /// Animated vertex colors of the level, its sky and its goal geometry.
     colors: [ColorAnimation; 3],
+    /// The level's warps to other levels.
+    portals: Vec<Portal>,
+    /// The pros offering the goals the viewer plays.
+    pros: Vec<GoalPro>,
+    /// What each teleporter plays and says.
+    teleport_effects: HashMap<u32, desa_viewer::triggers::TeleportEffect>,
+    /// The level's scene and textures, kept to make a layer for a hidden
+    /// sector when a script creates it; those made so far.
+    scene: Vec<u8>,
+    scene_textures: Option<Vec<u8>>,
+    sector_layers: HashMap<u32, Option<usize>>,
+    /// Where each breakable sector is.
+    sector_centres: HashMap<u32, Vec3>,
+    /// The bouncy objects, knocked about.
+    bouncies: Vec<BouncyState>,
+    /// The level's pieces scripts move.
+    movers: Vec<MoverState>,
+    /// The breakables (trigger object: its script, what it shatters, its
+    /// sound) and the triggers already broken.
+    breakables: HashMap<u32, (u32, Vec<u32>, Option<u32>)>,
+    /// Trigger geometry's own scripts, by collision object, run when the
+    /// skater touches it.
+    touch_scripts: HashMap<u32, u32>,
+    broken: HashSet<u32>,
+    /// The level from above, for the map in the corner.
+    minimap: Option<minimap::Minimap>,
+    /// The level's particle effects (steam, sparks, dust), and their
+    /// textures' places in the renderer's list by name.
+    particles: desa_viewer::particles::Particles,
+    particle_textures: HashMap<u32, usize>,
     /// Which marker sets the renderer currently has: (rails, spawns).
     markers: (bool, bool),
 }
@@ -259,13 +337,56 @@ fn load_level(
         .as_deref()
         .and_then(|n| LevelNodes::from_bytes(n).ok())
         .unwrap_or_default();
+    // Objects' scripts: the game's shared scripts, then the level's own.
+    let mut scripts = data.global_scripts().unwrap_or_else(|e| {
+        eprintln!("warning: no shared scripts: {e:#}");
+        Vec::new()
+    });
+    scripts.extend(files.scripts.iter().cloned());
+    let behaviour = Behaviour::new(&nodes, &scripts);
+    // Breakables (what touching a trigger shatters): those that are sectors
+    // there at the start get layers of their own, to take away.
+    let breakables = desa_viewer::triggers::breakables(&nodes, behaviour.program());
+    // The other trigger geometry's scripts, run as the skater touches it
+    // (a goal's things: Canyon's pesky birds). Teleporters, gaps and
+    // breakables are done their own ways.
+    let touch_scripts: HashMap<u32, u32> = {
+        let teleports = desa_viewer::triggers::teleports(&nodes, behaviour.program());
+        let gaps = desa_viewer::triggers::gaps(&nodes, behaviour.program());
+        nodes
+            .geometry_scripts
+            .iter()
+            .filter(|(o, _)| {
+                !teleports.contains_key(o) && !gaps.contains_key(o) && !breakables.contains_key(o)
+            })
+            .copied()
+            .collect()
+    };
+    // Bouncy objects there at the start get layers of their own too, to
+    // knock about.
+    let bouncy_names: HashSet<u32> = nodes
+        .bouncies
+        .iter()
+        .filter(|b| b.created_at_start)
+        .map(|b| b.name)
+        .collect();
+    let breakable_sectors: HashSet<u32> = breakables
+        .values()
+        .flat_map(|(_, names, _)| names.iter().copied())
+        .filter(|n| !nodes.hidden_sectors.contains(n) && behaviour.object(*n).is_none())
+        .collect();
     // Sectors that aren't there at the start go in their own layer.
     let hidden = &nodes.hidden_sectors;
+    // The pieces scripts move are in layers of their own too.
+    let mover_names: HashSet<u32> = nodes.movers.iter().map(|m| m.name).collect();
     let world = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
         !hidden.contains(&s)
+            && !breakable_sectors.contains(&s)
+            && !bouncy_names.contains(&s)
+            && !mover_names.contains(&s)
     })?;
     let goal_geometry = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
-        hidden.contains(&s)
+        hidden.contains(&s) && !mover_names.contains(&s)
     })?;
     let sets = data.animation_sets().unwrap_or_else(|e| {
         eprintln!("warning: no pedestrian animations: {e:#}");
@@ -276,14 +397,7 @@ fn load_level(
     for missing in &objects.missing {
         eprintln!("{}: couldn't load {missing}", info.id);
     }
-    // Objects' scripts: the game's shared scripts, then the level's own.
-    let mut scripts = data.global_scripts().unwrap_or_else(|e| {
-        eprintln!("warning: no shared scripts: {e:#}");
-        Vec::new()
-    });
-    scripts.extend(files.scripts.iter().cloned());
-    let behaviour = Behaviour::new(&nodes, &scripts);
-    let skate_world = files
+    let mut skate_world = files
         .collision
         .as_deref()
         .and_then(|c| ngc_collision::Collision::parse(c).ok())
@@ -299,6 +413,12 @@ fn load_level(
                     .collect(),
             ))
         });
+    // Bouncy objects are knocked away, not run into.
+    if let Some(world) = skate_world.as_mut() {
+        for name in &bouncy_names {
+            world.disable(*name);
+        }
+    }
     let sky = files
         .sky
         .as_ref()
@@ -351,6 +471,30 @@ fn load_level(
             .unwrap_or_default(),
         goal_geometry.color_animation.clone(),
     ];
+    // Warps, each Hub portal's film strip in a layer of its own (shown
+    // when it appears).
+    let portals = desa_viewer::warps::warps(behaviour.program(), &nodes)
+        .into_iter()
+        .map(|warp| {
+            let strip = warp.sector.and_then(|sector| {
+                let mesh =
+                    Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
+                        s == sector
+                    })
+                    .ok()
+                    .filter(|m| !m.vertices.is_empty())?;
+                let layer = renderer.add_layer(&mesh, false);
+                renderer.show_layer(layer, false);
+                Some((layer, mesh.vertices))
+            });
+            Portal {
+                warp,
+                strip,
+                appeared: None,
+                declined: false,
+            }
+        })
+        .collect();
     let layers = ObjectLayers {
         goal_geometry: renderer.add_layer(&goal_geometry, false),
         props: renderer.add_layer(&objects.props.mesh, false),
@@ -358,6 +502,120 @@ fn load_level(
         crowd: renderer.add_layer(&objects.crowd.mesh, true),
         goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
     };
+    let minimap = collision.as_deref().and_then(minimap::Minimap::new);
+    let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
+    let mut behaviour = behaviour;
+    let pros = goal_pros(behaviour.program(), &info.id, &behaviour);
+    // The pros are there from the start, as in the career (the scripts of
+    // those around them look for them).
+    for pro in &pros {
+        behaviour.set_alive(pro.object, true);
+    }
+    // The bouncy objects, each in a layer of its own.
+    let mut bouncies = Vec::new();
+    // (Those not there at the start are made hidden, for scripts to
+    // create.)
+    for b in &nodes.bouncies {
+        let Ok(mut mesh) =
+            Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == b.name)
+        else {
+            continue;
+        };
+        if mesh.vertices.is_empty() {
+            continue;
+        }
+        let mut centre = mesh.focus.0;
+        if centre.length() < b.position.distance(centre) {
+            for v in &mut mesh.vertices {
+                v.position = (Vec3::from(v.position) + b.position).to_array();
+            }
+            centre += b.position;
+        }
+        let (low, high) = mesh.vertices.iter().fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())),
+        );
+        let layer = renderer.add_layer(&mesh, false);
+        renderer.show_layer(layer, b.created_at_start);
+        bouncies.push(BouncyState {
+            shown: b.created_at_start,
+            collided: false,
+            spec: b.clone(),
+            layer,
+            base: mesh.vertices,
+            centre,
+            reach: ((high - low).with_y(0.0).length() * 0.5).max(10.0),
+            half_height: ((high.y - low.y) * 0.5).max(4.0),
+            offset: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            spin: Vec3::ZERO,
+            moving: false,
+            since: f32::INFINITY,
+        });
+    }
+    // The level's moving pieces, each in a layer of its own, shown while
+    // its object is there and put where it is.
+    let mut movers = Vec::new();
+    for (i, m) in nodes.movers.iter().enumerate() {
+        let Ok(mesh) =
+            Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == m.name)
+        else {
+            continue;
+        };
+        if mesh.vertices.is_empty() {
+            continue;
+        }
+        let layer = renderer.add_layer(&mesh, false);
+        renderer.show_layer(layer, m.created_at_start);
+        if let (false, Some(world)) = (m.created_at_start, skate_world.as_mut()) {
+            world.disable(m.name);
+        }
+        movers.push(MoverState {
+            object: behaviour.mover(i),
+            name: m.name,
+            layer,
+            base: mesh.vertices,
+            pivot: m.position,
+            placed: m.rotation(),
+            last: (m.created_at_start, m.position, m.rotation()),
+        });
+    }
+    // The breakable sectors, shown until broken, and where each is.
+    let mut sector_layers = HashMap::new();
+    let mut sector_centres = HashMap::new();
+    for &name in &breakable_sectors {
+        let Ok(mesh) =
+            Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == name)
+        else {
+            continue;
+        };
+        if mesh.vertices.is_empty() {
+            continue;
+        }
+        sector_centres.insert(name, mesh.focus.0);
+        let layer = renderer.add_layer(&mesh, false);
+        renderer.show_layer(layer, true);
+        sector_layers.insert(name, layer);
+    }
+    let particles = desa_viewer::particles::Particles::new(behaviour.program(), &nodes);
+    // The particles' textures: a soft round one first (for those missing),
+    // then the level's.
+    let mut particle_list = vec![soft_disc()];
+    let mut particle_textures = HashMap::new();
+    for (name, data) in &files.particle_images {
+        let image = ngc_texture::img::ImgFile::parse(data).and_then(|f| f.decode());
+        if let Ok(image) = image {
+            particle_textures.insert(*name, particle_list.len());
+            particle_list.push(desa_viewer::level::TextureData {
+                checksum: *name,
+                width: image.width,
+                height: image.height,
+                levels: vec![image.rgba],
+            });
+        }
+    }
+    renderer.set_particle_textures(&particle_list);
     Ok((
         LoadedLevel {
             id: info.id.clone(),
@@ -372,10 +630,88 @@ fn load_level(
             behaviour,
             world: skate_world,
             colors,
+            pros,
+            teleport_effects,
+            portals,
+            scene: files.scene.clone(),
+            scene_textures: files.textures.clone(),
+            sector_layers,
+            sector_centres,
+            bouncies,
+            movers,
+            breakables,
+            touch_scripts,
+            broken: HashSet::new(),
+            minimap,
+            particles,
+            particle_textures,
             markers: (false, false),
         },
         stats,
     ))
+}
+
+/// A warp on the level, and how it's shown.
+struct Portal {
+    warp: desa_viewer::warps::Warp,
+    /// A Hub portal's film strip: its layer and vertices as stored.
+    strip: Option<(Option<usize>, Vec<desa_viewer::level::Vertex>)>,
+    /// Seconds since it appeared (the skater came within 60 feet).
+    appeared: Option<f32>,
+    /// Offered and turned down: not again until the skater's gone off.
+    declined: bool,
+}
+
+/// How near a Hub portal appears (`LevelWarp`: `Obj_SetInnerRadius 60`),
+/// and how long it takes to open out (the game's `WarpAppears` turns and
+/// moves the strip in its own axes, which aren't read yet; this grows it
+/// from its middle instead, ending where the level stores it).
+const PORTAL_APPEAR: f32 = 60.0 * 12.0;
+const PORTAL_TIME: f32 = 0.6;
+/// How near the skater goes through a warp (across, and up or down), and
+/// how far it has to go after turning one down to be offered it again
+/// (`WarpDialogHub`: `Obj_SetOuterRadius 20`).
+const WARP_ENTER: f32 = 8.0 * 12.0;
+const WARP_HEIGHT: f32 = 250.0;
+const WARP_LEAVE: f32 = 20.0 * 12.0;
+
+/// The way back to the Hub, as a ring of glowing streaks turning in the air
+/// (the game shows a particle portal there to the Kid).
+fn portal_ring(center: Vec3, time: f32, eye: Vec3) -> Vec<collision::ColorVertex> {
+    const COUNT: usize = 28;
+    const RADIUS: f32 = 70.0;
+    let center = center + Vec3::Y * 70.0;
+    let mut out = Vec::with_capacity(COUNT * 6);
+    let to_eye = (eye - center).normalize_or(Vec3::Z);
+    // The ring faces the camera, about the vertical.
+    let flat = Vec3::new(to_eye.x, 0.0, to_eye.z).normalize_or(Vec3::Z);
+    let side = Vec3::Y.cross(flat).normalize_or(Vec3::X);
+    for i in 0..COUNT {
+        let a = i as f32 / COUNT as f32 * std::f32::consts::TAU + time * 1.5;
+        let wobble = 1.0 + 0.08 * (time * 3.0 + i as f32).sin();
+        let p = center + (side * a.cos() + Vec3::Y * a.sin()) * RADIUS * wobble;
+        let tangent = (-side * a.sin() + Vec3::Y * a.cos()) * 9.0;
+        let across = tangent.cross(to_eye).normalize_or(Vec3::Y) * 4.0;
+        let glow = 0.6 + 0.4 * (time * 4.0 + i as f32 * 0.7).sin();
+        let color = [
+            (120.0 + 100.0 * glow) as u8,
+            (90.0 + 60.0 * glow) as u8,
+            255,
+            (200.0 * glow) as u8,
+        ];
+        let v = |p: Vec3| collision::ColorVertex {
+            position: p.to_array(),
+            color,
+        };
+        let (a0, a1, b0, b1) = (
+            p - tangent - across,
+            p - tangent + across,
+            p + tangent - across,
+            p + tangent + across,
+        );
+        out.extend([v(a0), v(a1), v(b1), v(a0), v(b1), v(b0)]);
+    }
+    out
 }
 
 /// The renderer layers holding a level's objects (`None` when empty).
@@ -388,13 +724,124 @@ struct ObjectLayers {
 }
 
 impl LoadedLevel {
+    /// The particle effects and hidden sectors the scripts started and
+    /// stopped, created and killed.
+    fn apply_creates(&mut self) {
+        for (name, created) in std::mem::take(&mut self.behaviour.other_creates) {
+            // A bouncy object: shown at rest, or gone.
+            if let Some(b) = self.bouncies.iter_mut().find(|b| b.spec.name == name) {
+                if created != b.shown {
+                    b.shown = created;
+                    b.collided = false;
+                    b.offset = Vec3::ZERO;
+                    b.velocity = Vec3::ZERO;
+                    b.rotation = Quat::IDENTITY;
+                    b.moving = false;
+                    self.renderer.update_layer(b.layer, 0, &b.base);
+                    self.renderer.show_layer(b.layer, created);
+                }
+                continue;
+            }
+            if self.nodes.hidden_sectors.contains(&name) {
+                self.show_sector(name, created);
+                continue;
+            }
+            if created {
+                self.particles
+                    .start(self.behaviour.program(), &self.nodes, name);
+            } else {
+                self.particles.stop(name);
+            }
+        }
+    }
+
+    /// Shows or hides a sector that isn't there at the start (made into a
+    /// layer of its own the first time).
+    fn show_sector(&mut self, name: u32, shown: bool) {
+        let node = self
+            .nodes
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .and_then(|n| n.position);
+        let layer = *self.sector_layers.entry(name).or_insert_with(|| {
+            let mut level =
+                Level::from_bytes_filtered(&self.scene, self.scene_textures.as_deref(), |s| {
+                    s == name
+                })
+                .ok()
+                .filter(|l| !l.vertices.is_empty())?;
+            // Some are stored round the origin, to be put where their node
+            // is (a race's gates); others already sit in place.
+            let mut centre = level.focus.0;
+            if let Some(at) = node {
+                if centre.length() < at.distance(centre) {
+                    for v in &mut level.vertices {
+                        v.position = (Vec3::from(v.position) + at).to_array();
+                    }
+                    centre += at;
+                }
+            }
+            // (Where it is, for chunks if it's smashed.)
+            self.sector_centres.insert(name, centre);
+            self.renderer.add_layer(&level, false)
+        });
+        self.renderer.show_layer(layer, shown);
+    }
+
     /// Runs objects' scripts for `dt` seconds, shows or hides the object
     /// layers, poses the pedestrians shown and animates vertex colors.
     fn update_objects(&mut self, objects: bool, goal_objects: bool, seconds: f32, dt: f32) {
-        for (goal, copy, placement) in
-            self.behaviour
-                .update(&mut self.objects, seconds, dt, goal_objects)
-        {
+        let placed = self.behaviour.update(
+            &mut self.objects,
+            seconds,
+            dt,
+            goal_objects,
+            self.world.as_ref(),
+        );
+        // The level's pieces the scripts moved, made or took away.
+        for m in &mut self.movers {
+            let now = (
+                self.behaviour.alive(m.object),
+                self.behaviour.position(m.object),
+                self.behaviour.rotation(m.object),
+            );
+            if now == m.last {
+                continue;
+            }
+            if now.0 != m.last.0 {
+                self.renderer.show_layer(m.layer, now.0);
+                if let Some(world) = &mut self.world {
+                    if now.0 {
+                        world.enable(m.name);
+                    } else {
+                        world.disable(m.name);
+                    }
+                }
+            }
+            if (now.1, now.2) != (m.last.1, m.last.2) {
+                let turn = now.2 * m.placed.inverse();
+                let moved: Vec<desa_viewer::level::Vertex> = m
+                    .base
+                    .iter()
+                    .map(|v| desa_viewer::level::Vertex {
+                        position: (now.1 + turn * (Vec3::from(v.position) - m.pivot)).to_array(),
+                        normal: (turn * Vec3::from(v.normal)).to_array(),
+                        ..*v
+                    })
+                    .collect();
+                self.renderer.update_layer(m.layer, 0, &moved);
+                // Its collision goes with it.
+                if let Some(world) = &mut self.world {
+                    let transform = Mat4::from_translation(now.1)
+                        * Mat4::from_quat(turn)
+                        * Mat4::from_translation(-m.pivot);
+                    world.place(m.name, Some(transform));
+                }
+            }
+            m.last = now;
+        }
+        for (goal, copy, placement) in placed {
             let (props, layer) = if goal {
                 (&self.objects.goal_props, self.layers.goal_props)
             } else {
@@ -440,10 +887,15 @@ impl LoadedLevel {
 /// The skater's shadow, as the game draws one under it: a dark disc laid on
 /// the ground straight below, smaller and fainter the higher it is.
 fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision::ColorVertex> {
-    const RADIUS: f32 = 16.0;
+    blob_shadow(skater.position, 16.0, world)
+}
+
+/// A round shadow on the ground under `at`, `radius` across at the ground,
+/// fading and shrinking with height.
+fn blob_shadow(at: Vec3, radius: f32, world: &skate::World) -> Vec<collision::ColorVertex> {
     const FADE: f32 = 400.0;
     const SIDES: usize = 20;
-    let from = skater.position + Vec3::Y * 10.0;
+    let from = at + Vec3::Y * 10.0;
     let Some(hit) = world.ray(from, from - Vec3::Y * FADE) else {
         return Vec::new();
     };
@@ -451,7 +903,7 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
     if hit.flags & ngc_collision::face_flags::NO_SKATER_SHADOW != 0 {
         return Vec::new();
     }
-    let height = (skater.position.y - hit.point.y).max(0.0);
+    let height = (at.y - hit.point.y).max(0.0);
     let fade = (1.0 - height / FADE).clamp(0.0, 1.0);
     let alpha = (150.0 * fade) as u8;
     if alpha == 0 {
@@ -460,7 +912,7 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
     let normal = hit.normal.normalize_or(Vec3::Y);
     let side = normal.any_orthonormal_vector();
     let along = normal.cross(side);
-    let radius = RADIUS * (0.6 + 0.4 * fade);
+    let radius = radius * (0.6 + 0.4 * fade);
     let centre = hit.point + normal * 0.5;
     let point = |i: usize| {
         let a = i as f32 / SIDES as f32 * std::f32::consts::TAU;
@@ -481,6 +933,320 @@ fn skater_shadow(skater: &skate::Skater, world: &skate::World) -> Vec<collision:
         .collect()
 }
 
+/// A goal's pro: their object, the goal they offer (its words and how to
+/// start it), and whether it's been turned down till the skater's gone.
+struct GoalPro {
+    object: usize,
+    title: String,
+    /// What they say offering it.
+    line: Option<u32>,
+    start: ui::Action,
+    declined: bool,
+}
+
+/// The pros of the goals the viewer plays (`trigger_obj_id`).
+fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> Vec<GoalPro> {
+    let goals = desa_viewer::goals::level_goals(program, level);
+    let mut pros: Vec<GoalPro> = [
+        ("HighScore", "HighScore", ui::Action::StartRun(Some(false))),
+        ("ProScore", "ProScore", ui::Action::StartRun(Some(true))),
+        ("SKATE", "Skate", ui::Action::StartLetters),
+        ("Race", "Race", ui::Action::StartRace),
+    ]
+    .into_iter()
+    .filter_map(|(script, kind, start)| {
+        let object = behaviour.object(desa_viewer::goals::goal_pro(program, level, script)?)?;
+        let title = goals.iter().find(|g| g.kind == kind)?.text.clone();
+        Some(GoalPro {
+            object,
+            title,
+            line: desa_viewer::goals::goal_intro_line(program, level, script),
+            start,
+            declined: false,
+        })
+    })
+    .collect();
+    // The rest, played from their own scripts (one goal a pro).
+    for (i, goal) in goals.iter().enumerate() {
+        if ["HighScore", "ProScore", "Skate", "Race"].contains(&goal.kind.as_str()) {
+            continue;
+        }
+        let Some(generic) = desa_viewer::goals::generic_goal(program, level, &goal.kind) else {
+            continue;
+        };
+        let Some(object) = generic.pro.and_then(|p| behaviour.object(p)) else {
+            continue;
+        };
+        if pros.iter().any(|p| p.object == object) {
+            continue;
+        }
+        pros.push(GoalPro {
+            object,
+            title: goal.text.clone(),
+            line: desa_viewer::goals::goal_intro_line(program, level, &goal.kind),
+            start: ui::Action::StartGoal(i),
+            declined: false,
+        });
+    }
+    pros
+}
+
+/// How near a pro the skater's offered their goal, and how far it has to
+/// go after saying not now.
+const PRO_NEAR: f32 = 10.0 * 12.0;
+const PRO_LEAVE: f32 = 25.0 * 12.0;
+
+/// A bouncy object: its settings, layer and vertices as stored, where it
+/// rests, how far it reaches and half its height, and how it's moving
+/// (offset from rest, velocity, turn and spin), and how long since it was
+/// last knocked.
+struct BouncyState {
+    /// Whether it's there (created), and whether its `CollideScript` has
+    /// run since it was.
+    shown: bool,
+    collided: bool,
+    spec: desa_viewer::nodes::Bouncy,
+    layer: Option<usize>,
+    base: Vec<desa_viewer::level::Vertex>,
+    centre: Vec3,
+    reach: f32,
+    half_height: f32,
+    offset: Vec3,
+    velocity: Vec3,
+    rotation: Quat,
+    spin: Vec3,
+    moving: bool,
+    since: f32,
+}
+
+/// A piece of the level scripts move (`Obj_MoveToPos`, `Obj_Rotate`,
+/// `create`, `kill`): its object, name, layer and vertices as stored,
+/// where and how it was placed, and how it was last drawn (there?, where,
+/// how turned).
+struct MoverState {
+    object: usize,
+    name: u32,
+    layer: Option<usize>,
+    base: Vec<desa_viewer::level::Vertex>,
+    pivot: Vec3,
+    placed: Quat,
+    last: (bool, Vec3, Quat),
+}
+
+/// The game's panel while skating (see `App::update_game_hud`): whether
+/// it's up, the tricks in the combo last frame, how long the trick text's
+/// been showing, and the song last announced.
+#[derive(Default)]
+struct GameHud {
+    up: bool,
+    tricks: usize,
+    shown: Option<f32>,
+    song: Option<Instant>,
+}
+
+/// A movie playing (through ffmpeg: see `desa_viewer::movie`), since
+/// when, and the texture its frames go to.
+struct MoviePlaying {
+    movie: desa_viewer::movie::Movie,
+    started: Instant,
+    texture: Option<egui::TextureHandle>,
+    /// The newest frame, not yet in the texture.
+    pending: Option<egui::ColorImage>,
+}
+
+impl MoviePlaying {
+    /// Over the whole window, letterboxed on black; true if clicked (to
+    /// skip it).
+    fn draw(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(image) = self.pending.take() {
+            match &mut self.texture {
+                Some(t) => t.set(image, egui::TextureOptions::LINEAR),
+                None => {
+                    self.texture =
+                        Some(ctx.load_texture("movie", image, egui::TextureOptions::LINEAR))
+                }
+            }
+        }
+        let screen = ctx.content_rect();
+        let mut clicked = false;
+        egui::Area::new(egui::Id::new("movie"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK);
+                if let Some(texture) = &self.texture {
+                    let (w, h) = (self.movie.info.width as f32, self.movie.info.height as f32);
+                    let scale = (screen.width() / w).min(screen.height() / h);
+                    let rect =
+                        egui::Rect::from_center_size(screen.center(), egui::vec2(w, h) * scale);
+                    ui.painter().image(
+                        texture.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                }
+                clicked = response.clicked();
+            });
+        // Keep drawing: the movie moves on by itself.
+        ctx.request_repaint();
+        clicked
+    }
+}
+
+/// The game's screen elements (`desa_viewer::screen`) with what they're
+/// drawn with: the panel sprites and fonts, as egui textures once used.
+struct ScreenUi {
+    screen: desa_viewer::screen::Screen,
+    images: HashMap<u32, ngc_texture::Image>,
+    textures: HashMap<u32, egui::TextureHandle>,
+    font_textures: HashMap<u32, egui::TextureHandle>,
+}
+
+impl ScreenUi {
+    /// The shared panel sprites and fonts, and the hub theme's.
+    fn load(data: &mut GameData) -> Option<ScreenUi> {
+        let ui = data.ui_files(&["panelsprites.prg", "hubpanel.prg"]).ok()?;
+        let mut images = HashMap::new();
+        let mut sizes = HashMap::new();
+        for (name, bytes) in &ui.images {
+            let Ok(file) = ngc_texture::img::ImgFile::parse(bytes) else {
+                continue;
+            };
+            let Ok(image) = file.decode() else { continue };
+            sizes.insert(qb::checksum(name), (file.width, file.height));
+            images.insert(qb::checksum(name), image.cropped(file.width, file.height));
+        }
+        let fonts: HashMap<u32, desa_viewer::font::Font> = ui
+            .fonts
+            .iter()
+            .filter_map(|(n, b)| Some((qb::checksum(n), desa_viewer::font::Font::parse(b).ok()?)))
+            .collect();
+        if fonts.is_empty() {
+            return None;
+        }
+        let mut screen = desa_viewer::screen::Screen::new(fonts, sizes);
+        // What the viewer does itself: resuming, and the main menu's
+        // choices whose screens need the career's profiles.
+        screen.listen(&[
+            "unpausegame",
+            "preview_skater_menu",
+            "launch_select_skater_menu",
+            "start_2p",
+            "launch_options_menu_load_game_sequence",
+            "launch_options_menu_save_game_sequence",
+        ]);
+        Some(ScreenUi {
+            screen,
+            images,
+            textures: HashMap::new(),
+            font_textures: HashMap::new(),
+        })
+    }
+
+    /// Over the 3D view (beside the panel), the game's 640x480 screen
+    /// fitted in.
+    fn paint(&mut self, ctx: &egui::Context) {
+        use desa_viewer::screen::{Draw, HEIGHT, WIDTH};
+        let draws = self.screen.draw();
+        if draws.is_empty() {
+            return;
+        }
+        let area = ctx.available_rect();
+        let k = (area.width() / WIDTH).min(area.height() / HEIGHT);
+        let origin = area.center() - egui::vec2(WIDTH, HEIGHT) * k / 2.0;
+        let to_screen = |r: [f32; 4]| {
+            egui::Rect::from_min_max(
+                origin + egui::vec2(r[0], r[1]) * k,
+                origin + egui::vec2(r[2], r[3]) * k,
+            )
+        };
+        let tint = |c: [f32; 4]| {
+            let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+            egui::Color32::from_rgba_unmultiplied(b(c[0]), b(c[1]), b(c[2]), b(c[3]))
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("game_screen"),
+        ));
+        for d in draws {
+            match d {
+                Draw::Sprite {
+                    texture,
+                    rect,
+                    rgba,
+                    angle,
+                } => {
+                    let Some(image) = self.images.get(&texture) else {
+                        continue;
+                    };
+                    let handle = self.textures.entry(texture).or_insert_with(|| {
+                        ctx.load_texture(
+                            format!("sprite_{texture:08x}"),
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [image.width as usize, image.height as usize],
+                                &image.rgba,
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    if angle == 0.0 {
+                        painter.image(handle.id(), to_screen(rect), uv, tint(rgba));
+                    } else {
+                        // Turned about its middle.
+                        let r = to_screen(rect);
+                        let mut mesh = egui::Mesh::with_texture(handle.id());
+                        mesh.add_rect_with_uv(r, uv, tint(rgba));
+                        let (sin, cos) = angle.to_radians().sin_cos();
+                        let c = r.center();
+                        for v in &mut mesh.vertices {
+                            let d = v.pos - c;
+                            v.pos = c + egui::vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos);
+                        }
+                        painter.add(egui::Shape::mesh(mesh));
+                    }
+                }
+                Draw::Glyph {
+                    font,
+                    source,
+                    rect,
+                    rgba,
+                } => {
+                    let Some(f) = self.screen.font(font) else {
+                        continue;
+                    };
+                    let (aw, ah) = (f.atlas_width as f32, f.atlas_height as f32);
+                    let handle = self.font_textures.entry(font).or_insert_with(|| {
+                        ctx.load_texture(
+                            format!("font_{font:08x}"),
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [f.atlas_width as usize, f.atlas_height as usize],
+                                &f.atlas,
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    let [x, y, w, h] = source.map(f32::from);
+                    painter.image(
+                        handle.id(),
+                        to_screen(rect),
+                        egui::Rect::from_min_max(
+                            egui::pos2(x / aw, y / ah),
+                            egui::pos2((x + w) / aw, (y + h) / ah),
+                        ),
+                        tint(rgba),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Units a foot (the bouncy objects' settings are in feet).
+const FEET: f32 = 12.0;
+
 /// A two-minute run (the game's single session).
 struct Run {
     /// Seconds left on the clock.
@@ -493,6 +1259,128 @@ struct Run {
     goal: Option<(u32, String)>,
     won: bool,
 }
+
+/// This session's skating, since the viewer started.
+#[derive(Default)]
+struct Session {
+    /// Seconds skated (not paused), and units travelled.
+    time: f32,
+    distance: f32,
+    last_position: Option<Vec3>,
+    /// Combos landed, their tricks and points, the best, bails and gaps.
+    combos: u32,
+    tricks: u32,
+    points: u32,
+    best: u32,
+    bails: u32,
+    gaps: u32,
+}
+
+impl Session {
+    fn lines(&self) -> Vec<String> {
+        let minutes = (self.time / 60.0) as u32;
+        vec![
+            format!("Skated {minutes}:{:02}", self.time as u32 % 60),
+            // Units are inches.
+            format!("Distance {:.2} miles", self.distance / 63_360.0),
+            format!("Combos landed {} ({} tricks)", self.combos, self.tricks),
+            format!("Points {}", self.points),
+            format!("Best combo {}", self.best),
+            format!("Gaps {}", self.gaps),
+            format!("Bails {}", self.bails),
+        ]
+    }
+}
+
+/// How long the camera stays to see a splash (seconds).
+const SPLASH_HOLD: f32 = 0.8;
+
+/// Looking round: how far the camera swings round (radians, either way)
+/// and up or down at full stick, and how fast it follows the stick.
+const LOOK_YAW: f32 = 2.6;
+const LOOK_PITCH: f32 = 0.6;
+const LOOK_RATE: f32 = 8.0;
+
+/// A camera's name for the panel: "standard ltg" as "Standard LTG".
+fn title_case(name: &str) -> String {
+    name.split(' ')
+        .map(|word| {
+            if word == "ltg" {
+                return word.to_ascii_uppercase();
+            }
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |c| {
+                c.to_ascii_uppercase().to_string() + chars.as_str()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Where F12 saves a picture: the Pictures folder's `DESA Map Viewer`,
+/// named by the time.
+fn photo_path() -> PathBuf {
+    let pictures = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join("Pictures"))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    pictures
+        .join("DESA Map Viewer")
+        .join(format!("desa_{stamp}.png"))
+}
+
+/// A soft round particle texture: white, fading out from the middle.
+fn soft_disc() -> desa_viewer::level::TextureData {
+    const SIZE: u32 = 32;
+    let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let d = Vec3::new(x as f32 + 0.5 - 16.0, y as f32 + 0.5 - 16.0, 0.0).length() / 16.0;
+            let a = ((1.0 - d).clamp(0.0, 1.0) * 255.0) as u8;
+            pixels.extend([255, 255, 255, a]);
+        }
+    }
+    desa_viewer::level::TextureData {
+        checksum: 0,
+        width: SIZE,
+        height: SIZE,
+        levels: vec![pixels],
+    }
+}
+
+/// The particles' quads for the renderer, their textures by place.
+fn particle_batches(
+    particles: &desa_viewer::particles::Particles,
+    textures: &HashMap<u32, usize>,
+    eye: Vec3,
+) -> Vec<renderer::ParticleBatch> {
+    particles
+        .quads(eye)
+        .into_iter()
+        .map(|(texture, additive, vertices)| renderer::ParticleBatch {
+            texture: textures.get(&texture).copied().unwrap_or(0),
+            additive,
+            vertices,
+        })
+        .collect()
+}
+
+/// How near the camera the animals' and cars' shadows are drawn.
+const SHADOW_RANGE: f32 = 3000.0;
+
+/// The replay's cameras: as it was played, then the game's replay
+/// cameras (`Skater_Camera_Replay_*`, `behind` and `above` in feet).
+const REPLAY_CAMERAS: [(&str, Option<&str>); 5] = [
+    ("As played", None),
+    ("Behind", Some("Skater_Camera_Replay_Behind")),
+    ("Front", Some("Skater_Camera_Replay_Front")),
+    ("Left", Some("Skater_Camera_Replay_Left")),
+    ("Right", Some("Skater_Camera_Replay_Right")),
+];
 
 /// How far away objects' sounds fade out (units).
 const OBJECT_SOUND_RANGE: f32 = 2000.0;
@@ -526,6 +1414,80 @@ struct LetterRun {
     time: f32,
     over: bool,
 }
+
+/// The character's collectibles on the level, while skating.
+struct Collecting {
+    /// Their objects and their bits in `got` (which are collected, kept in
+    /// the settings under `key`).
+    objects: Vec<(usize, u32)>,
+    /// The world's special item and what it's called.
+    special: Option<(usize, String)>,
+    got: u32,
+    kind: String,
+    key: String,
+}
+
+/// How near the skater picks a collectible up
+/// (`set_goal_collect_exception_25`: 7 feet), and how fast they spin
+/// (`Obj_RotY speed = 250`).
+const COLLECT_RADIUS: f32 = 7.0 * 12.0;
+const COLLECT_SPIN: f32 = 250.0;
+/// The special item's bit in what's collected.
+const SPECIAL_BIT: u32 = 1 << 25;
+
+/// The records kept, and how the panel names them.
+const RECORDS: [(&str, &str); 5] = [
+    ("combo", "Best combo"),
+    ("grind", "Longest grind"),
+    ("manual", "Longest manual"),
+    ("lip", "Longest lip trick"),
+    ("tricks", "Most tricks in a combo"),
+];
+
+/// How long each record announcement shows (`time = 2000`).
+const RECORD_TIME: f32 = 2.0;
+
+/// A record's value as the game words it: points, "12.34 seconds", "7
+/// Tricks".
+fn record_value(kind: &str, value: u32) -> String {
+    match kind {
+        "combo" => format!("{value}"),
+        "tricks" => format!("{value} Tricks"),
+        _ => format!("{}.{:02} seconds", value / 100, value % 100),
+    }
+}
+
+/// A race under way: its waypoints (where, script, seconds added), the
+/// next to reach, the clock and the time taken, the object its scripts
+/// run on, and its end script.
+struct RaceRun {
+    points: Vec<(Vec3, Option<u32>, f32)>,
+    next: usize,
+    left: f32,
+    time: f32,
+    over: bool,
+    runner: usize,
+    goal_runner: usize,
+    end_script: Option<u32>,
+    started: bool,
+}
+
+/// A goal played from its own scripts (`GenericGoal`): its type (as in
+/// `<level>_AddGoal_<kind>`) and place in the goal list, the clock (none
+/// if untimed), and whether it's over.
+struct GoalRun {
+    kind: String,
+    index: usize,
+    goal: desa_viewer::goals::GenericGoal,
+    left: Option<f32>,
+    over: bool,
+    /// The objects that already reacted to the skater coming near before
+    /// it started (what's new since is the goal's, for the map).
+    before: HashSet<usize>,
+}
+
+/// How near the skater reaches a race waypoint (`Obj_SetInnerRadius 8`).
+const RACE_RADIUS: f32 = 8.0 * 12.0;
 
 /// How near the skater picks a letter up: `Obj_SetInnerRadius 8` (feet).
 const LETTER_RADIUS: f32 = 8.0 * 12.0;
@@ -626,8 +1588,86 @@ struct App<'a> {
     /// them again (seconds) while a replay plays.
     recording: Vec<ReplayFrame>,
     replay: Option<f32>,
-    /// The S-K-A-T-E letters goal under way.
+    /// The S-K-A-T-E letters goal under way, and what its pro says for
+    /// each letter.
     letters: Option<LetterRun>,
+    letter_lines: [Option<u32>; 5],
+    /// The race goal under way.
+    racing: Option<RaceRun>,
+    /// A goal played from its own scripts, under way.
+    goal_run: Option<GoalRun>,
+    /// The camera turned to look round (yaw, and up or down) and the right
+    /// stick as last read; whether the pad's Start was down, to toggle the
+    /// pause on pressing it.
+    look: glam::Vec2,
+    pad_look: glam::Vec2,
+    pad_start: bool,
+    /// This session's skating (since the viewer started).
+    session: Session,
+    /// The camera setting following the skater now (index into the
+    /// panel's list), and whether the pad's Back was down.
+    camera_shown: usize,
+    pad_back: bool,
+    /// What a teleporter created or killed on the way, to apply.
+    pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
+    /// After a splash: the camera held where it was, and for how long.
+    splash_hold: Option<(FlyCamera, f32)>,
+    /// Frames drawn (for things done now and then).
+    frame: u32,
+    /// The level objects of the world's vehicles, in order, and the one
+    /// the skater's skitching on.
+    vehicle_objects: Vec<usize>,
+    skitched: Option<usize>,
+    /// Which replay camera, and where its eye is (eased).
+    replay_camera: usize,
+    replay_eye: Option<Vec3>,
+    /// A goal's camera path playing (skating held till it's over or
+    /// skipped), the one asked for next, and the goal on's success path.
+    cutscene: bool,
+    cutscene_request: Option<u32>,
+    /// A goal just won (its kind), to keep.
+    goal_won: Option<String>,
+    /// A warp's level, to load when its camera path's over.
+    load_after_cutscene: Option<usize>,
+    success_camera: Option<u32>,
+    /// Where the goal pedestrians' voice lines are (read once), and lines
+    /// to say.
+    goal_streams: Option<HashMap<u32, (u64, u64)>>,
+    lines_to_say: Vec<u32>,
+    /// The Moon Gravity and Slomo cheats' factors.
+    moon_gravity: f32,
+    slomo_speed: f32,
+    /// The game's own menus (its screen elements), when the data has
+    /// their sprites and fonts; and the main menu waiting on the Skate
+    /// Shop loading.
+    screen: Option<ScreenUi>,
+    main_menu_pending: bool,
+    /// The controller's menu presses held last frame.
+    menu_held: Vec<desa_viewer::screen::Pad>,
+    /// The game's own panel while skating, and the frame's time for it.
+    hud: GameHud,
+    hud_dt: f32,
+    /// The movie playing, and those to play after it (by name).
+    movie: Option<MoviePlaying>,
+    movie_queue: std::collections::VecDeque<String>,
+    /// F12 pressed: the next frame is saved as a picture too.
+    photo: bool,
+    /// The goal a pro's offering (its place in the level's pros).
+    goal_offer: Option<usize>,
+    /// The warp offered (the level's portal) and, once taken, to skate on
+    /// arriving.
+    warp_offer: Option<usize>,
+    skate_on_load: bool,
+    /// The character's collectibles on the level, while skating.
+    collecting: Option<Collecting>,
+    /// The combo under way's longest grind, manual and lip trick (seconds)
+    /// and those going on, the combos ended so far, and new records
+    /// waiting to be announced (with how long the one shown has had).
+    combo_lengths: [f32; 3],
+    running_lengths: [f32; 3],
+    combos_seen: u32,
+    record_queue: std::collections::VecDeque<String>,
+    record_shown: f32,
     /// The songs (`playlist_tracks`, shuffled) and the next to play, and
     /// the level's ambience (`ambient_track`), by name.
     playlist: Vec<(String, String)>,
@@ -649,6 +1689,11 @@ struct App<'a> {
 impl<'a> App<'a> {
     fn new(settings: &'a mut Settings) -> Self {
         let speed = settings.speed.unwrap_or(DEFAULT_SPEED);
+        let camera = settings.best.get("camera").map_or(1, |c| *c as usize);
+        let volume = |key: &str| settings.best.get(key).map_or(1.0, |v| *v as f32 / 100.0);
+        let (effects_volume, music_volume) = (volume("volume.effects"), volume("volume.music"));
+        let intro = settings.best.get("intro") != Some(&0);
+        let start_menu = settings.best.get("start_menu") != Some(&0);
         App {
             settings,
             gpu: None,
@@ -657,6 +1702,10 @@ impl<'a> App<'a> {
             model: ui::Model {
                 data_path: None,
                 levels: Vec::new(),
+                movies: Vec::new(),
+                intro,
+                start_menu,
+                level_progress: Vec::new(),
                 current: None,
                 loading: None,
                 stats: None,
@@ -697,20 +1746,50 @@ impl<'a> App<'a> {
                     message: None,
                     special: (0.0, false),
                     auto_kick: true,
+                    wallride_anywhere: true,
+                    cheats: Default::default(),
                     sound: true,
                     music: true,
+                    effects_volume,
+                    music_volume,
                     rumble: true,
                     run_clock: None,
                     run_result: None,
                     run_goal: None,
                     run_goal_won: None,
                     score_goals: [None, None],
+                    collect: true,
+                    collected: None,
                     replaying: false,
+                    replay_camera: REPLAY_CAMERAS[0].0.to_string(),
+                    goals: Vec::new(),
+                    goals_won: Vec::new(),
+                    goal_progress: None,
+                    goal_result: None,
+                    game_menu: false,
+                    game_hud: false,
                     can_letters: false,
+                    race_name: None,
+                    race: None,
+                    race_result: None,
                     letters: None,
                     letters_result: None,
                     skate_status: String::new(),
                     trick_list: Vec::new(),
+                    gap_list: Vec::new(),
+                    records: Vec::new(),
+                    record_message: None,
+                    warp_prompt: None,
+                    paused: false,
+                    goal_prompt: None,
+                    session: Vec::new(),
+                    switch: false,
+                    show_map: true,
+                    map_image: None,
+                    map_texture: None,
+                    map: None,
+                    cameras: Vec::new(),
+                    camera,
                 },
             },
             camera: FlyCamera::looking_at(Vec3::new(0.0, 500.0, 1000.0), Vec3::ZERO),
@@ -729,6 +1808,48 @@ impl<'a> App<'a> {
             recording: Vec::new(),
             replay: None,
             letters: None,
+            letter_lines: [None; 5],
+            racing: None,
+            goal_run: None,
+            photo: false,
+            movie: None,
+            movie_queue: Default::default(),
+            screen: None,
+            main_menu_pending: false,
+            menu_held: Vec::new(),
+            hud: GameHud::default(),
+            hud_dt: 0.0,
+            moon_gravity: 0.5,
+            slomo_speed: 0.5,
+            goal_streams: None,
+            lines_to_say: Vec::new(),
+            cutscene: false,
+            cutscene_request: None,
+            goal_won: None,
+            load_after_cutscene: None,
+            success_camera: None,
+            replay_camera: 0,
+            replay_eye: None,
+            vehicle_objects: Vec::new(),
+            skitched: None,
+            frame: 0,
+            splash_hold: None,
+            pending_creates: Vec::new(),
+            camera_shown: usize::MAX,
+            pad_back: false,
+            session: Session::default(),
+            look: glam::Vec2::ZERO,
+            pad_look: glam::Vec2::ZERO,
+            pad_start: false,
+            warp_offer: None,
+            goal_offer: None,
+            skate_on_load: false,
+            collecting: None,
+            combo_lengths: [0.0; 3],
+            running_lengths: [0.0; 3],
+            combos_seen: 0,
+            record_queue: Default::default(),
+            record_shown: 0.0,
             playlist: Vec::new(),
             now_playing: None,
             next_track: 0,
@@ -744,8 +1865,10 @@ impl<'a> App<'a> {
 
     fn open_data(&mut self, path: &Path) {
         match GameData::open(path) {
-            Ok(data) => {
+            Ok(mut data) => {
                 self.model.levels = data.levels();
+                self.model.movies = data.movies();
+                self.screen = ScreenUi::load(&mut data);
                 self.model.data_path = Some(path.display().to_string());
                 self.model.message = if self.model.levels.is_empty() {
                     Some("No levels found there.".into())
@@ -808,6 +1931,13 @@ impl<'a> App<'a> {
                     desa_viewer::goals::score_goal(level.behaviour.program(), &info.id, pro)
                         .map(|g| g.name)
                 });
+                self.model.character.goals =
+                    desa_viewer::goals::level_goals(level.behaviour.program(), &info.id)
+                        .into_iter()
+                        .map(|g| (g.kind, g.text))
+                        .collect();
+                self.model.character.race_name =
+                    desa_viewer::goals::race(level.behaviour.program(), &info.id).map(|r| r.name);
                 self.model.character.can_letters = level
                     .nodes
                     .objects
@@ -818,6 +1948,12 @@ impl<'a> App<'a> {
                     self.model.collision = CollisionView::Hidden;
                 }
                 self.model.set_spawns(&level.nodes.spawns);
+                // The new level's map.
+                self.model.character.map = None;
+                self.model.character.map_texture = None;
+                self.model.character.map_image = level.minimap.as_ref().map(|m| {
+                    egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels)
+                });
                 self.model.camera_paths = ui::CameraPathModel {
                     paths: level
                         .camera_paths
@@ -830,8 +1966,36 @@ impl<'a> App<'a> {
                 self.model.message = None;
                 self.next_spawn = 0;
                 self.level = Some(level);
+                // The goals won here before, for the scripts that ask.
+                if let Some(level) = &mut self.level {
+                    for kind in ["HighScore", "ProScore", "SKATE", "Race"] {
+                        let id = desa_viewer::goals::goal_id(&info.id, kind);
+                        if self.settings.best.contains_key(&format!("won.{id:08x}")) {
+                            level.behaviour.won_goals.insert(id);
+                        }
+                    }
+                }
+                // The game's menus know the level (`LevelIs load_skateshop`),
+                // and the main menu comes up if it was waiting on it.
+                let shop = info.id.eq_ignore_ascii_case("SkateShop");
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                    screen.screen.level = Some(qb::checksum(&format!("load_{}", info.id)));
+                    if std::mem::take(&mut self.main_menu_pending) && shop {
+                        screen
+                            .screen
+                            .run(qb::checksum("launch_main_menu"), Vec::new());
+                    }
+                }
+                if !shop {
+                    self.settings.last_skated = Some(info.id.clone());
+                }
                 self.settings.last_level = Some(info.id);
                 self.settings.save();
+                // Arrived through a warp: skating on.
+                if std::mem::take(&mut self.skate_on_load) {
+                    self.toggle_skate();
+                }
             }
             Err(err) => self.model.message = Some(format!("{err:#}")),
         }
@@ -842,9 +2006,150 @@ impl<'a> App<'a> {
         self.model.camera_paths.time = 0.0;
     }
 
+    /// Plays a goal's camera path by name, holding the skater till it's
+    /// over (or skipped with a key).
+    fn play_cutscene(&mut self, name: u32) {
+        let Some(level) = &self.level else { return };
+        let Some(index) = level
+            .camera_paths
+            .iter()
+            .position(|(n, _)| qb::checksum(n) == name)
+        else {
+            return;
+        };
+        self.play_camera_path(index);
+        self.cutscene = true;
+    }
+
+    /// The cutscene asked for, started; and when one's over, the chase
+    /// camera back.
+    fn update_cutscene(&mut self) {
+        if let Some(kind) = self.goal_won.take() {
+            self.won_goal(&kind);
+        }
+        if let Some(name) = self.cutscene_request.take() {
+            self.play_cutscene(name);
+        }
+        if self.cutscene && self.model.camera_paths.playing.is_none() {
+            self.cutscene = false;
+        }
+        // A warp's camera path over: on to the level.
+        if !self.cutscene {
+            if let Some(index) = self.load_after_cutscene.take() {
+                self.start_load(index);
+            }
+        }
+    }
+
+    /// Says the voice lines asked for: the goal pedestrians' own
+    /// (`streams/goalpeds`), read off the disc as they're wanted.
+    fn say_lines(&mut self) {
+        if let Some(level) = &mut self.level {
+            self.lines_to_say
+                .extend(std::mem::take(&mut level.behaviour.voice_lines));
+        }
+        if self.lines_to_say.is_empty() {
+            return;
+        }
+        let lines = std::mem::take(&mut self.lines_to_say);
+        let (Some(audio), Some(data)) = (
+            self.audio.as_mut().filter(|_| self.model.character.sound),
+            &mut self.data,
+        ) else {
+            return;
+        };
+        if self.goal_streams.is_none() {
+            self.goal_streams = Some(data.goal_streams().unwrap_or_default());
+        }
+        let Some(streams) = &self.goal_streams else {
+            return;
+        };
+        // The last asked for (a newer line cuts an older one off).
+        if let Some(range) = lines.iter().rev().find_map(|l| streams.get(l)) {
+            if let Ok(Some(sound)) = data.stream(*range) {
+                audio.say_line(&sound);
+            }
+        }
+    }
+
+    /// A goal won: kept, and the level's scripts told.
+    fn won_goal(&mut self, kind: &str) {
+        let Some(level) = &mut self.level else { return };
+        let id = desa_viewer::goals::goal_id(&level.id, kind);
+        level.behaviour.won_goals.insert(id);
+        self.settings.best.insert(format!("won.{id:08x}"), 1);
+        self.settings.save();
+    }
+
+    /// Starts the next movie waiting, and takes the playing one's frame
+    /// for now; at its end, on to the next.
+    fn update_movie(&mut self) {
+        if let Some(playing) = &mut self.movie {
+            let seconds = playing.started.elapsed().as_secs_f64();
+            let (w, h) = (playing.movie.info.width, playing.movie.info.height);
+            if let Some((frame, true)) = playing.movie.frame_at(seconds) {
+                playing.pending = Some(egui::ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize],
+                    frame,
+                ));
+            }
+            // (A little past its last frame, for the sound to end.)
+            if playing.movie.finished() || seconds > playing.movie.info.duration() + 1.0 {
+                self.stop_movie();
+            }
+            return;
+        }
+        let Some(name) = self.movie_queue.pop_front() else {
+            return;
+        };
+        let (Some(source), Some(ffmpeg)) = (
+            self.data.as_ref().and_then(|d| d.movie(&name)),
+            desa_viewer::movie::ffmpeg(),
+        ) else {
+            // (No ffmpeg: none of them, then.)
+            self.movie_queue.clear();
+            self.model.message =
+                Some("Movies need ffmpeg (on the PATH, or named by DESA_FFMPEG).".into());
+            return;
+        };
+        match desa_viewer::movie::Movie::start(&source, &ffmpeg) {
+            Ok((movie, sound)) => {
+                if let Some(audio) = &mut self.audio {
+                    audio.play_movie(sound);
+                }
+                self.movie = Some(MoviePlaying {
+                    movie,
+                    started: Instant::now(),
+                    texture: None,
+                    pending: None,
+                });
+            }
+            Err(err) => self.model.message = Some(format!("{name}: {err:#}")),
+        }
+    }
+
+    /// Stops the movie playing (the next waiting starts after).
+    fn stop_movie(&mut self) {
+        self.movie = None;
+        if let Some(audio) = &mut self.audio {
+            audio.play_movie(None);
+        }
+    }
+
+    /// The goal on's camera paths (`kind` as in `<level>_AddGoal_<kind>`):
+    /// its start one plays now, its success one when it's won.
+    fn goal_cutscenes(&mut self, kind: &str) {
+        let Some(level) = &self.level else { return };
+        let (start, success) =
+            desa_viewer::goals::goal_cameras(level.behaviour.program(), &level.id, kind);
+        self.success_camera = success;
+        self.cutscene_request = start;
+    }
+
     /// Stops a camera path, leaving the free camera where the path was.
     fn stop_camera_path(&mut self) {
         self.model.camera_paths.playing = None;
+        self.cutscene = false;
         if let Some(level) = &mut self.level {
             if let Some(scripted) = level.renderer.scripted_camera.take() {
                 self.camera = scripted.to_fly();
@@ -955,6 +2260,21 @@ impl<'a> App<'a> {
     /// Keeps the music going while skating: the next song when one ends
     /// (with Music on), and the level's ambience (with Sound on).
     fn update_music(&mut self) {
+        // The panel's volumes, kept when changed.
+        let volumes = (
+            self.model.character.effects_volume,
+            self.model.character.music_volume,
+        );
+        if let Some(audio) = &mut self.audio {
+            audio.set_volumes(volumes.0, volumes.1);
+        }
+        for (key, value) in [("volume.effects", volumes.0), ("volume.music", volumes.1)] {
+            let value = (value * 100.0).round() as u32;
+            if self.settings.best.get(key) != Some(&value) {
+                self.settings.best.insert(key.into(), value);
+                self.settings.save();
+            }
+        }
         let skating = self.skating.is_some();
         let (Some(audio), Some(data)) = (&mut self.audio, &mut self.data) else {
             return;
@@ -999,8 +2319,20 @@ impl<'a> App<'a> {
 
     /// Starts or stops skating the character from where it stands.
     fn toggle_skate(&mut self) {
+        // What the scripts asked meanwhile isn't for this run.
+        if let Some(level) = &mut self.level {
+            level.behaviour.cameras.clear();
+            level.behaviour.messages.clear();
+        }
         self.skate_pose = None;
         self.run = None;
+        self.warp_offer = None;
+        self.model.character.warp_prompt = None;
+        self.goal_offer = None;
+        self.model.character.goal_prompt = None;
+        self.model.character.paused = false;
+        self.look = glam::Vec2::ZERO;
+        self.session.last_position = None;
         self.recording.clear();
         self.replay = None;
         self.model.character.replaying = false;
@@ -1014,8 +2346,34 @@ impl<'a> App<'a> {
         }
         self.model.character.letters = None;
         self.model.character.letters_result = None;
+        // A goal played from its scripts stops: its own end script runs.
+        if let Some(run) = self.goal_run.take() {
+            self.end_goal_run(run);
+        }
+        self.model.character.goal_progress = None;
+        self.model.character.goal_result = None;
+        // A race stops: its own end script runs (cars back, gates gone).
+        if let Some(race) = self.racing.take() {
+            if let (Some(level), Some(script)) = (&mut self.level, race.end_script) {
+                level.behaviour.run_script(race.goal_runner, script);
+            }
+        }
+        self.model.character.race = None;
+        self.model.character.race_result = None;
         self.model.character.run_goal = None;
         self.model.character.run_goal_won = None;
+        // The collectibles go too (they come back on skating again).
+        if let Some(collecting) = self.collecting.take() {
+            if let Some(level) = &mut self.level {
+                for (object, _) in collecting.objects {
+                    level.behaviour.set_alive(object, false);
+                }
+                if let Some((object, _)) = collecting.special {
+                    level.behaviour.set_alive(object, false);
+                }
+            }
+        }
+        self.model.character.collected = None;
         self.model.character.run_clock = None;
         self.model.character.run_result = None;
         self.blend_from = None;
@@ -1038,7 +2396,30 @@ impl<'a> App<'a> {
         let id = &self.model.character.characters[index].id;
         let program = level.behaviour.program();
         let stats = Stats::of(program, id);
-        let physics = Physics::new(program, &stats);
+        // The Stats 13 cheat: every stat at 13.
+        let stats = if self.model.character.cheats.stats_13 {
+            Stats([13.0; 10])
+        } else {
+            stats
+        };
+        // The Moon Gravity and Slomo cheats' factors (`Moon_gravity`,
+        // `slomo_speed`).
+        let factor = |name: &str, default: f32| {
+            program
+                .value(qb::checksum(name))
+                .and_then(qb::Value::as_f32)
+                .unwrap_or(default)
+        };
+        self.moon_gravity = factor("Moon_gravity", 0.5);
+        self.slomo_speed = factor("slomo_speed", 0.5);
+        let mut physics = Physics::new(program, &stats);
+        // The chase camera picked.
+        let choices = Physics::camera_choices(program);
+        self.model.character.cameras = choices.iter().map(|(name, _)| title_case(name)).collect();
+        if let Some((_, setting)) = choices.get(self.model.character.camera) {
+            physics.set_camera(program, *setting);
+        }
+        self.camera_shown = self.model.character.camera;
         let position = self.placement.transform_point3(Vec3::ZERO);
         let forward = self.placement.transform_vector3(Vec3::Z);
         let mut skater = Skater::new(position, forward.x.atan2(forward.z));
@@ -1089,10 +2470,34 @@ impl<'a> App<'a> {
             })
             .collect();
         skater.gap_triggers = desa_viewer::triggers::gaps(&level.nodes, program);
+        // The level's gaps, as a checklist of those landed before.
+        let landed = self.settings.gaps.get(&level.id);
+        let mut gap_list: Vec<(String, u32, bool)> = Vec::new();
+        for trigger in skater.gap_triggers.values() {
+            if let skate::gaps::GapTrigger::End { text, score, .. } = trigger {
+                // (A goal's own gaps have no name.)
+                if text.is_empty() {
+                    continue;
+                }
+                if !gap_list.iter().any(|g| &g.0 == text) {
+                    let got = landed.is_some_and(|l| l.contains(text));
+                    gap_list.push((text.clone(), *score, got));
+                }
+            }
+        }
+        gap_list.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        self.model.character.gap_list = gap_list;
         self.start_audio();
         self.stop_camera_path();
         let chase = ChaseCamera::behind(&skater, &physics);
         self.skating = Some((skater, physics, chase));
+        self.start_collecting();
+        self.combo_lengths = [0.0; 3];
+        self.running_lengths = [0.0; 3];
+        self.combos_seen = 0;
+        self.record_queue.clear();
+        self.model.character.record_message = None;
+        self.show_records();
         self.model.character.skating = true;
         self.model.character.playing = false;
         self.set_looking(false);
@@ -1132,6 +2537,9 @@ impl<'a> App<'a> {
                 .zip(target.as_ref())
                 .map(|(pro, t)| (pro, t.name.clone(), t.score));
             self.model.character.run_goal_won = target.as_ref().map(|_| false);
+            if let Some(pro) = goal {
+                self.goal_cutscenes(if pro { "ProScore" } else { "HighScore" });
+            }
             self.run = Some(Run {
                 left: target.as_ref().map_or(RUN_TIME, |t| t.time),
                 ending: None,
@@ -1140,6 +2548,1032 @@ impl<'a> App<'a> {
                 won: false,
             });
         }
+    }
+
+    /// The character's collectibles on this level (`AddGoal_Collect25`),
+    /// those not got yet put out spinning and hovering
+    /// (`create_goal_disney_collect_object`).
+    fn start_collecting(&mut self) {
+        self.collecting = None;
+        self.model.character.collected = None;
+        if !self.model.character.collect {
+            return;
+        }
+        let (Some(level), Some(index)) = (&mut self.level, self.model.character.current) else {
+            return;
+        };
+        let character = self.model.character.characters[index].id.clone();
+        let Some(list) = desa_viewer::goals::collectibles(level.behaviour.program(), &character)
+        else {
+            return;
+        };
+        let key = format!("collected.{}.{character}", level.id);
+        let got = self.settings.best.get(&key).copied().unwrap_or(0);
+        let objects: Vec<(usize, u32)> = list
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, name)| Some((level.behaviour.object(*name)?, 1 << i)))
+            .collect();
+        if objects.is_empty() {
+            return;
+        }
+        // The special item, after the 25 (its own bit, not counted with them).
+        let special = list
+            .special
+            .as_ref()
+            .and_then(|(name, title)| Some((level.behaviour.object(*name)?, title.clone())));
+        if let Some((object, _)) = &special {
+            if got & SPECIAL_BIT == 0 {
+                level.behaviour.set_alive(*object, true);
+                level.behaviour.set_spin(*object, COLLECT_SPIN.to_radians());
+                level.behaviour.set_hover(*object, 10.0, 1.0);
+            }
+        }
+        for &(object, bit) in &objects {
+            if got & bit == 0 {
+                level.behaviour.set_alive(object, true);
+                level.behaviour.set_spin(object, COLLECT_SPIN.to_radians());
+                level.behaviour.set_hover(object, 10.0, 1.0);
+            }
+        }
+        self.model.character.collected = Some((
+            objects.iter().filter(|(_, bit)| got & bit != 0).count() as u32,
+            objects.len() as u32,
+        ));
+        self.collecting = Some(Collecting {
+            objects,
+            special,
+            got,
+            kind: list.kind,
+            key,
+        });
+    }
+
+    /// Picks up the collectibles the skater reaches
+    /// (`set_goal_collect_exception_25`: within 7 feet), with the gap sound
+    /// and "3 of 25 Cowgirl Boots" (`goal_collect_got_object`), and keeps
+    /// what's got.
+    fn update_collecting(&mut self) {
+        if self.replay.is_some() {
+            return;
+        }
+        let (Some(collecting), Some((skater, ..)), Some(level)) =
+            (&mut self.collecting, &mut self.skating, &mut self.level)
+        else {
+            return;
+        };
+        let body = skater.position + Vec3::Y * 30.0;
+        if let Some((object, title)) = &collecting.special {
+            if collecting.got & SPECIAL_BIT == 0
+                && body.distance(level.behaviour.position(*object)) <= COLLECT_RADIUS
+            {
+                collecting.got |= SPECIAL_BIT;
+                level.behaviour.set_alive(*object, false);
+                if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+                skater.message = Some((format!("Got the {title}!"), 2.5));
+                self.settings
+                    .best
+                    .insert(collecting.key.clone(), collecting.got);
+                self.settings.save();
+            }
+        }
+        let mut changed = false;
+        for &(object, bit) in &collecting.objects {
+            if collecting.got & bit != 0
+                || body.distance(level.behaviour.position(object)) > COLLECT_RADIUS
+            {
+                continue;
+            }
+            collecting.got |= bit;
+            changed = true;
+            level.behaviour.set_alive(object, false);
+            if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                audio.play_named(qb::checksum("gapsound"), 1.0);
+            }
+        }
+        if !changed {
+            return;
+        }
+        let got = collecting
+            .objects
+            .iter()
+            .filter(|(_, bit)| collecting.got & bit != 0)
+            .count();
+        let of = collecting.objects.len();
+        skater.message = Some((
+            if got == of {
+                format!("All {of} {} collected!", collecting.kind)
+            } else {
+                format!("{got} of {of} {}", collecting.kind)
+            },
+            2.0,
+        ));
+        self.model.character.collected = Some((got as u32, of as u32));
+        self.settings
+            .best
+            .insert(collecting.key.clone(), collecting.got);
+        self.settings.save();
+    }
+
+    /// A car the skater's started or stopped skitching on: off at its
+    /// skitch speed, or back to its own script.
+    fn update_skitch(&mut self) {
+        let now = self
+            .skating
+            .as_ref()
+            .and_then(|(s, ..)| s.skitch)
+            .and_then(|i| self.vehicle_objects.get(i).copied());
+        if now == self.skitched {
+            return;
+        }
+        if let Some(level) = &mut self.level {
+            if let Some(old) = self.skitched {
+                level.behaviour.unskitch(old);
+            }
+            if let Some(car) = now {
+                level.behaviour.skitch(car);
+            }
+        }
+        self.skitched = now;
+    }
+
+    /// The settings key for one of the level's records for the character.
+    fn record_key(&self, kind: &str) -> String {
+        let character = self
+            .model
+            .character
+            .current
+            .map_or("", |i| self.model.character.characters[i].id.as_str());
+        let level = self.level.as_ref().map_or("", |l| l.id.as_str());
+        format!("record.{kind}.{level}.{character}")
+    }
+
+    /// The records in the panel.
+    fn show_records(&mut self) {
+        let get = |app: &Self, kind: &str| app.settings.best.get(&app.record_key(kind)).copied();
+        let mut lines = Vec::new();
+        for (kind, label) in RECORDS {
+            if let Some(value) = get(self, kind) {
+                let value = if kind == "tricks" {
+                    value.to_string()
+                } else {
+                    record_value(kind, value)
+                };
+                lines.push(format!("{label}: {value}"));
+            }
+        }
+        self.model.character.records = lines;
+    }
+
+    /// The game's records (`CheckAndDisplayRecordScore`, after each combo
+    /// lands): the best combo score, the longest grind, manual and lip
+    /// trick, and the most tricks in a combo, each kept for the level and
+    /// character. A new one is announced ("Record Combo Score!", then the
+    /// value) when it's past the game's showing mark (10,000 points, 10
+    /// seconds, 5 tricks), one message after another with the gap sound.
+    fn update_records(&mut self, dt: f32) {
+        // The announcement showing, then the next.
+        self.record_shown += dt;
+        if self.model.character.record_message.is_some() && self.record_shown > RECORD_TIME {
+            self.model.character.record_message = None;
+        }
+        if self.model.character.record_message.is_none() {
+            if let Some(text) = self.record_queue.pop_front() {
+                self.model.character.record_message = Some(text);
+                self.record_shown = 0.0;
+                if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+                    audio.play_named(qb::checksum("gapsound"), 1.0);
+                }
+            }
+        }
+        if self.replay.is_some() {
+            return;
+        }
+        let Some((skater, ..)) = &self.skating else {
+            return;
+        };
+        // The session's tally.
+        let session = &mut self.session;
+        session.time += dt;
+        if let Some(last) = session.last_position {
+            let step = skater.position.distance(last);
+            // (Not a jump to a spawn point or through a teleporter.)
+            if step < 100.0 {
+                session.distance += step;
+            }
+        }
+        session.last_position = Some(skater.position);
+        self.model.character.session = session.lines();
+        // How long each balance trick has gone on, the longest kept.
+        let now = [skater.grind.is_some(), skater.manual, skater.lip.is_some()];
+        for ((running, longest), on) in self
+            .running_lengths
+            .iter_mut()
+            .zip(&mut self.combo_lengths)
+            .zip(now)
+        {
+            *running = if on { *running + dt } else { 0.0 };
+            *longest = longest.max(*running);
+        }
+        if skater.combos_ended == self.combos_seen {
+            return;
+        }
+        self.combos_seen = skater.combos_ended;
+        if let Some(landed) = &skater.last_combo {
+            let session = &mut self.session;
+            if landed.bailed {
+                session.bails += 1;
+            } else {
+                session.combos += 1;
+                session.tricks += landed.combo.tricks.len() as u32;
+                session.best = session.best.max(landed.total);
+                session.points += landed.total;
+            }
+            self.model.character.session = session.lines();
+        }
+        let lengths = std::mem::take(&mut self.combo_lengths);
+        let Some(landed) = skater.last_combo.as_ref().filter(|l| !l.bailed) else {
+            return;
+        };
+        let values = [
+            ("combo", landed.total),
+            ("grind", (lengths[0] * 100.0) as u32),
+            ("manual", (lengths[1] * 100.0) as u32),
+            ("lip", (lengths[2] * 100.0) as u32),
+            ("tricks", landed.combo.tricks.len() as u32),
+        ];
+        let mut changed = false;
+        for (kind, value) in values {
+            let key = self.record_key(kind);
+            if value == 0 || self.settings.best.get(&key).is_some_and(|b| *b >= value) {
+                continue;
+            }
+            self.settings.best.insert(key, value);
+            changed = true;
+            let (text, mark) = match kind {
+                "combo" => ("Record Combo Score!", 10_000),
+                "grind" => ("Record Grind Length!", 1000),
+                "manual" => ("Record Manual Length!", 1000),
+                "lip" => ("Record Liptrick Length!", 1000),
+                _ => ("Record Trick Combo!", 5),
+            };
+            if value >= mark {
+                self.record_queue.push_back(text.to_string());
+                self.record_queue
+                    .push_back(format!("{}!", record_value(kind, value)));
+            }
+        }
+        if changed {
+            self.settings.save();
+            self.show_records();
+        }
+    }
+
+    /// The level's warps: a Hub portal animates into place as the skater
+    /// comes within 60 feet (`WarpAppears`: dropping and turning, with the
+    /// portal sound); going into one (or the way back to the Hub) holds the
+    /// skater and offers the level.
+    fn update_portals(&mut self, dt: f32) {
+        let skater = self.skating.as_ref().map(|(s, ..)| s.position);
+        let Some(level) = &mut self.level else { return };
+        for (i, portal) in level.portals.iter_mut().enumerate() {
+            let Some(skater) = skater else {
+                // Not skating: put away again.
+                if portal.appeared.take().is_some() {
+                    if let Some((layer, _)) = &portal.strip {
+                        level.renderer.show_layer(*layer, false);
+                    }
+                }
+                portal.declined = false;
+                continue;
+            };
+            let to = skater - portal.warp.position;
+            if let Some((layer, base)) = &portal.strip {
+                if portal.appeared.is_none() && to.length() < PORTAL_APPEAR {
+                    portal.appeared = Some(0.0);
+                    level.renderer.show_layer(*layer, true);
+                    // Its sparkle (`create Name = <warpParticle>`).
+                    if let Some(particle) = portal.warp.particle {
+                        level
+                            .particles
+                            .start(level.behaviour.program(), &level.nodes, particle);
+                    }
+                    if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound)
+                    {
+                        audio.play_named(qb::checksum("portalAppears"), 1.0);
+                    }
+                }
+                if let Some(t) = &mut portal.appeared {
+                    if *t <= PORTAL_TIME {
+                        *t += dt;
+                        let k = (*t / PORTAL_TIME).min(1.0);
+                        // Quick to start, easing into place.
+                        let k = 1.0 - (1.0 - k) * (1.0 - k);
+                        let middle = base
+                            .iter()
+                            .fold(Vec3::ZERO, |sum, v| sum + Vec3::from(v.position))
+                            / base.len().max(1) as f32;
+                        let moved: Vec<_> = base
+                            .iter()
+                            .map(|v| desa_viewer::level::Vertex {
+                                position: (middle + (Vec3::from(v.position) - middle) * k)
+                                    .to_array(),
+                                ..*v
+                            })
+                            .collect();
+                        level.renderer.update_layer(*layer, 0, &moved);
+                    }
+                }
+            }
+            // The way back to the Hub glows (`HubWarp`: `create Name =
+            // TRG_Warp_Particle_Hub`).
+            if portal.strip.is_none() {
+                if let Some(particle) = portal.warp.particle {
+                    level
+                        .particles
+                        .start(level.behaviour.program(), &level.nodes, particle);
+                }
+            }
+            let to = skater - portal.warp.position;
+            let across = Vec3::new(to.x, 0.0, to.z).length();
+            if portal.declined {
+                portal.declined = across < WARP_LEAVE;
+                continue;
+            }
+            let ready = portal.strip.is_none() || portal.appeared.is_some_and(|t| t > PORTAL_TIME);
+            if ready && self.warp_offer.is_none() && across < WARP_ENTER && to.y.abs() < WARP_HEIGHT
+            {
+                self.warp_offer = Some(i);
+                self.model.character.warp_prompt = Some(portal.warp.title.clone());
+            }
+        }
+    }
+
+    /// What the map in the corner shows round the skater: the collectibles
+    /// and letters still to get, and the warps.
+    fn update_map(&mut self) {
+        let (Some((skater, ..)), Some(level)) = (&self.skating, &self.level) else {
+            self.model.character.map = None;
+            return;
+        };
+        let Some(map) = &level.minimap else { return };
+        let mut markers = Vec::new();
+        if let Some(c) = &self.collecting {
+            for &(object, bit) in &c.objects {
+                if c.got & bit == 0 {
+                    markers.push((
+                        map.pixel(level.behaviour.position(object)),
+                        ui::MapMark::Collectible,
+                    ));
+                }
+            }
+        }
+        // What the goal on wants gone near.
+        if let Some(run) = self.goal_run.as_ref().filter(|r| !r.over) {
+            for object in level.behaviour.radius_trigger_objects() {
+                if !run.before.contains(&object) {
+                    markers.push((
+                        map.pixel(level.behaviour.position(object)),
+                        ui::MapMark::Target,
+                    ));
+                }
+            }
+        }
+        if let Some(race) = self.racing.as_ref().filter(|r| !r.over) {
+            if let Some((at, ..)) = race.points.get(race.next) {
+                markers.push((map.pixel(*at), ui::MapMark::Letter));
+            }
+        }
+        if let Some(run) = &self.letters {
+            for (i, &object) in run.objects.iter().enumerate() {
+                if !run.got[i] {
+                    markers.push((
+                        map.pixel(level.behaviour.position(object)),
+                        ui::MapMark::Letter,
+                    ));
+                }
+            }
+        }
+        for portal in &level.portals {
+            markers.push((map.pixel(portal.warp.position), ui::MapMark::Warp));
+        }
+        for pro in &level.pros {
+            markers.push((
+                map.pixel(level.behaviour.position(pro.object)),
+                ui::MapMark::Pro,
+            ));
+        }
+        // The gaps' ends (where each scores), landed or not.
+        for (object, trigger) in &skater.gap_triggers {
+            let skate::gaps::GapTrigger::End { text, .. } = trigger else {
+                continue;
+            };
+            if text.is_empty() {
+                continue;
+            }
+            let Some(at) = level
+                .nodes
+                .nodes
+                .iter()
+                .find(|n| n.name == *object)
+                .and_then(|n| n.position)
+            else {
+                continue;
+            };
+            let landed = self
+                .model
+                .character
+                .gap_list
+                .iter()
+                .any(|(name, _, got)| *got && name == text);
+            markers.insert(0, (map.pixel(at), ui::MapMark::Gap(landed)));
+        }
+        self.model.character.map = Some(ui::MapView {
+            centre: map.pixel(skater.position),
+            heading: skater.heading,
+            size: (map.width as f32, map.height as f32),
+            markers,
+        });
+    }
+
+    /// The goals' pros: standing in the level while skating (with no goal
+    /// on), and offering their goal when the skater rolls up.
+    fn update_pros(&mut self) {
+        let skating = self.skating.as_ref().map(|(s, ..)| s.position);
+        let busy = self.run.is_some()
+            || self.letters.is_some()
+            || self.racing.is_some()
+            || self.goal_run.is_some();
+        let Some(level) = &mut self.level else { return };
+        for (i, pro) in level.pros.iter_mut().enumerate() {
+            let Some(at) = skating else {
+                pro.declined = false;
+                continue;
+            };
+            let near = at.distance(level.behaviour.position(pro.object));
+            if pro.declined {
+                pro.declined = near < PRO_LEAVE;
+                continue;
+            }
+            if !busy && self.goal_offer.is_none() && self.warp_offer.is_none() && near < PRO_NEAR {
+                self.goal_offer = Some(i);
+                self.model.character.goal_prompt = Some(pro.title.clone());
+                // They turn to the skater (`Obj_LookAtObject Type = skater`).
+                level.behaviour.look_at(pro.object, at, 0.4);
+                self.lines_to_say.extend(pro.line);
+            }
+        }
+    }
+
+    /// Starts the goal offered.
+    fn take_goal(&mut self) {
+        let Some(i) = self.goal_offer.take() else {
+            return;
+        };
+        self.model.character.goal_prompt = None;
+        let Some(action) = self
+            .level
+            .as_ref()
+            .and_then(|l| l.pros.get(i))
+            .map(|p| p.start)
+        else {
+            return;
+        };
+        match action {
+            ui::Action::StartRun(goal) => self.start_run(goal),
+            ui::Action::StartLetters => self.start_letters(),
+            ui::Action::StartRace => self.start_race(),
+            ui::Action::StartGoal(i) => self.start_goal(i),
+            _ => {}
+        }
+    }
+
+    /// Turns the goal down: not offered again till the skater's gone off.
+    fn not_now(&mut self) {
+        if let Some(i) = self.goal_offer.take() {
+            if let Some(pro) = self.level.as_mut().and_then(|l| l.pros.get_mut(i)) {
+                pro.declined = true;
+            }
+        }
+        self.model.character.goal_prompt = None;
+    }
+
+    /// Goes through the warp offered: that level loads, and skating goes on
+    /// there from its start.
+    fn take_warp(&mut self) {
+        let Some(i) = self.warp_offer.take() else {
+            return;
+        };
+        self.model.character.warp_prompt = None;
+        let Some((level, camera)) = self
+            .level
+            .as_ref()
+            .and_then(|l| l.portals.get(i))
+            .map(|p| (p.warp.level, p.warp.camera))
+        else {
+            return;
+        };
+        let index = self
+            .model
+            .levels
+            .iter()
+            .position(|info| qb::checksum(&format!("load_{}", info.id)) == level);
+        if let Some(index) = index {
+            self.skate_on_load = true;
+            // The warp's own camera path first, then the level.
+            match camera {
+                Some(camera) => {
+                    self.play_cutscene(camera);
+                    if self.cutscene {
+                        self.load_after_cutscene = Some(index);
+                    } else {
+                        self.start_load(index);
+                    }
+                }
+                None => self.start_load(index),
+            }
+        }
+    }
+
+    /// Turns the warp down: skating on, not offered it again until the
+    /// skater's gone off from it.
+    fn stay_here(&mut self) {
+        if let Some(i) = self.warp_offer.take() {
+            if let Some(portal) = self.level.as_mut().and_then(|l| l.portals.get_mut(i)) {
+                portal.declined = true;
+            }
+        }
+        self.model.character.warp_prompt = None;
+    }
+
+    /// Knocks the bouncy objects the skater runs into flying (up by their
+    /// `UpMagnitude`, spinning at `ConstRot`), falling with their
+    /// `Gravity` and bouncing (`Bounciness`) till they settle
+    /// (`MinBounceVel`), with their `BounceSound`.
+    fn update_bouncies(&mut self, dt: f32) {
+        let Some(level) = &mut self.level else { return };
+        let skater = self
+            .skating
+            .as_ref()
+            .map(|(s, ..)| (s.position + Vec3::Y * 20.0, s.velocity));
+        let mut seed = (self.session.time * 1000.0) as u32 | 1;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let mut scripts = Vec::new();
+        for b in &mut level.bouncies {
+            if !b.shown {
+                continue;
+            }
+            b.since += dt;
+            let at = b.centre + b.offset;
+            if let Some((body, velocity)) = skater {
+                let near = (body - at).with_y(0.0).length() < b.reach + 14.0
+                    && (body.y - at.y).abs() < b.half_height + 40.0;
+                if near && b.since > 0.4 && velocity.length() > 60.0 {
+                    b.since = 0.0;
+                    b.moving = true;
+                    // Its script, the first knock.
+                    if !std::mem::replace(&mut b.collided, true) {
+                        scripts.extend(b.spec.collide_script);
+                    }
+                    b.velocity = velocity.with_y(0.0) * 1.1 + Vec3::Y * b.spec.up * FEET;
+                    b.spin = Vec3::new(random(), random(), random()).normalize_or(Vec3::X)
+                        * b.spec.spin.to_radians();
+                    if let (Some(sound), Some(audio)) = (
+                        b.spec.sound,
+                        self.audio.as_ref().filter(|_| self.model.character.sound),
+                    ) {
+                        audio.play_named(sound, 1.0);
+                    }
+                }
+            }
+            if !b.moving {
+                continue;
+            }
+            b.velocity.y -= b.spec.gravity * FEET * dt;
+            b.offset += b.velocity * dt;
+            b.rotation = (Quat::from_scaled_axis(b.spin * dt) * b.rotation).normalize();
+            // The ground under it: a bounce, losing speed, till it rests.
+            let at = b.centre + b.offset;
+            if let Some(world) = &level.world {
+                let from = at + Vec3::Y * (b.half_height + 20.0);
+                if let Some(hit) = world.ray(from, at - Vec3::Y * (b.half_height + 4.0)) {
+                    if b.velocity.y < 0.0 && at.y - b.half_height <= hit.point.y {
+                        b.offset.y += hit.point.y - (at.y - b.half_height);
+                        b.velocity.y = -b.velocity.y * b.spec.bounciness.clamp(0.0, 1.0) * 0.6;
+                        b.velocity.x *= 0.7;
+                        b.velocity.z *= 0.7;
+                        b.spin *= 0.6;
+                        if b.velocity.length() < (b.spec.min_bounce * FEET).max(30.0) {
+                            b.moving = false;
+                            b.velocity = Vec3::ZERO;
+                        }
+                    }
+                }
+            }
+            // Far below the level: put back where it was.
+            if b.offset.y < -5000.0 {
+                b.offset = Vec3::ZERO;
+                b.rotation = Quat::IDENTITY;
+                b.moving = false;
+            }
+            let moved: Vec<_> = b
+                .base
+                .iter()
+                .map(|v| desa_viewer::level::Vertex {
+                    position: (b.centre
+                        + b.rotation * (Vec3::from(v.position) - b.centre)
+                        + b.offset)
+                        .to_array(),
+                    normal: (b.rotation * Vec3::from(v.normal)).to_array(),
+                    ..*v
+                })
+                .collect();
+            level.renderer.update_layer(b.layer, 0, &moved);
+        }
+        for script in scripts {
+            level.behaviour.run_level_script(script, Vec::new());
+        }
+    }
+
+    /// Breaks what the skater's touched (the trigger scripts' `Shatter`):
+    /// the pieces gone (and their collision), chunks thrown, and the sound
+    /// the script plays.
+    fn update_breakables(&mut self) {
+        let (Some((skater, ..)), Some(level)) = (&self.skating, &mut self.level) else {
+            return;
+        };
+        // What teleporters created or killed (the grocery store
+        // restocked): created breakables can break again.
+        for (target, created) in std::mem::take(&mut self.pending_creates) {
+            let names: Vec<u32> = match target {
+                desa_viewer::triggers::CreateTarget::Name(n) => vec![n],
+                desa_viewer::triggers::CreateTarget::Prefix(p) => {
+                    let p = p.to_ascii_lowercase();
+                    level
+                        .nodes
+                        .labels
+                        .iter()
+                        .filter(|(_, l)| l.to_ascii_lowercase().starts_with(&p))
+                        .map(|(n, _)| *n)
+                        .collect()
+                }
+            };
+            for name in names {
+                if let Some(object) = level.behaviour.object(name) {
+                    level.behaviour.set_alive(object, created);
+                } else if level.nodes.hidden_sectors.contains(&name)
+                    || level.sector_layers.contains_key(&name)
+                {
+                    level.show_sector(name, created);
+                }
+                if created {
+                    if let Some(world) = &mut level.world {
+                        world.enable(name);
+                    }
+                    let mended: Vec<u32> = level
+                        .breakables
+                        .iter()
+                        .filter(|(_, (_, names, _))| names.contains(&name))
+                        .map(|(t, _)| *t)
+                        .collect();
+                    for trigger in mended {
+                        level.broken.remove(&trigger);
+                        if let Some(world) = &mut level.world {
+                            world.enable(trigger);
+                        }
+                    }
+                }
+            }
+        }
+        for trigger in &skater.touched {
+            let Some((_, names, sound)) = level.breakables.get(trigger) else {
+                continue;
+            };
+            if !level.broken.insert(*trigger) {
+                continue;
+            }
+            let (names, sound) = (names.clone(), *sound);
+            for name in names {
+                let at = if let Some(object) = level.behaviour.object(name) {
+                    level.behaviour.set_alive(object, false);
+                    Some(level.behaviour.position(object))
+                } else {
+                    if let Some(layer) = level.sector_layers.get(&name) {
+                        level.renderer.show_layer(*layer, false);
+                    }
+                    level.sector_centres.get(&name).copied()
+                };
+                if let Some(world) = &mut level.world {
+                    world.disable(name);
+                }
+                if let Some(at) = at {
+                    self.sparks.shatter(at);
+                }
+            }
+            if let Some(world) = &mut level.world {
+                world.disable(*trigger);
+            }
+            if let (Some(sound), Some(audio)) = (
+                sound,
+                self.audio.as_ref().filter(|_| self.model.character.sound),
+            ) {
+                audio.play_named(sound, 1.0);
+            }
+        }
+    }
+
+    /// Starts the level's race (`AddGoal_Race`) from its restart node: the
+    /// goal's start script runs (the racing cars come out), then the first
+    /// waypoint's script (its gate), with the first waypoint's time on the
+    /// clock.
+    fn start_race(&mut self) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(level) = &self.level else { return };
+        let Some(race) = desa_viewer::goals::race(level.behaviour.program(), &level.id) else {
+            return;
+        };
+        let at = |name: u32| {
+            level
+                .nodes
+                .nodes
+                .iter()
+                .find(|n| n.name == name)
+                .and_then(|n| n.position)
+        };
+        let points: Vec<(Vec3, Option<u32>, f32)> = race
+            .waypoints
+            .iter()
+            .filter_map(|(name, script, time)| Some((at(*name)?, *script, *time)))
+            .collect();
+        let Some(first) = points.first() else { return };
+        self.placement = level.home;
+        if let Some(start) = race.restart.and_then(at) {
+            let to = first.0 - start;
+            self.placement =
+                Mat4::from_rotation_translation(Quat::from_rotation_y(to.x.atan2(to.z)), start);
+        }
+        // Scripts run on objects that are there all along (they only make
+        // and kill things and play sounds): the waypoints' on one, the
+        // start and end scripts on another, so neither cuts the other off.
+        let mut alive = (0..level.nodes.objects.len()).filter(|&i| level.behaviour.alive(i));
+        let runner = alive.next().unwrap_or(0);
+        let goal_runner = alive.next().unwrap_or(runner);
+        self.toggle_skate();
+        if self.skating.is_none() {
+            return;
+        }
+        let Some(level) = &mut self.level else { return };
+        if let Some(script) = race.start_script {
+            level.behaviour.run_script(goal_runner, script);
+        }
+        let left = first.2;
+        let first_script = first.1;
+        self.racing = Some(RaceRun {
+            points,
+            next: 0,
+            left,
+            time: 0.0,
+            over: false,
+            runner,
+            goal_runner,
+            end_script: race.end_script,
+            started: false,
+        });
+        let _ = first_script;
+        self.model.character.race_name = Some(race.name);
+        self.goal_cutscenes("Race");
+    }
+
+    /// Counts the race down and takes the waypoints the skater reaches
+    /// (`goal_race_init_waypoint`: within 8 feet): each runs the next one's
+    /// script and adds its time. All reached wins; out of time loses.
+    fn update_race(&mut self, dt: f32) {
+        let (Some(race), Some((skater, ..)), Some(level)) =
+            (&mut self.racing, &self.skating, &mut self.level)
+        else {
+            return;
+        };
+        let model = &mut self.model.character;
+        if !race.started {
+            // The first waypoint's script (its gate and arrow).
+            race.started = true;
+            if let Some(script) = race.points[0].1 {
+                level.behaviour.run_script(race.runner, script);
+            }
+        }
+        model.run_clock = Some(race.left);
+        model.race = Some((race.next, race.points.len()));
+        if race.over {
+            return;
+        }
+        race.left = (race.left - dt).max(0.0);
+        race.time += dt;
+        let body = skater.position + Vec3::Y * 30.0;
+        if body.distance(race.points[race.next].0) < RACE_RADIUS {
+            race.next += 1;
+            if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                audio.play_named(qb::checksum("hud_jumpgap"), 1.0);
+            }
+            if let Some((_, script, time)) = race.points.get(race.next) {
+                race.left += time;
+                if let Some(script) = script {
+                    level.behaviour.run_script(race.runner, *script);
+                }
+            }
+        }
+        let won = race.next >= race.points.len();
+        if won {
+            self.cutscene_request = self.success_camera.take();
+            self.goal_won = Some("Race".to_string());
+        }
+        if won || race.left == 0.0 {
+            race.over = true;
+            model.race_result = Some((won, race.time));
+            if won {
+                if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+            }
+            if let Some(script) = race.end_script.take() {
+                level.behaviour.run_script(race.goal_runner, script);
+            }
+        }
+    }
+
+    /// Starts one of the level's goals (by its place in the goal list) as
+    /// its own scripts play it: the skater at its restart node, its
+    /// activate and start scripts run (`goal_ID` its id), and the goal
+    /// manager told it's on. The scripts set its flags as they're done
+    /// (a gap goal's gaps' `Gapscript`s); enough of them, or a script's
+    /// `GoalManager_WinGoal`, wins it.
+    fn start_goal(&mut self, index: usize) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(level) = &self.level else { return };
+        let Some((kind, _)) = self.model.character.goals.get(index) else {
+            return;
+        };
+        let kind = kind.clone();
+        let Some(goal) =
+            desa_viewer::goals::generic_goal(level.behaviour.program(), &level.id, &kind)
+        else {
+            return;
+        };
+        let start = goal
+            .restart
+            .and_then(|name| level.nodes.nodes.iter().find(|n| n.name == name));
+        // (Restart nodes don't say which way: the level start's way.)
+        self.placement = match start.and_then(|n| n.position) {
+            Some(at) => {
+                let (_, facing, _) = level.home.to_scale_rotation_translation();
+                Mat4::from_rotation_translation(facing, at)
+            }
+            None => level.home,
+        };
+        self.toggle_skate();
+        if self.skating.is_none() {
+            return;
+        }
+        let Some(level) = &mut self.level else { return };
+        let b = &mut level.behaviour;
+        let before = b.radius_trigger_objects().into_iter().collect();
+        b.active_goal = Some(goal.id);
+        b.goal_flags.clear();
+        b.goal_count = 0;
+        b.goal_needed = goal.needed;
+        b.goal_won = false;
+        let mut params: qb::vm::Params = goal
+            .params
+            .iter()
+            .map(|(k, v)| (Some(*k), v.clone()))
+            .collect();
+        params.push((Some(qb::checksum("goal_ID")), qb::Value::Name(goal.id)));
+        // (Not talked to the pro yet: its things are made.)
+        if !params
+            .iter()
+            .any(|(k, _)| *k == Some(qb::checksum("talked_to_pro")))
+        {
+            params.push((Some(qb::checksum("talked_to_pro")), qb::Value::Integer(0)));
+        }
+        b.goal_params = params.clone();
+        for script in [goal.activate, goal.start_script].into_iter().flatten() {
+            b.run_level_script(script, params.clone());
+        }
+        self.goal_cutscenes(&kind);
+        self.goal_run = Some(GoalRun {
+            kind,
+            index,
+            left: goal.time,
+            goal,
+            over: false,
+            before,
+        });
+    }
+
+    /// The goal played from its scripts: the gaps' scripts run (they set
+    /// its flags), the clock counts down, and it's won with all its flags
+    /// or out of time lost.
+    fn update_goal_run(&mut self, dt: f32) {
+        let (Some((skater, ..)), Some(level)) = (&mut self.skating, &mut self.level) else {
+            return;
+        };
+        // Landed gaps' scripts run whether a goal's on or not (they ask).
+        for script in std::mem::take(&mut skater.gap_scripts) {
+            level.behaviour.run_level_script(script, Vec::new());
+        }
+        // Camera paths the scripts play (a goal's cutscenes: each arcade
+        // machine coming on), one at a time.
+        for path in std::mem::take(&mut level.behaviour.cameras) {
+            if !self.cutscene && self.cutscene_request.is_none() {
+                self.cutscene_request = Some(path);
+            }
+        }
+        // What the scripts put on screen, as the skater's message.
+        // (The game's own screen shows them when it's up.)
+        let messages = std::mem::take(&mut level.behaviour.messages);
+        if let (Some(text), false) = (messages.last().cloned(), self.model.character.game_hud) {
+            skater.message = Some((text, 2.5));
+        }
+        // And touched trigger geometry's.
+        for object in std::mem::take(&mut skater.touches) {
+            if let Some(&script) = level.touch_scripts.get(&object) {
+                level.behaviour.run_level_script(script, Vec::new());
+            }
+        }
+        let Some(run) = &mut self.goal_run else {
+            return;
+        };
+        let model = &mut self.model.character;
+        let got = level.behaviour.goal_progress();
+        // (What it asks, unless that's its name over.)
+        let text = if run.goal.text == run.goal.name {
+            String::new()
+        } else {
+            run.goal.text.clone()
+        };
+        model.goal_progress = Some((
+            run.goal.name.clone(),
+            text,
+            got.min(run.goal.needed),
+            run.goal.needed,
+        ));
+        model.run_clock = run.left;
+        if run.over {
+            return;
+        }
+        if let Some(left) = &mut run.left {
+            *left = (*left - dt).max(0.0);
+        }
+        let won = level.behaviour.goal_won || (run.goal.needed > 0 && got >= run.goal.needed);
+        if won || run.left == Some(0.0) {
+            run.over = true;
+            model.goal_result = Some((run.goal.name.clone(), won));
+            if won {
+                self.cutscene_request = self.success_camera.take();
+                self.goal_won = Some(run.kind.clone());
+                if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
+                    audio.play_named(qb::checksum("GoalDone"), 1.0);
+                }
+            }
+            // Its own scripts for the end: won, the game's success (the
+            // goal's outro: Beach's cargo doors open), then its deactivate
+            // told so (`just_won_goal`); lost, just the deactivate.
+            let b = &mut level.behaviour;
+            let mut params = b.goal_params.clone();
+            if won {
+                if let Some(script) = run.goal.success {
+                    b.run_level_script(script, params.clone());
+                }
+                params.push((None, qb::Value::Name(qb::checksum("just_won_goal"))));
+            }
+            if let Some(script) = run.goal.deactivate.take() {
+                b.run_level_script(script, params);
+            }
+            b.ended_goal = b.active_goal.take();
+        }
+    }
+
+    /// A goal played from its scripts stopped: its end script, if it
+    /// hasn't run, and the goal manager told it's off.
+    fn end_goal_run(&mut self, run: GoalRun) {
+        let Some(level) = &mut self.level else { return };
+        let b = &mut level.behaviour;
+        if let Some(script) = run.goal.deactivate {
+            b.run_level_script(script, b.goal_params.clone());
+        }
+        b.ended_goal = b.active_goal.take();
+        b.goal_flags.clear();
     }
 
     /// Starts the level's S-K-A-T-E letters goal (`AddGoal_Skate`): the
@@ -1183,6 +3617,8 @@ impl<'a> App<'a> {
                 .behaviour
                 .run_script(object, qb::checksum("bounce_skate_letter"));
         }
+        self.goal_cutscenes("SKATE");
+        self.letter_lines = goal.streams;
         self.letters = Some(LetterRun {
             objects,
             got: [false; 5],
@@ -1217,6 +3653,7 @@ impl<'a> App<'a> {
             run.got[i] = true;
             level.behaviour.set_alive(object, false);
             let letter = "SKATE".chars().nth(i).unwrap_or('?');
+            self.lines_to_say.extend(self.letter_lines[i]);
             skater.message = Some((letter.to_string(), 1.0));
             if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
                 audio.play_named(qb::checksum("GoalDone"), 1.0);
@@ -1224,6 +3661,10 @@ impl<'a> App<'a> {
         }
         model.letters = Some(run.got);
         let won = run.got.iter().all(|g| *g);
+        if won {
+            self.cutscene_request = self.success_camera.take();
+            self.goal_won = Some("SKATE".to_string());
+        }
         if won || run.left == 0.0 {
             run.over = true;
             let taken = run.time - run.left;
@@ -1269,6 +3710,14 @@ impl<'a> App<'a> {
         if let Some((score, win)) = run.goal.as_ref().filter(|_| !run.won) {
             if skater.score >= *score {
                 run.won = true;
+                self.cutscene_request = self.success_camera.take();
+                self.goal_won = Some(
+                    match self.model.character.run_goal {
+                        Some((true, ..)) => "ProScore",
+                        _ => "HighScore",
+                    }
+                    .to_string(),
+                );
                 run.ending.get_or_insert(0.0);
                 self.model.character.run_goal_won = Some(true);
                 if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
@@ -1340,6 +3789,9 @@ impl<'a> App<'a> {
         };
         while gilrs.next_event().is_some() {}
         let mut input = Input::default();
+        let mut look = glam::Vec2::ZERO;
+        let mut start = false;
+        let mut back = false;
         for (_, pad) in gilrs.gamepads() {
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
@@ -1368,8 +3820,593 @@ impl<'a> App<'a> {
             ]
             .into_iter()
             .any(pressed);
+            // The C-stick looks round; Start pauses.
+            let stick = glam::Vec2::new(pad.value(Axis::RightStickX), pad.value(Axis::RightStickY));
+            if stick.length() > look.length() && stick.length() > 0.2 {
+                look = stick;
+            }
+            start |= pressed(Button::Start);
+            back |= pressed(Button::Select);
         }
+        self.pad_look = look;
+        if start && !self.pad_start && self.skating.is_some() {
+            self.toggle_pause();
+        }
+        self.pad_start = start;
+        if back && !self.pad_back {
+            self.next_camera();
+        }
+        self.pad_back = back;
         input
+    }
+
+    /// The next of the game's chase cameras (`ToggleSkaterCamMode`).
+    fn next_camera(&mut self) {
+        let count = self.model.character.cameras.len();
+        if count > 0 {
+            self.model.character.camera = (self.model.character.camera + 1) % count;
+        }
+    }
+
+    /// Which of the level's goals are won, for the list.
+    fn update_goals_won(&mut self) {
+        let Some(level) = &self.level else { return };
+        self.model.character.goals_won = self
+            .model
+            .character
+            .goals
+            .iter()
+            .map(|(kind, _)| {
+                let id = desa_viewer::goals::goal_id(&level.id, kind);
+                self.settings.best.contains_key(&format!("won.{id:08x}"))
+            })
+            .collect();
+    }
+
+    /// Each level's progress for the character shown, beside its name in
+    /// the list: its collectibles got and the gaps landed there.
+    fn update_progress(&mut self) {
+        let character = self
+            .model
+            .character
+            .current
+            .map(|i| self.model.character.characters[i].id.clone());
+        self.model.level_progress = self
+            .model
+            .levels
+            .iter()
+            .map(|level| {
+                let mut parts = Vec::new();
+                if let Some(c) = &character {
+                    let got = self
+                        .settings
+                        .best
+                        .get(&format!("collected.{}.{c}", level.id))
+                        .map_or(0, |bits| (bits & 0x01FF_FFFF).count_ones());
+                    if got > 0 {
+                        parts.push(format!("{got}/25"));
+                    }
+                }
+                if let Some(gaps) = self.settings.gaps.get(&level.id).filter(|g| !g.is_empty()) {
+                    parts.push(format!("{} gaps", gaps.len()));
+                }
+                parts.join(", ")
+            })
+            .collect();
+    }
+
+    /// Follows the skater with the camera picked, when it changes.
+    fn apply_camera(&mut self) {
+        let wanted = self.model.character.camera;
+        if wanted == self.camera_shown {
+            return;
+        }
+        let (Some((_, physics, _)), Some(level)) = (&mut self.skating, &self.level) else {
+            return;
+        };
+        let program = level.behaviour.program();
+        if let Some((_, setting)) = Physics::camera_choices(program).get(wanted) {
+            physics.set_camera(program, *setting);
+            self.camera_shown = wanted;
+            self.settings.best.insert("camera".into(), wanted as u32);
+            self.settings.save();
+        }
+    }
+
+    /// Pauses skating, or goes on.
+    fn toggle_pause(&mut self) {
+        if self.skating.is_some() && self.replay.is_none() {
+            self.model.character.paused = !self.model.character.paused;
+            // The game's own pause menu (`create_pause_menu`), if it can
+            // be made; taken away again on resuming (the panel stays).
+            let paused = self.model.character.paused;
+            if let Some(screen) = &mut self.screen {
+                screen.screen.destroy_id("pause_menu");
+                if paused && self.level.is_some() {
+                    screen
+                        .screen
+                        .run(qb::checksum("create_pause_menu"), Vec::new());
+                }
+            }
+        }
+    }
+
+    /// The game's own panel while skating (`create_gamemode_panel`: the
+    /// score, special bar, trick text, clock and balance meter), kept up
+    /// to date as the game's code does; or, not skating, none.
+    fn update_game_hud(&mut self) {
+        use qb::Value;
+        let (screen_calls, screen_scripts) = self
+            .level
+            .as_mut()
+            .map(|l| {
+                (
+                    std::mem::take(&mut l.behaviour.screen_calls),
+                    std::mem::take(&mut l.behaviour.screen_scripts),
+                )
+            })
+            .unwrap_or_default();
+        let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
+            return;
+        };
+        let program = level.behaviour.program();
+        let s = &mut screen.screen;
+        let Some((skater, ..)) = &self.skating else {
+            if self.hud.up {
+                self.hud = GameHud::default();
+                s.destroy_id("player1_panel_container");
+                s.destroy_id("the_time");
+                s.destroy_id("current_goal");
+                s.destroy_id("goal_points_text");
+                s.destroy_id("minigame_timer");
+            }
+            self.model.character.game_hud = false;
+            return;
+        };
+        if !self.hud.up {
+            self.hud = GameHud {
+                up: true,
+                ..GameHud::default()
+            };
+            s.run(qb::checksum("create_gamemode_panel"), Vec::new());
+            return;
+        }
+        if !s.exists("the_score") {
+            return;
+        }
+        self.model.character.game_hud = true;
+        // The level's scripts' screen commands (a goal's messages, text,
+        // counters) onto the game's screen.
+        for (name, args) in screen_calls {
+            s.command(name, &args, program);
+        }
+        for (script, params) in screen_scripts {
+            s.run(script, params);
+        }
+        // The goal on, for the UI's scripts that ask after it.
+        let b = &level.behaviour;
+        s.goal = b
+            .active_goal
+            .or(b.ended_goal)
+            .map(|id| (id, b.goal_params.clone()));
+        let props = |items: Vec<(&str, Value)>| {
+            Value::Struct(
+                items
+                    .into_iter()
+                    .map(|(k, v)| (Some(qb::checksum(k)), v))
+                    .collect(),
+            )
+        };
+        let rgba = |c: [i32; 4]| Value::Array(c.map(Value::Integer).to_vec());
+        // The score.
+        s.set(
+            "the_score",
+            &props(vec![("text", Value::String(skater.score.to_string()))]),
+            program,
+        );
+        // The special bar: filling the SPECIAL frame, blue, then yellow
+        // with the special on (`special_bar_colors`).
+        if let (Some(bar), Some(frame)) = (s.image_size("specialbar"), s.image_size("special")) {
+            let full = ((frame.x * 1.73 - 3.0) / bar.x.max(1.0)).max(0.0);
+            let fill = (skater.special_meter / 3000.0).clamp(0.0, 1.0);
+            let colour = if skater.special {
+                [128, 128, 64, 110]
+            } else {
+                [64, 64, 128, 110]
+            };
+            s.set(
+                "the_special_bar_sprite",
+                &props(vec![
+                    ("scale", Value::Pair([full * fill, 1.1])),
+                    ("rgba", rgba(colour)),
+                ]),
+                program,
+            );
+        }
+        // The balance meter: over the skater grinding, beside it in a
+        // manual (`balance_meter_info`'s bar positions), its arrow along
+        // the arc of `arrow_positions` by the lean.
+        match skater.balance_meter() {
+            Some(lean) => {
+                let grinding = skater.grind.is_some() || skater.lip.is_some();
+                let bar = if grinding {
+                    [320.0, 165.0]
+                } else {
+                    [250.0, 224.0]
+                };
+                let arc = [
+                    [0.0, -17.0],
+                    [10.0, -17.0],
+                    [20.0, -15.0],
+                    [30.0, -11.0],
+                    [40.0, -6.0],
+                    [50.0, 1.0],
+                    [60.0, 12.0],
+                ];
+                let k = (lean.abs() * 6.0).round() as usize;
+                let [x, y] = arc[k.min(6)];
+                let x = if lean < 0.0 { -x } else { x };
+                // A manual's stands up beside the skater: turned a quarter
+                // round, its arc with it.
+                let (angle, [x, y]) = if grinding {
+                    (0.0, [x, y])
+                } else {
+                    (-90.0, [y, -x])
+                };
+                let middle = s.image_size("balancemeter").unwrap_or_default() / 2.0;
+                s.set(
+                    "the_balance_meter",
+                    &props(vec![
+                        ("pos", Value::Pair(bar)),
+                        ("rgba", rgba([95, 95, 95, 106])),
+                        ("rot_angle", Value::Float(angle)),
+                    ]),
+                    program,
+                );
+                s.set(
+                    "the_balance_meter",
+                    &props(vec![(
+                        "tags",
+                        props(vec![("tag_turned_on", Value::Integer(1))]),
+                    )]),
+                    program,
+                );
+                // Its arrow, the meter's first child.
+                let arrow = Value::Struct(vec![
+                    (None, Value::Name(qb::checksum("the_balance_meter"))),
+                    (Some(qb::checksum("child")), Value::Integer(0)),
+                ]);
+                s.set_resolved(
+                    &arrow,
+                    &props(vec![
+                        ("pos", Value::Pair([x + middle.x, y + middle.y])),
+                        ("rgba", rgba([128, 128, 128, 100])),
+                        ("rot_angle", Value::Float(angle)),
+                    ]),
+                    program,
+                );
+            }
+            None => {
+                s.set(
+                    "the_balance_meter",
+                    &props(vec![("rgba", rgba([128, 128, 128, 0]))]),
+                    program,
+                );
+                let arrow = Value::Struct(vec![
+                    (None, Value::Name(qb::checksum("the_balance_meter"))),
+                    (Some(qb::checksum("child")), Value::Integer(0)),
+                ]);
+                s.set_resolved(
+                    &arrow,
+                    &props(vec![("rgba", rgba([128, 128, 128, 0]))]),
+                    program,
+                );
+            }
+        }
+        // The clock (a run's or a goal's).
+        let clock = self
+            .model
+            .character
+            .run_clock
+            .map(|t| {
+                let t = t.max(0.0).ceil() as u32;
+                format!("{}:{:02}", t / 60, t % 60)
+            })
+            .unwrap_or_default();
+        s.set(
+            "the_time",
+            &props(vec![("text", Value::String(clock))]),
+            program,
+        );
+        // The goal on, and how far it's got, in the game's goal text.
+        let goal = match &self.model.character.goal_progress {
+            Some((name, _, got, needed)) if *needed > 0 => format!(
+                "{name}
+{got} of {needed}"
+            ),
+            Some((name, ..)) => name.clone(),
+            None => " ".to_string(),
+        };
+        s.set(
+            "current_goal",
+            &props(vec![("text", Value::String(goal))]),
+            program,
+        );
+        // The trick text: the combo going (its tricks, and its points times
+        // its multiplier), the game's own scripts animating each new
+        // trick, the landing or the bail, and fading it after.
+        let ids = vec![
+            (
+                Some(qb::checksum("the_trick_text_id")),
+                Value::Name(qb::checksum("the_trick_text")),
+            ),
+            (
+                Some(qb::checksum("the_score_pot_text_id")),
+                Value::Name(qb::checksum("the_score_pot_text")),
+            ),
+            (
+                Some(qb::checksum("trick_text_container_id")),
+                Value::Name(qb::checksum("trick_text_container")),
+            ),
+        ];
+        let names = |c: &skate::Combo| {
+            c.tricks
+                .iter()
+                .map(|t| match t.spins {
+                    0 => t.name.clone(),
+                    n => format!("{} {}", n * 180, t.name),
+                })
+                .collect::<Vec<_>>()
+                .join(" + ")
+        };
+        let tricks = skater.combo_tricks.tricks.len();
+        if tricks > 0 {
+            let combo = &skater.combo_tricks;
+            s.set(
+                "the_trick_text",
+                &props(vec![("text", Value::String(names(combo)))]),
+                program,
+            );
+            s.set(
+                "the_score_pot_text",
+                &props(vec![(
+                    "text",
+                    Value::String(format!("{} X {}", combo.points(), combo.multiplier())),
+                )]),
+                program,
+            );
+            if tricks != self.hud.tricks {
+                s.run(qb::checksum("trick_text_pulse"), ids.clone());
+            }
+            self.hud.shown = Some(0.0);
+        } else if self.hud.tricks > 0 {
+            // The combo's over: landed or bailed.
+            let bailed = skater.last_combo.as_ref().is_some_and(|l| l.bailed);
+            if let Some(last) = &skater.last_combo {
+                let pot = if bailed {
+                    "Bail!".to_string()
+                } else {
+                    last.total.to_string()
+                };
+                s.set(
+                    "the_score_pot_text",
+                    &props(vec![("text", Value::String(pot))]),
+                    program,
+                );
+            }
+            let script = if bailed {
+                "trick_text_bail"
+            } else {
+                "trick_text_landed"
+            };
+            s.run(qb::checksum(script), ids.clone());
+            self.hud.shown = Some(0.0);
+        }
+        self.hud.tricks = tricks;
+        // A while after, it fades.
+        if let Some(t) = &mut self.hud.shown {
+            *t += self.hud_dt;
+            if tricks == 0 && *t > 2.5 {
+                s.run(qb::checksum("trick_text_countdown"), ids);
+                self.hud.shown = None;
+            }
+        }
+        // A new song: its title, as a panel message at the bottom.
+        if let Some((title, at)) = &self.now_playing {
+            if self.hud.song.as_ref() != Some(at) {
+                self.hud.song = Some(*at);
+                s.run(
+                    qb::checksum("Create_Panel_Message"),
+                    vec![
+                        (
+                            Some(qb::checksum("id")),
+                            Value::Name(qb::checksum("now_playing_message")),
+                        ),
+                        (Some(qb::checksum("text")), Value::String(title.clone())),
+                        (Some(qb::checksum("pos")), Value::Pair([320.0, 380.0])),
+                        (Some(qb::checksum("rgba")), rgba([128, 128, 128, 100])),
+                        (Some(qb::checksum("time")), Value::Integer(4000)),
+                    ],
+                );
+            }
+        }
+    }
+
+    /// The controller in the game's menus: the d-pad or left stick moves,
+    /// A chooses, B goes back, Start is Start, each on being pressed.
+    fn menu_pad(&mut self) {
+        use desa_viewer::screen::Pad;
+        use gilrs::{Axis, Button};
+        // (What's held is kept track of all along, so the Start that
+        // paused isn't taken as a press in the menu it brings up.)
+        let Some(gilrs) = self.gamepads.as_mut() else {
+            return;
+        };
+        while gilrs.next_event().is_some() {}
+        let mut held = Vec::new();
+        for (_, pad) in gilrs.gamepads() {
+            let (x, y) = (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
+            let pressed = |b| pad.is_pressed(b);
+            for (on, p) in [
+                (pressed(Button::DPadUp) || y > 0.6, Pad::Up),
+                (pressed(Button::DPadDown) || y < -0.6, Pad::Down),
+                (pressed(Button::DPadLeft) || x < -0.6, Pad::Left),
+                (pressed(Button::DPadRight) || x > 0.6, Pad::Right),
+                (pressed(Button::South), Pad::Choose),
+                (pressed(Button::East), Pad::Back),
+                (pressed(Button::Start), Pad::Start),
+            ] {
+                if on && !held.contains(&p) {
+                    held.push(p);
+                }
+            }
+        }
+        let fresh: Vec<Pad> = held
+            .iter()
+            .copied()
+            .filter(|p| !self.menu_held.contains(p))
+            .collect();
+        self.menu_held = held;
+        if !self.model.character.game_menu {
+            return;
+        }
+        if let Some(screen) = &mut self.screen {
+            for p in fresh {
+                screen.screen.pad(p);
+            }
+        }
+    }
+
+    /// The game's main menu (`launch_main_menu`), in the Skate Shop as the
+    /// game has it: there now, or once the shop's loaded.
+    fn open_main_menu(&mut self) {
+        if self.skating.is_some() {
+            self.toggle_skate();
+        }
+        let Some(i) = self
+            .model
+            .levels
+            .iter()
+            .position(|l| l.id.eq_ignore_ascii_case("SkateShop"))
+        else {
+            return;
+        };
+        let here = self
+            .level
+            .as_ref()
+            .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"));
+        if here {
+            if let Some(screen) = &mut self.screen {
+                screen.screen.clear();
+                screen
+                    .screen
+                    .run(qb::checksum("launch_main_menu"), Vec::new());
+            }
+        } else {
+            self.main_menu_pending = true;
+            self.start_load(i);
+        }
+    }
+
+    /// The game's menus run on: their scripts (with the level's), sounds,
+    /// and what they ask of the viewer (`unpausegame`: resume).
+    fn update_screen(&mut self, dt: f32) {
+        self.menu_pad();
+        let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
+            return;
+        };
+        screen.screen.update(level.behaviour.program(), dt);
+        // The pause menu's bar (`SlicePause_1`) fitted round its items:
+        // the game's script scales it by a `paused_bar_scale` the disc
+        // doesn't set, and at its own size the items run to its edges.
+        if let Some(menu) = screen.screen.size_of("pause_vmenu") {
+            if let Some(bar) = screen.screen.image_size("slicepause_1") {
+                let want = menu + glam::Vec2::new(32.0, 24.0);
+                let scale = (want / bar.max(glam::Vec2::ONE)).max(glam::Vec2::ONE);
+                screen.screen.set_sprites(
+                    "SlicePause_1",
+                    &qb::Value::Struct(vec![(
+                        Some(qb::checksum("scale")),
+                        qb::Value::Pair(scale.to_array()),
+                    )]),
+                    level.behaviour.program(),
+                );
+            }
+        }
+        let sounds = std::mem::take(&mut screen.screen.sounds);
+        let requests = std::mem::take(&mut screen.screen.requests);
+        self.model.character.game_menu = screen.screen.takes_pad();
+        if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
+            for sound in sounds {
+                audio.play_named(sound, 1.0);
+            }
+        }
+        let c = qb::checksum;
+        for (name, _) in requests {
+            if name == c("unpausegame") && self.model.character.paused {
+                self.model.character.paused = false;
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                }
+            } else if name == c("preview_skater_menu") || name == c("launch_select_skater_menu") {
+                // Play Game: skating in the Hub, as the career starts.
+                // Free Skate: on the level last skated.
+                let level = if name == c("preview_skater_menu") {
+                    "HUB".to_string()
+                } else {
+                    self.settings
+                        .last_skated
+                        .clone()
+                        .unwrap_or_else(|| "HUB".into())
+                };
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                }
+                if let Some(i) = self
+                    .model
+                    .levels
+                    .iter()
+                    .position(|l| l.id.eq_ignore_ascii_case(&level))
+                {
+                    self.skate_on_load = true;
+                    self.start_load(i);
+                }
+            } else {
+                // Saving, loading and two players aren't the viewer's.
+                self.model.message = Some("That isn't in the viewer.".into());
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                    screen.screen.run(c("launch_main_menu"), Vec::new());
+                }
+            }
+        }
+    }
+
+    /// Starts over from the start: the run or goal on, again, or skating
+    /// from the level's start.
+    fn restart(&mut self) {
+        self.model.character.paused = false;
+        if let Some(index) = self.goal_run.as_ref().map(|r| r.index) {
+            self.start_goal(index);
+        } else if self.letters.is_some() {
+            self.start_letters();
+        } else if self.run.is_some() {
+            let goal = self.model.character.run_goal.as_ref().map(|(pro, ..)| *pro);
+            self.start_run(goal);
+        } else if let Some(level) = &self.level {
+            self.placement = level.home;
+            if self.skating.is_some() {
+                self.toggle_skate();
+            }
+            self.toggle_skate();
+        }
+    }
+
+    /// The replay's next camera.
+    fn next_replay_camera(&mut self) {
+        self.replay_camera = (self.replay_camera + 1) % REPLAY_CAMERAS.len();
+        self.replay_eye = None;
+        self.model.character.replay_camera = REPLAY_CAMERAS[self.replay_camera].0.to_string();
     }
 
     /// Shows the next frame of the replay, and at its end goes back to
@@ -1392,6 +4429,42 @@ impl<'a> App<'a> {
         self.skate_pose = Some(frame.pose.clone());
         self.blend_from = None;
         self.camera = frame.camera;
+        // One of the game's replay cameras: hung off the skater by its
+        // setting, behind and above, eased after it.
+        let (_, setting) = REPLAY_CAMERAS[self.replay_camera];
+        let setting = setting.and_then(|name| {
+            let program = self.level.as_ref()?.behaviour.program();
+            let camera = program.value(qb::checksum(name))?;
+            let get = |k: &str| camera.get(qb::checksum(k)).and_then(qb::Value::as_f32);
+            Some((get("behind")?, get("above")?, name))
+        });
+        if let Some((behind, above, name)) = setting {
+            let forward = frame
+                .placement
+                .transform_vector3(Vec3::Z)
+                .with_y(0.0)
+                .normalize_or(Vec3::Z);
+            let side = Vec3::Y.cross(forward);
+            let way = if name.contains("Front") {
+                forward
+            } else if name.contains("Left") {
+                side
+            } else if name.contains("Right") {
+                -side
+            } else {
+                -forward
+            };
+            let target = frame.position + Vec3::Y * 40.0;
+            let wanted = target + way * behind * 12.0 + Vec3::Y * above * 12.0;
+            let eye = match self.replay_eye {
+                Some(eye) => eye.lerp(wanted, (dt * 4.0).min(1.0)),
+                None => wanted,
+            };
+            self.replay_eye = Some(eye);
+            self.camera = FlyCamera::looking_at(eye, target);
+        } else {
+            self.replay_eye = None;
+        }
         skater.position = frame.position;
         skater.flipped = frame.flipped;
         let model = &mut self.model.character;
@@ -1408,6 +4481,17 @@ impl<'a> App<'a> {
             self.play_replay(dt);
             return;
         }
+        // Held still while a warp or goal's offered (`PauseSkaters`), a
+        // goal's camera path plays, or paused.
+        if self.warp_offer.is_some()
+            || self.goal_offer.is_some()
+            || self.cutscene
+            || self.model.character.paused
+        {
+            // (The pad's still read, for Start.)
+            let _ = self.pad_input();
+            return;
+        }
         let pad = self.pad_input();
         // The pedestrians shown are solid: the skater bumps off them.
         let objects = self.model.show_objects;
@@ -1415,7 +4499,7 @@ impl<'a> App<'a> {
         if let Some(level) = &mut self.level {
             let crowd = &level.objects.crowd;
             let goal_crowd = &level.objects.goal_crowd;
-            let obstacles = crowd
+            let mut obstacles: Vec<skate::world::Obstacle> = crowd
                 .footprints()
                 .filter(|_| objects)
                 .chain(goal_crowd.footprints().filter(|_| goal_objects))
@@ -1427,7 +4511,50 @@ impl<'a> App<'a> {
                     height: height + 24.0,
                 })
                 .collect();
+            // The vehicles going round, to skitch on.
+            let vehicles: Vec<(usize, skate::world::Vehicle)> = level
+                .nodes
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|(i, o)| {
+                    o.kind == desa_viewer::nodes::ObjectKind::Vehicle && level.behaviour.alive(*i)
+                })
+                .filter_map(|(i, _)| {
+                    let Some(Some(objects::Placed::Prop { goal, copy })) =
+                        level.objects.placed.get(i)
+                    else {
+                        return None;
+                    };
+                    let props = if *goal {
+                        &level.objects.goal_props
+                    } else {
+                        &level.objects.props
+                    };
+                    let (facing, speed) = level.behaviour.motion(i);
+                    Some((
+                        i,
+                        skate::world::Vehicle {
+                            position: level.behaviour.position(i),
+                            forward: facing.with_y(0.0).normalize_or(Vec3::Z),
+                            speed,
+                            half_length: props.half_length(*copy),
+                        },
+                    ))
+                })
+                .collect();
+            self.vehicle_objects = vehicles.iter().map(|(i, _)| *i).collect();
+            // Small vehicles (the toy cars, not the Hub's plane or Zurg's
+            // platform) are solid too: the skater bumps off them.
+            obstacles.extend(vehicles.iter().filter(|(_, v)| v.half_length < 60.0).map(
+                |(_, v)| skate::world::Obstacle {
+                    base: v.position - Vec3::Y * 24.0,
+                    radius: v.half_length * 0.8,
+                    height: 64.0,
+                },
+            ));
             if let Some(world) = &mut level.world {
+                world.vehicles = vehicles.into_iter().map(|(_, v)| v).collect();
                 world.set_obstacles(obstacles);
             }
         }
@@ -1479,8 +4606,75 @@ impl<'a> App<'a> {
             input
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
+        skater.wallride_anywhere = self.model.character.wallride_anywhere;
+        // The cheats.
+        let cheats = self.model.character.cheats;
+        skater.perfect_manual = cheats.perfect_manual;
+        skater.perfect_rail = cheats.perfect_rail;
+        skater.perfect_skitch = cheats.perfect_skitch;
+        if cheats.always_special {
+            skater.special_meter = 3000.0;
+            skater.special = true;
+        }
+        let gravity = physics.air_gravity;
+        if cheats.moon {
+            physics.air_gravity *= self.moon_gravity;
+        }
+        let dt = if cheats.slomo {
+            dt * self.slomo_speed
+        } else {
+            dt
+        };
+        let before = skater.position;
         skater.update(input, physics, world, dt);
+        physics.air_gravity = gravity;
+        // A gap landed: ticked off on the level's list, and kept.
+        if let Some((name, _)) = skater.last_gap.take() {
+            self.session.gaps += 1;
+            if let Some(entry) = self
+                .model
+                .character
+                .gap_list
+                .iter_mut()
+                .find(|g| g.0 == name)
+            {
+                if !entry.2 {
+                    entry.2 = true;
+                    self.settings
+                        .gaps
+                        .entry(level.id.clone())
+                        .or_default()
+                        .insert(name);
+                    self.settings.save();
+                }
+            }
+        }
         self.sparks.update(skater, dt);
+        // Through a teleporter: its sound and message; into the water, a
+        // splash where it went in.
+        if skater.sounds.contains(&skate::skater::SkateSound::Teleport) {
+            let effect = skater
+                .last_teleport
+                .and_then(|o| level.teleport_effects.get(&o))
+                .cloned()
+                .unwrap_or_default();
+            let water = effect.sound == Some(qb::checksum("bigsplash"));
+            if let (Some(sound), Some(audio)) = (
+                effect.sound,
+                self.audio.as_ref().filter(|_| self.model.character.sound),
+            ) {
+                audio.play_named(sound, 1.0);
+            }
+            if let Some(message) = effect.message.clone() {
+                skater.message = Some((message, 1.5));
+            }
+            self.pending_creates.extend(effect.creates.iter().cloned());
+            if water {
+                self.sparks.splash(before);
+                // The camera stays a moment to see it, then cuts to the skater.
+                self.splash_hold = Some((self.camera, SPLASH_HOLD));
+            }
+        }
         if let Some(gilrs) = self.gamepads.as_mut() {
             if self.model.character.rumble {
                 self.rumble.update(gilrs, skater);
@@ -1520,6 +4714,7 @@ impl<'a> App<'a> {
             if skater.special { ", SPECIAL" } else { "" },
         );
         self.model.character.special = (skater.special_meter / 3000.0, skater.special);
+        self.model.character.switch = skater.flipped;
         self.model.character.combo = combo_text(skater);
         // The skater's message, or for a few seconds the song that began.
         let song = self
@@ -1527,6 +4722,8 @@ impl<'a> App<'a> {
             .as_ref()
             .filter(|(_, at)| at.elapsed().as_secs_f32() < 4.0)
             .map(|(title, _)| format!("Now playing: {title}"));
+        // (The game's panel announces songs itself.)
+        let song = song.filter(|_| !self.model.character.game_hud);
         self.model.character.message = skater.message.as_ref().map(|(m, _)| m.clone()).or(song);
 
         // Animation: the one the skater picked (the game's scripts' choice),
@@ -1645,7 +4842,36 @@ impl<'a> App<'a> {
 
         // Chase camera, on the game's medium camera settings.
         chase.update(skater, physics, world, dt);
-        self.camera = FlyCamera::looking_at(chase.eye, chase.target);
+        // Looking round (our own: the game's look-around is in its code,
+        // not read yet): the right stick or J/L swings the camera round the
+        // skater and tilts it, springing back when let go; it stays out of
+        // walls the camera can't see through.
+        let keys =
+            f32::from(u8::from(held(KeyCode::KeyL))) - f32::from(u8::from(held(KeyCode::KeyJ)));
+        let wanted = glam::Vec2::new(
+            (self.pad_look.x + keys).clamp(-1.0, 1.0) * LOOK_YAW,
+            self.pad_look.y * LOOK_PITCH,
+        );
+        self.look = self.look.lerp(wanted, (dt * LOOK_RATE).min(1.0));
+        let mut eye = chase.eye;
+        if self.look.length() > 1e-3 {
+            let back = chase.eye - chase.target;
+            let turned = Quat::from_rotation_y(self.look.x) * back;
+            let side = turned.cross(Vec3::Y).normalize_or(Vec3::X);
+            eye = chase.target + Quat::from_axis_angle(side, self.look.y) * turned;
+            if let Some(hit) = world.ray_requiring(chase.target, eye, 0x80) {
+                eye = hit.point + (chase.target - hit.point).normalize_or_zero() * 8.0;
+            }
+        }
+        self.camera = FlyCamera::looking_at(eye, chase.target);
+        if let Some((camera, left)) = &mut self.splash_hold {
+            *left -= dt;
+            if *left > 0.0 {
+                self.camera = *camera;
+            } else {
+                self.splash_hold = None;
+            }
+        }
 
         // A run is recorded as it's shown, to watch again.
         if let Some(run) = self.run.as_ref().filter(|r| !r.over) {
@@ -1679,17 +4905,11 @@ impl<'a> App<'a> {
     /// Shows character `index` (in the panel's list), or none.
     fn load_character(&mut self, index: Option<usize>) {
         // A different character: stop skating the old one (its tricks and
-        // stats belong to it).
-        if self.skating.take().is_some() {
-            self.model.character.skating = false;
-            self.sparks.clear();
-            self.rumble.stop();
-            if let Some(audio) = &mut self.audio {
-                audio.stop();
-            }
-            self.model.character.playing = true;
-            self.model.character.balance = None;
-            self.model.character.combo = None;
+        // stats belong to it), and go on skating with the new one from
+        // where it was.
+        let was_skating = self.skating.is_some();
+        if was_skating {
+            self.toggle_skate();
         }
         self.character = None;
         self.skating = None;
@@ -1751,6 +4971,9 @@ impl<'a> App<'a> {
                 self.character = Some(character);
                 self.settings.last_character = Some(info.id);
                 self.settings.save();
+                if was_skating && skateable {
+                    self.toggle_skate();
+                }
             }
             Err(err) => self.model.message = Some(format!("{err:#}")),
         }
@@ -1783,7 +5006,30 @@ impl<'a> App<'a> {
                 .as_ref()
                 .map(|world| skater_shadow(skater, world))
                 .unwrap_or_default();
+            // The animals' and toy cars' shadows too, those near.
+            if let Some(world) = &level.world {
+                for o in world.obstacles() {
+                    let feet = o.base + Vec3::Y * 24.0;
+                    if feet.distance(self.camera.position) < SHADOW_RANGE {
+                        shadow.extend(blob_shadow(feet, o.radius * 0.8, world));
+                    }
+                }
+            }
             shadow.extend(self.sparks.vertices(self.camera.position));
+            // The way back to the Hub, glowing.
+            // (Our own ring where the level has no particles for it.)
+            for portal in level.portals.iter().filter(|p| {
+                p.strip.is_none()
+                    && !p.warp.particle.is_some_and(|name| {
+                        desa_viewer::particles::Particles::has_emitter(&level.nodes, name)
+                    })
+            }) {
+                shadow.extend(portal_ring(
+                    portal.warp.position,
+                    clock,
+                    self.camera.position,
+                ));
+            }
             level.renderer.set_shadow(&shadow);
             if let Some(blink) = character.blink {
                 let eyes = if model.blink {
@@ -1902,8 +5148,9 @@ impl<'a> App<'a> {
     }
 
     fn update(&mut self, dt: f32) {
-        // The keys drive the skater instead while skating.
-        if self.skating.is_some() {
+        // The keys drive the skater instead while skating (paused, they fly
+        // the camera round for pictures).
+        if self.skating.is_some() && !self.model.character.paused {
             return;
         }
         let typing = self
@@ -1949,8 +5196,29 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.skate(dt);
-        self.update_run(dt);
-        self.update_letters(dt);
+        self.update_cutscene();
+        self.say_lines();
+        // Paused (or a goal's camera path playing): the clocks stop too.
+        if !self.model.character.paused && !self.cutscene {
+            self.update_run(dt);
+            self.update_letters(dt);
+            self.update_race(dt);
+            self.update_goal_run(dt);
+            self.update_breakables();
+            self.update_bouncies(dt);
+            self.update_collecting();
+            self.update_skitch();
+            self.update_records(dt);
+            self.update_portals(dt);
+            self.update_pros();
+        }
+        self.update_map();
+        self.apply_camera();
+        if self.frame % 30 == 0 {
+            self.update_progress();
+            self.update_goals_won();
+        }
+        self.frame = self.frame.wrapping_add(1);
         self.update_music();
         self.play(dt);
         self.sync_view();
@@ -1966,6 +5234,16 @@ impl<'a> App<'a> {
                 clock,
                 dt,
             );
+            level.apply_creates();
+            level
+                .particles
+                .update(level.behaviour.program(), dt, self.camera.position);
+            let batches = particle_batches(
+                &level.particles,
+                &level.particle_textures,
+                self.camera.position,
+            );
+            level.renderer.set_particles(&batches);
             // The sounds they played, quieter further from the skater.
             let sounds = std::mem::take(&mut level.behaviour.sounds);
             if let (Some(audio), Some(skater)) = (
@@ -1990,11 +5268,27 @@ impl<'a> App<'a> {
             self.camera.pitch.to_degrees()
         );
 
+        self.update_movie();
+        self.hud_dt = dt;
+        self.update_game_hud();
+        self.update_screen(dt);
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
+        let movie = &mut self.movie;
+        let screen = &mut self.screen;
         let mut actions = Vec::new();
-        let output = gpu.egui_ctx.run(raw, |ctx| actions = ui::draw(ctx, model));
+        let output = gpu.egui_ctx.run(raw, |ctx| {
+            actions = ui::draw(ctx, model);
+            if let Some(screen) = screen {
+                screen.paint(ctx);
+            }
+            if let Some(playing) = movie {
+                if playing.draw(ctx) {
+                    actions.push(ui::Action::SkipMovie);
+                }
+            }
+        });
         gpu.egui_state
             .handle_platform_output(&gpu.window, output.platform_output.clone());
 
@@ -2012,6 +5306,54 @@ impl<'a> App<'a> {
         let view = frame.texture.create_view(&Default::default());
         let (w, h) = (gpu.config.width, gpu.config.height);
         let time = self.started.elapsed().as_secs_f32();
+        // A picture of the frame, as shown, into the Pictures folder.
+        if std::mem::take(&mut self.photo) {
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("photo"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: gpu.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            paint(
+                &gpu.device,
+                &gpu.queue,
+                &mut gpu.egui_renderer,
+                &gpu.egui_ctx,
+                self.level.as_mut().map(|l| &mut l.renderer),
+                &self.camera,
+                time,
+                &target.create_view(&Default::default()),
+                (w, h),
+                // Paused (photo mode): the picture without the panel and HUD.
+                if self.model.character.paused {
+                    egui::FullOutput::default()
+                } else {
+                    output.clone()
+                },
+            );
+            let path = photo_path();
+            self.model.message = Some(
+                match path
+                    .parent()
+                    .map(std::fs::create_dir_all)
+                    .transpose()
+                    .and_then(|_| {
+                        renderer::save_png(&gpu.device, &gpu.queue, &target, w, h, &path)
+                            .map_err(std::io::Error::other)
+                    }) {
+                    Ok(_) => format!("Saved {}", path.display()),
+                    Err(e) => format!("Couldn't save a picture: {e}"),
+                },
+            );
+        }
         paint(
             &gpu.device,
             &gpu.queue,
@@ -2034,6 +5376,27 @@ impl<'a> App<'a> {
                 ui::Action::GoToSpawn(i) => self.go_to_spawn(i),
                 ui::Action::PlayCameraPath(i) => self.play_camera_path(i),
                 ui::Action::StopCameraPath => self.stop_camera_path(),
+                ui::Action::PlayMovie(i) => {
+                    if let Some(name) = self.model.movies.get(i).cloned() {
+                        self.stop_movie();
+                        self.movie_queue.clear();
+                        self.movie_queue.push_back(name);
+                    }
+                }
+                ui::Action::SkipMovie => self.stop_movie(),
+                ui::Action::MainMenu => self.open_main_menu(),
+                ui::Action::SetStartMenu(on) => {
+                    self.model.start_menu = on;
+                    self.settings
+                        .best
+                        .insert("start_menu".into(), u32::from(on));
+                    self.settings.save();
+                }
+                ui::Action::SetIntro(on) => {
+                    self.model.intro = on;
+                    self.settings.best.insert("intro".into(), u32::from(on));
+                    self.settings.save();
+                }
                 ui::Action::ResetCamera => {
                     self.stop_camera_path();
                     if let Some(level) = &self.level {
@@ -2045,6 +5408,14 @@ impl<'a> App<'a> {
                 ui::Action::ToggleSkate => self.toggle_skate(),
                 ui::Action::StartRun(goal) => self.start_run(goal),
                 ui::Action::StartLetters => self.start_letters(),
+                ui::Action::StartRace => self.start_race(),
+                ui::Action::StartGoal(i) => self.start_goal(i),
+                ui::Action::Warp => self.take_warp(),
+                ui::Action::Pause => self.toggle_pause(),
+                ui::Action::Restart => self.restart(),
+                ui::Action::StayHere => self.stay_here(),
+                ui::Action::TakeGoal => self.take_goal(),
+                ui::Action::NotNow => self.not_now(),
                 ui::Action::Replay => {
                     if !self.recording.is_empty() {
                         self.replay = Some(0.0);
@@ -2055,6 +5426,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ui::Action::StopReplay => self.replay = Some(f32::INFINITY),
+                ui::Action::ReplayCamera => self.next_replay_camera(),
             }
         }
         // Load after the "Loading" message has been on screen for a frame.
@@ -2085,6 +5457,88 @@ impl<'a> App<'a> {
     }
 
     fn key_pressed(&mut self, code: KeyCode, repeat: bool) {
+        if code == KeyCode::F12 && !repeat {
+            self.photo = true;
+            return;
+        }
+        // A movie playing: Esc skips them all, any other key this one.
+        if self.movie.is_some() {
+            if !repeat {
+                if code == KeyCode::Escape {
+                    self.movie_queue.clear();
+                }
+                self.stop_movie();
+            }
+            return;
+        }
+        // The game's menu up: the keys are its pad.
+        if self.model.character.game_menu {
+            if let Some(screen) = &mut self.screen {
+                use desa_viewer::screen::Pad;
+                let pad = match code {
+                    KeyCode::ArrowUp | KeyCode::KeyW => Some(Pad::Up),
+                    KeyCode::ArrowDown | KeyCode::KeyS => Some(Pad::Down),
+                    KeyCode::ArrowLeft | KeyCode::KeyA => Some(Pad::Left),
+                    KeyCode::ArrowRight | KeyCode::KeyD => Some(Pad::Right),
+                    KeyCode::Enter | KeyCode::Space => Some(Pad::Choose),
+                    KeyCode::Escape | KeyCode::Backspace => Some(Pad::Back),
+                    KeyCode::KeyP => Some(Pad::Start),
+                    _ => None,
+                };
+                if let Some(pad) = pad {
+                    screen.screen.pad(pad);
+                }
+            }
+            return;
+        }
+        // Paused: P resumes, Esc stops skating.
+        if self.model.character.paused {
+            match code {
+                KeyCode::KeyP if !repeat => self.toggle_pause(),
+                KeyCode::Escape if !repeat => self.toggle_skate(),
+                _ => {}
+            }
+            return;
+        }
+        if code == KeyCode::KeyM && !repeat && self.skating.is_some() {
+            self.model.character.show_map = !self.model.character.show_map;
+            return;
+        }
+        if code == KeyCode::KeyC && !repeat && self.replay.is_some() {
+            self.next_replay_camera();
+            return;
+        }
+        if code == KeyCode::KeyC && !repeat && self.skating.is_some() {
+            self.next_camera();
+            return;
+        }
+        if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
+            self.toggle_pause();
+            return;
+        }
+        // A goal's camera path: any key skips it.
+        if self.cutscene && !repeat {
+            self.stop_camera_path();
+            return;
+        }
+        // At a goal's pro: Enter starts it, Esc not now.
+        if self.goal_offer.is_some() {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter if !repeat => self.take_goal(),
+                KeyCode::Escape if !repeat => self.not_now(),
+                _ => {}
+            }
+            return;
+        }
+        // At a warp: Enter goes through, Esc stays.
+        if self.warp_offer.is_some() {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter if !repeat => self.take_warp(),
+                KeyCode::Escape if !repeat => self.stay_here(),
+                _ => {}
+            }
+            return;
+        }
         match code {
             KeyCode::Escape => {
                 self.set_looking(false);
@@ -2370,6 +5824,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
 
     if let Some(id) = &args.character {
         app.model.character.characters = data.characters();
+        if args.skate > 0.0 {
+            app.screen = ScreenUi::load(&mut data);
+        }
         app.data = Some(data);
         let i = app
             .character_index(id)
@@ -2395,6 +5852,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         };
         app.placement = Mat4::from_translation(Vec3::Y * args.lift) * app.placement;
         camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
+        app.model.character.map_image = loaded
+            .minimap
+            .as_ref()
+            .map(|m| egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels));
         app.level = Some(loaded);
         if args.skate > 0.0 {
             if let Some(from) = &args.skate_from {
@@ -2406,6 +5867,22 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 anyhow::ensure!(v.len() == 4, "--skate-from is x,y,z,heading");
                 app.placement = Mat4::from_translation(Vec3::new(v[0], v[1], v[2]))
                     * Mat4::from_rotation_y(v[3].to_radians());
+            }
+            for cheat in &args.cheat {
+                let c = &mut app.model.character.cheats;
+                match cheat.as_str() {
+                    "perfect_manual" => c.perfect_manual = true,
+                    "perfect_rail" => c.perfect_rail = true,
+                    "perfect_skitch" => c.perfect_skitch = true,
+                    "always_special" => c.always_special = true,
+                    "moon" => c.moon = true,
+                    "slomo" => c.slomo = true,
+                    "stats_13" => c.stats_13 = true,
+                    other => anyhow::bail!("no cheat called {other}"),
+                }
+            }
+            if let Some(camera) = args.chase_camera {
+                app.model.character.camera = camera;
             }
             if args.letters {
                 let from = app.placement.transform_point3(Vec3::ZERO);
@@ -2422,6 +5899,52 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         let p = level.behaviour.position(o);
                         println!("letter {letter} at {:.0} {:.0} {:.0}", p.x, p.y, p.z);
                     }
+                }
+            } else if args.race {
+                app.start_race();
+            } else if let Some(kind) = &args.goal {
+                // (Loaded straight here: the goal list too.)
+                let level = app.level.as_ref().unwrap();
+                app.model.character.goals =
+                    desa_viewer::goals::level_goals(level.behaviour.program(), &level.id)
+                        .into_iter()
+                        .map(|g| (g.kind, g.text))
+                        .collect();
+                let index = app
+                    .model
+                    .character
+                    .goals
+                    .iter()
+                    .position(|(k, _)| k.eq_ignore_ascii_case(kind))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no goal of type {kind} here (the goals: {:?})",
+                            app.model
+                                .character
+                                .goals
+                                .iter()
+                                .map(|(k, _)| k)
+                                .collect::<Vec<_>>()
+                        )
+                    })?;
+                let from = app.placement.transform_point3(Vec3::ZERO);
+                app.start_goal(index);
+                // From --skate-from, if given, rather than the goal's start.
+                if let (Some(_), Some((skater, ..))) = (&args.skate_from, &mut app.skating) {
+                    skater.position = from;
+                    skater.on_ground = false;
+                }
+                // Where the things it counts are (those with a script).
+                for b in &app.level.as_ref().unwrap().bouncies {
+                    if b.spec.collide_script.is_some() {
+                        let c = b.centre;
+                        println!("bouncy at {:.0} {:.0} {:.0}", c.x, c.y, c.z);
+                    }
+                }
+                if let Some((skater, ..)) = &mut app.skating {
+                    skater
+                        .gap_scripts
+                        .extend(args.goal_script.iter().map(|s| qb::checksum(s)));
                 }
             } else if let Some(goal) = &args.score_goal {
                 app.start_run(Some(goal == "pro"));
@@ -2466,17 +5989,69 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.skate(1.0 / 60.0);
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
+                app.update_race(1.0 / 60.0);
+                app.update_goal_run(1.0 / 60.0);
+                app.hud_dt = 1.0 / 60.0;
+                app.update_game_hud();
+                app.update_screen(1.0 / 60.0);
+                app.update_breakables();
+                app.update_bouncies(1.0 / 60.0);
+                app.update_pros();
+                app.update_cutscene();
+                app.play(1.0 / 60.0);
+                app.update_collecting();
+                app.update_skitch();
+                app.update_records(1.0 / 60.0);
+                app.update_portals(1.0 / 60.0);
+                app.update_map();
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
                 if let Some(level) = &mut app.level {
                     level.behaviour.set_skater(skater);
                     level.update_objects(true, args.goal_objects, args.time + now, 1.0 / 60.0);
+                    level.apply_creates();
                     level.behaviour.sounds.clear();
+                }
+            }
+            // The game's pause menu brought up, and the pad's presses
+            // given to it (--pause-keys: up, down, choose, back).
+            if args.pause || !args.pause_keys.is_empty() {
+                if args.pause {
+                    app.toggle_pause();
+                }
+                for _ in 0..30 {
+                    app.update_screen(1.0 / 60.0);
+                }
+                for key in args.pause_keys.chars() {
+                    use desa_viewer::screen::Pad;
+                    let pad = match key {
+                        'u' => Pad::Up,
+                        'd' => Pad::Down,
+                        'c' => Pad::Choose,
+                        'b' => Pad::Back,
+                        _ => continue,
+                    };
+                    if let Some(screen) = &mut app.screen {
+                        screen.screen.pad(pad);
+                    }
+                    for _ in 0..20 {
+                        app.update_screen(1.0 / 60.0);
+                    }
+                }
+            }
+            // (DESA_SCREEN_DUMP: the game's screen elements, for a look.)
+            if std::env::var_os("DESA_SCREEN_DUMP").is_some() {
+                if let Some(screen) = &app.screen {
+                    eprintln!("{}", screen.screen.describe());
+                    eprintln!("unknown {:x?}", screen.screen.unknown);
                 }
             }
             if let Some(at) = args.replay_at {
                 app.replay = Some(0.0);
                 app.model.character.replaying = true;
+                for _ in 0..args.replay_camera.unwrap_or(0) % REPLAY_CAMERAS.len() {
+                    app.next_replay_camera();
+                }
                 app.play_replay(at);
             }
             camera = app.camera;
@@ -2507,6 +6082,29 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         app.animate(0.0, args.time);
         loaded = app.level.take().unwrap();
     }
+    // The level's particle effects, run for the time asked (two seconds at
+    // least) and seen from the camera, with the skater's shadow and sparks.
+    {
+        let LoadedLevel {
+            behaviour,
+            particles,
+            particle_textures,
+            world,
+            renderer,
+            ..
+        } = &mut loaded;
+        for _ in 0..(args.time.max(2.0) * 60.0) as usize {
+            particles.update(behaviour.program(), 1.0 / 60.0, camera.position);
+        }
+        let batches = particle_batches(particles, particle_textures, camera.position);
+        renderer.set_particles(&batches);
+        let mut overlay = Vec::new();
+        if let (Some((skater, ..)), Some(world)) = (&app.skating, world.as_ref()) {
+            overlay.extend(skater_shadow(skater, world));
+            overlay.extend(app.sparks.vertices(camera.position));
+        }
+        renderer.set_shadow(&overlay);
+    }
 
     let (width, height) = args.size;
     let egui_ctx = egui::Context::default();
@@ -2527,10 +6125,16 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         if !clean {
             ui::draw(ctx, &mut app.model);
         }
+        if let Some(screen) = &mut app.screen {
+            screen.paint(ctx);
+        }
     });
     let mut output = egui_ctx.run(input(), |ctx| {
         if !clean {
             ui::draw(ctx, &mut app.model);
+        }
+        if let Some(screen) = &mut app.screen {
+            screen.paint(ctx);
         }
     });
     let mut textures = first.textures_delta;
@@ -2657,6 +6261,8 @@ fn parse_skate_keys(spec: &str) -> Result<Vec<(f32, KeyCode, bool)>> {
                 "Q" => KeyCode::KeyQ,
                 "F" => KeyCode::KeyF,
                 "R" => KeyCode::KeyR,
+                "J" => KeyCode::KeyJ,
+                "L" => KeyCode::KeyL,
                 "SPACE" => KeyCode::Space,
                 other => anyhow::bail!("unknown key {other:?}"),
             };
