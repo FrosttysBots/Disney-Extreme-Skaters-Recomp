@@ -133,8 +133,11 @@ pub struct CharacterModel {
     /// got and needed; and how it ended (won?).
     pub goal_progress: Option<(String, String, usize, usize)>,
     pub goal_result: Option<(String, bool)>,
-    /// The game's own menu (its screen elements) is up, taking the keys.
+    /// The game's own menu (its screen elements) is up, taking the keys;
+    /// and its own panel (score, trick text, special bar, balance meter,
+    /// clock) is, in place of these.
     pub game_menu: bool,
+    pub game_hud: bool,
     /// The level has S-K-A-T-E letters; while collecting them, which are
     /// got; once it's over, whether they all were, in how long, and the
     /// best time before.
@@ -652,11 +655,15 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                 });
             });
     }
-    if let Some(meter) = model.character.balance {
+    // (The game's own panel, when it's up, has these.)
+    let game_hud = model.character.game_hud;
+    if let (Some(meter), false) = (model.character.balance, game_hud) {
         balance_meter(ctx, meter);
     }
     if model.character.skating {
-        trick_text(ctx, model.character.score, model.character.combo.as_deref());
+        if !game_hud {
+            trick_text(ctx, model.character.score, model.character.combo.as_deref());
+        }
         if let Some(message) = &model.character.message {
             egui::Area::new(egui::Id::new("message"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
@@ -671,7 +678,9 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     );
                 });
         }
-        special_meter(ctx, model.character.special);
+        if !game_hud {
+            special_meter(ctx, model.character.special);
+        }
         if let (true, Some(texture), Some(view)) = (
             model.character.show_map,
             &model.character.map_texture,
@@ -721,7 +730,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     );
                 });
         }
-        if let Some(left) = model.character.run_clock {
+        if let (Some(left), false) = (model.character.run_clock, game_hud) {
             run_clock(ctx, left);
         }
         if let Some((_, _, score)) = &model.character.run_goal {

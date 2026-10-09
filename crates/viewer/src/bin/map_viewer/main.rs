@@ -1031,6 +1031,17 @@ struct MoverState {
     last: (bool, Vec3, Quat),
 }
 
+/// The game's panel while skating (see `App::update_game_hud`): whether
+/// it's up, the tricks in the combo last frame, how long the trick text's
+/// been showing, and the song last announced.
+#[derive(Default)]
+struct GameHud {
+    up: bool,
+    tricks: usize,
+    shown: Option<f32>,
+    song: Option<Instant>,
+}
+
 /// A movie playing (through ffmpeg: see `desa_viewer::movie`), since
 /// when, and the texture its frames go to.
 struct MoviePlaying {
@@ -1620,6 +1631,9 @@ struct App<'a> {
     main_menu_pending: bool,
     /// The controller's menu presses held last frame.
     menu_held: Vec<desa_viewer::screen::Pad>,
+    /// The game's own panel while skating, and the frame's time for it.
+    hud: GameHud,
+    hud_dt: f32,
     /// The movie playing, and those to play after it (by name).
     movie: Option<MoviePlaying>,
     movie_queue: std::collections::VecDeque<String>,
@@ -1739,6 +1753,7 @@ impl<'a> App<'a> {
                     goal_progress: None,
                     goal_result: None,
                     game_menu: false,
+                    game_hud: false,
                     can_letters: false,
                     race_name: None,
                     race: None,
@@ -1788,6 +1803,8 @@ impl<'a> App<'a> {
             screen: None,
             main_menu_pending: false,
             menu_held: Vec::new(),
+            hud: GameHud::default(),
+            hud_dt: 0.0,
             moon_gravity: 0.5,
             slomo_speed: 0.5,
             goal_streams: None,
@@ -3885,15 +3902,268 @@ impl<'a> App<'a> {
         if self.skating.is_some() && self.replay.is_none() {
             self.model.character.paused = !self.model.character.paused;
             // The game's own pause menu (`create_pause_menu`), if it can
-            // be made; taken away again on resuming.
+            // be made; taken away again on resuming (the panel stays).
             let paused = self.model.character.paused;
             if let Some(screen) = &mut self.screen {
-                screen.screen.clear();
+                screen.screen.destroy_id("pause_menu");
                 if paused && self.level.is_some() {
                     screen
                         .screen
                         .run(qb::checksum("create_pause_menu"), Vec::new());
                 }
+            }
+        }
+    }
+
+    /// The game's own panel while skating (`create_gamemode_panel`: the
+    /// score, special bar, trick text, clock and balance meter), kept up
+    /// to date as the game's code does; or, not skating, none.
+    fn update_game_hud(&mut self) {
+        use qb::Value;
+        let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
+            return;
+        };
+        let program = level.behaviour.program();
+        let s = &mut screen.screen;
+        let Some((skater, ..)) = &self.skating else {
+            if self.hud.up {
+                self.hud = GameHud::default();
+                s.destroy_id("player1_panel_container");
+                s.destroy_id("the_time");
+                s.destroy_id("current_goal");
+                s.destroy_id("goal_points_text");
+                s.destroy_id("minigame_timer");
+            }
+            self.model.character.game_hud = false;
+            return;
+        };
+        if !self.hud.up {
+            self.hud = GameHud {
+                up: true,
+                ..GameHud::default()
+            };
+            s.run(qb::checksum("create_gamemode_panel"), Vec::new());
+            return;
+        }
+        if !s.exists("the_score") {
+            return;
+        }
+        self.model.character.game_hud = true;
+        let props = |items: Vec<(&str, Value)>| {
+            Value::Struct(
+                items
+                    .into_iter()
+                    .map(|(k, v)| (Some(qb::checksum(k)), v))
+                    .collect(),
+            )
+        };
+        let rgba = |c: [i32; 4]| Value::Array(c.map(Value::Integer).to_vec());
+        // The score.
+        s.set(
+            "the_score",
+            &props(vec![("text", Value::String(skater.score.to_string()))]),
+            program,
+        );
+        // The special bar: filling the SPECIAL frame, blue, then yellow
+        // with the special on (`special_bar_colors`).
+        if let (Some(bar), Some(frame)) = (s.image_size("specialbar"), s.image_size("special")) {
+            let full = ((frame.x * 1.73 - 3.0) / bar.x.max(1.0)).max(0.0);
+            let fill = (skater.special_meter / 3000.0).clamp(0.0, 1.0);
+            let colour = if skater.special {
+                [128, 128, 64, 110]
+            } else {
+                [64, 64, 128, 110]
+            };
+            s.set(
+                "the_special_bar_sprite",
+                &props(vec![
+                    ("scale", Value::Pair([full * fill, 1.1])),
+                    ("rgba", rgba(colour)),
+                ]),
+                program,
+            );
+        }
+        // The balance meter: over the skater grinding, beside it in a
+        // manual (`balance_meter_info`'s bar positions), its arrow along
+        // the arc of `arrow_positions` by the lean.
+        match skater.balance_meter() {
+            Some(lean) => {
+                let grinding = skater.grind.is_some() || skater.lip.is_some();
+                let bar = if grinding {
+                    [320.0, 165.0]
+                } else {
+                    [250.0, 224.0]
+                };
+                let arc = [
+                    [0.0, -17.0],
+                    [10.0, -17.0],
+                    [20.0, -15.0],
+                    [30.0, -11.0],
+                    [40.0, -6.0],
+                    [50.0, 1.0],
+                    [60.0, 12.0],
+                ];
+                let k = (lean.abs() * 6.0).round() as usize;
+                let [x, y] = arc[k.min(6)];
+                let x = if lean < 0.0 { -x } else { x };
+                s.set(
+                    "the_balance_meter",
+                    &props(vec![
+                        ("pos", Value::Pair(bar)),
+                        ("rgba", rgba([95, 95, 95, 106])),
+                    ]),
+                    program,
+                );
+                s.set(
+                    "the_balance_meter",
+                    &props(vec![(
+                        "tags",
+                        props(vec![("tag_turned_on", Value::Integer(1))]),
+                    )]),
+                    program,
+                );
+                // Its arrow, the meter's first child.
+                let arrow = Value::Struct(vec![
+                    (None, Value::Name(qb::checksum("the_balance_meter"))),
+                    (Some(qb::checksum("child")), Value::Integer(0)),
+                ]);
+                s.set_resolved(
+                    &arrow,
+                    &props(vec![
+                        ("pos", Value::Pair([x + 32.0, y + 16.0])),
+                        ("rgba", rgba([128, 128, 128, 100])),
+                    ]),
+                    program,
+                );
+            }
+            None => {
+                s.set(
+                    "the_balance_meter",
+                    &props(vec![("rgba", rgba([128, 128, 128, 0]))]),
+                    program,
+                );
+                let arrow = Value::Struct(vec![
+                    (None, Value::Name(qb::checksum("the_balance_meter"))),
+                    (Some(qb::checksum("child")), Value::Integer(0)),
+                ]);
+                s.set_resolved(
+                    &arrow,
+                    &props(vec![("rgba", rgba([128, 128, 128, 0]))]),
+                    program,
+                );
+            }
+        }
+        // The clock (a run's or a goal's).
+        let clock = self
+            .model
+            .character
+            .run_clock
+            .map(|t| {
+                let t = t.max(0.0).ceil() as u32;
+                format!("{}:{:02}", t / 60, t % 60)
+            })
+            .unwrap_or_default();
+        s.set(
+            "the_time",
+            &props(vec![("text", Value::String(clock))]),
+            program,
+        );
+        // The trick text: the combo going (its tricks, and its points times
+        // its multiplier), the game's own scripts animating each new
+        // trick, the landing or the bail, and fading it after.
+        let ids = vec![
+            (
+                Some(qb::checksum("the_trick_text_id")),
+                Value::Name(qb::checksum("the_trick_text")),
+            ),
+            (
+                Some(qb::checksum("the_score_pot_text_id")),
+                Value::Name(qb::checksum("the_score_pot_text")),
+            ),
+            (
+                Some(qb::checksum("trick_text_container_id")),
+                Value::Name(qb::checksum("trick_text_container")),
+            ),
+        ];
+        let names = |c: &skate::Combo| {
+            c.tricks
+                .iter()
+                .map(|t| match t.spins {
+                    0 => t.name.clone(),
+                    n => format!("{} {}", n * 180, t.name),
+                })
+                .collect::<Vec<_>>()
+                .join(" + ")
+        };
+        let tricks = skater.combo_tricks.tricks.len();
+        if tricks > 0 {
+            let combo = &skater.combo_tricks;
+            s.set(
+                "the_trick_text",
+                &props(vec![("text", Value::String(names(combo)))]),
+                program,
+            );
+            s.set(
+                "the_score_pot_text",
+                &props(vec![(
+                    "text",
+                    Value::String(format!("{} X {}", combo.points(), combo.multiplier())),
+                )]),
+                program,
+            );
+            if tricks != self.hud.tricks {
+                s.run(qb::checksum("trick_text_pulse"), ids.clone());
+            }
+            self.hud.shown = Some(0.0);
+        } else if self.hud.tricks > 0 {
+            // The combo's over: landed or bailed.
+            let bailed = skater.last_combo.as_ref().is_some_and(|l| l.bailed);
+            if let Some(last) = &skater.last_combo {
+                let pot = if bailed {
+                    "Bail!".to_string()
+                } else {
+                    last.total.to_string()
+                };
+                s.set(
+                    "the_score_pot_text",
+                    &props(vec![("text", Value::String(pot))]),
+                    program,
+                );
+            }
+            let script = if bailed {
+                "trick_text_bail"
+            } else {
+                "trick_text_landed"
+            };
+            s.run(qb::checksum(script), ids.clone());
+            self.hud.shown = Some(0.0);
+        }
+        self.hud.tricks = tricks;
+        // A while after, it fades.
+        if let Some(t) = &mut self.hud.shown {
+            *t += self.hud_dt;
+            if tricks == 0 && *t > 2.5 {
+                s.run(qb::checksum("trick_text_countdown"), ids);
+                self.hud.shown = None;
+            }
+        }
+        // A new song: its title, as a panel message at the bottom.
+        if let Some((title, at)) = &self.now_playing {
+            if self.hud.song.as_ref() != Some(at) {
+                self.hud.song = Some(*at);
+                s.run(
+                    qb::checksum("Create_Panel_Message"),
+                    vec![
+                        (
+                            Some(qb::checksum("id")),
+                            Value::Name(qb::checksum("now_playing_message")),
+                        ),
+                        (Some(qb::checksum("text")), Value::String(title.clone())),
+                        (Some(qb::checksum("pos")), Value::Pair([320.0, 380.0])),
+                        (Some(qb::checksum("rgba")), rgba([128, 128, 128, 100])),
+                        (Some(qb::checksum("time")), Value::Integer(4000)),
+                    ],
+                );
             }
         }
     }
@@ -4370,6 +4640,8 @@ impl<'a> App<'a> {
             .as_ref()
             .filter(|(_, at)| at.elapsed().as_secs_f32() < 4.0)
             .map(|(title, _)| format!("Now playing: {title}"));
+        // (The game's panel announces songs itself.)
+        let song = song.filter(|_| !self.model.character.game_hud);
         self.model.character.message = skater.message.as_ref().map(|(m, _)| m.clone()).or(song);
 
         // Animation: the one the skater picked (the game's scripts' choice),
@@ -4915,6 +5187,8 @@ impl<'a> App<'a> {
         );
 
         self.update_movie();
+        self.hud_dt = dt;
+        self.update_game_hud();
         self.update_screen(dt);
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
@@ -5468,7 +5742,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
 
     if let Some(id) = &args.character {
         app.model.character.characters = data.characters();
-        if args.pause {
+        if args.skate > 0.0 {
             app.screen = ScreenUi::load(&mut data);
         }
         app.data = Some(data);
@@ -5635,6 +5909,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_letters(1.0 / 60.0);
                 app.update_race(1.0 / 60.0);
                 app.update_goal_run(1.0 / 60.0);
+                app.hud_dt = 1.0 / 60.0;
+                app.update_game_hud();
+                app.update_screen(1.0 / 60.0);
                 app.update_breakables();
                 app.update_bouncies(1.0 / 60.0);
                 app.update_pros();
@@ -5676,6 +5953,12 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     for _ in 0..20 {
                         app.update_screen(1.0 / 60.0);
                     }
+                }
+            }
+            // (DESA_SCREEN_DUMP: the game's screen elements, for a look.)
+            if std::env::var_os("DESA_SCREEN_DUMP").is_some() {
+                if let Some(screen) = &app.screen {
+                    eprintln!("{}", screen.screen.describe());
                 }
             }
             if let Some(at) = args.replay_at {

@@ -92,6 +92,8 @@ struct Element {
     padding: f32,
     /// A menu's gap between its children.
     spacing: f32,
+    /// Text's own size within the element (`internal_scale`).
+    internal_scale: f32,
     /// (event, script, params).
     handlers: Vec<(u32, u32, Params)>,
     tags: Params,
@@ -127,6 +129,7 @@ impl Element {
             wrap: true,
             padding: 1.0,
             spacing: 0.0,
+            internal_scale: 1.0,
             handlers: Vec::new(),
             tags: vec![(Some(checksum("id")), Value::Name(id))],
         }
@@ -208,6 +211,9 @@ pub struct Screen {
     pub unknown: HashMap<u32, usize>,
     /// The level on, as `LevelIs` asks (`load_skateshop`).
     pub level: Option<u32>,
+    /// Scripts to stop once the frame's have run: an element's (of one
+    /// name, if named).
+    stopping: Vec<(usize, Option<u32>)>,
 }
 
 const ROOT: usize = 0;
@@ -240,6 +246,7 @@ impl Screen {
             listening: Vec::new(),
             unknown: HashMap::new(),
             level: None,
+            stopping: Vec::new(),
         }
     }
 
@@ -274,6 +281,42 @@ impl Screen {
         if let Some(root) = self.el_mut(ROOT) {
             root.handlers.clear();
         }
+    }
+
+    /// Sets an element's properties (as `SetScreenElementProps`), by id
+    /// or alias; false if it isn't there.
+    pub fn set(&mut self, id: &str, props: &Value, program: &Program) -> bool {
+        match self.find(checksum(id)) {
+            Some(i) => {
+                self.apply(i, props, program);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sets the properties of an element named as scripts name them
+    /// (`{ the_balance_meter child = 0 }`).
+    pub fn set_resolved(&mut self, id: &Value, props: &Value, program: &Program) -> bool {
+        match self.resolve(id) {
+            Some(i) => {
+                self.apply(i, props, program);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Takes an element (and what's in it) away, by id or alias.
+    pub fn destroy_id(&mut self, id: &str) {
+        if let Some(i) = self.find(checksum(id)) {
+            self.destroy(i);
+        }
+    }
+
+    /// A sprite's size, by name.
+    pub fn image_size(&self, name: &str) -> Option<Vec2> {
+        self.images.get(&checksum(name)).copied()
     }
 
     /// Whether anything's on the screen.
@@ -330,6 +373,10 @@ impl Screen {
             }
         }
         running.retain(|r| !r.thread.is_finished());
+        for (i, only) in std::mem::take(&mut self.stopping) {
+            running
+                .retain(|r| r.element != i || only.is_some_and(|n| r.thread.script() != Some(n)));
+        }
         running.append(&mut self.running);
         self.running = running;
     }
@@ -469,7 +516,9 @@ impl Screen {
                         } else {
                             format!("{line} {word}")
                         };
-                        if self.text_width(font, &tried) > dims.x && !line.is_empty() {
+                        if self.text_width(font, &tried) * e.internal_scale > dims.x
+                            && !line.is_empty()
+                        {
                             lines.push(std::mem::take(&mut line));
                             line = word.to_string();
                         } else {
@@ -504,7 +553,11 @@ impl Screen {
                     .iter()
                     .map(|l| self.text_width(font, l))
                     .fold(0.0, f32::max);
-                let tall = font.line_height as f32 * lines.len().max(1) as f32;
+                let k = e.internal_scale;
+                let (wide, tall) = (
+                    wide * k,
+                    font.line_height as f32 * lines.len().max(1) as f32 * k,
+                );
                 match (e.kind, e.dims) {
                     (Kind::TextBlock, Some(d)) => Vec2::new(d.x, d.y.max(tall)),
                     _ => Vec2::new(wide, tall),
@@ -631,6 +684,8 @@ impl Screen {
             }
             Kind::Text | Kind::TextBlock => {
                 if let Some(font) = self.font_of(i) {
+                    // The letters at their own size within it.
+                    let scale = scale * e.internal_scale;
                     let font_name = self.font_name(i);
                     let lines = self.lines(i);
                     for (row, line) in lines.iter().enumerate() {
@@ -766,7 +821,16 @@ impl Screen {
     /// `SetScreenElementProps`), the colours and places as they are now if
     /// `morph` (to move to over `time`).
     fn apply(&mut self, i: usize, props: &Value, program: &Program) {
-        let Value::Struct(items) = props else { return };
+        let later = self.apply_props(i, props, program);
+        self.place_after(i, later);
+    }
+
+    /// [`Screen::apply`]'s work, a proportional or relative place left for
+    /// when the rest's in.
+    fn apply_props(&mut self, i: usize, props: &Value, program: &Program) -> Option<Place> {
+        let Value::Struct(items) = props else {
+            return None;
+        };
         // A new `just` alone re-anchors it where it is (`menu_onscreen`'s
         // `SetProps just = [center center]` doesn't move the menu): its
         // top left stays.
@@ -784,11 +848,10 @@ impl Screen {
                 e.just = new;
             }
         }
-        let Some(e) = self.elements.get_mut(i).and_then(Option::as_mut) else {
-            return;
-        };
+        let e = self.elements.get_mut(i).and_then(Option::as_mut)?;
         let replace = props.has_flag(checksum("replace_handlers"));
         let mut handlers_set = false;
+        let mut pos_later = None;
         for (k, v) in items {
             match (*k, v) {
                 (None, Value::Name(f)) => {
@@ -811,6 +874,8 @@ impl Screen {
                     if k == checksum("pos") {
                         if let Some(p) = vec2(v) {
                             e.look.pos = p;
+                        } else if let Some(place) = place(v) {
+                            pos_later = Some(place);
                         }
                     } else if k == checksum("scale") {
                         if let Some(s) = scale(v) {
@@ -846,6 +911,8 @@ impl Screen {
                         e.focusable_child = v.as_name();
                     } else if k == checksum("padding_scale") {
                         e.padding = v.as_f32().unwrap_or(1.0);
+                    } else if k == checksum("internal_scale") {
+                        e.internal_scale = v.as_f32().unwrap_or(1.0);
                     } else if k == checksum("spacing_between") {
                         e.spacing = v.as_f32().unwrap_or(0.0);
                     } else if k == checksum("tags") {
@@ -874,6 +941,32 @@ impl Screen {
                 _ => {}
             }
         }
+        pos_later
+    }
+
+    /// The proportional or relative place `apply` met, now it's sized.
+    fn place_after(&mut self, i: usize, place: Option<Place>) {
+        if let Some(place) = place {
+            let p = self.resolve_place(i, place);
+            if let Some(e) = self.el_mut(i) {
+                e.look.pos = p;
+            }
+        }
+    }
+
+    /// Where a place puts element `i`, in its parent's units.
+    fn resolve_place(&self, i: usize, place: Place) -> Vec2 {
+        match place {
+            Place::At(p) => p,
+            Place::Share(f) => {
+                let parent = self
+                    .el(i)
+                    .and_then(|e| e.parent)
+                    .map_or(Vec2::ZERO, |p| self.size(p));
+                f * parent
+            }
+            Place::By(d) => self.el(i).map_or(d, |e| e.look.pos + d),
+        }
     }
 
     /// Moves to `props` (pos, scale, rgba, alpha) over `time` seconds.
@@ -882,10 +975,27 @@ impl Screen {
             .get(checksum("time"))
             .and_then(Value::as_f32)
             .unwrap_or(0.0);
+        let pos = props
+            .get(checksum("pos"))
+            .and_then(place)
+            .map(|p| self.resolve_place(i, p));
         let Some(e) = self.el_mut(i) else { return 0.0 };
+        // What doesn't move over time is set now.
+        if let Some(j) = props.get(checksum("just")).and_then(just) {
+            e.just = j;
+        }
+        if let Some(j) = props.get(checksum("internal_just")).and_then(just) {
+            e.internal_just = j;
+        }
+        if let Some(k) = props
+            .get(checksum("internal_scale"))
+            .and_then(Value::as_f32)
+        {
+            e.internal_scale = k;
+        }
         let from = e.look;
         let mut to = from;
-        if let Some(p) = props.get(checksum("pos")).and_then(vec2) {
+        if let Some(p) = pos {
             to.pos = p;
         }
         if let Some(s) = props.get(checksum("scale")).and_then(scale) {
@@ -1046,6 +1156,32 @@ fn lerp(a: Look, b: Look, k: f32) -> Look {
     }
 }
 
+/// A place for an element: a pair, `{ (0.5, 0.0) proportional }` (a share
+/// of its parent's size) or `{ (0.0, 25.0) relative }` (from where it is).
+enum Place {
+    At(Vec2),
+    Share(Vec2),
+    By(Vec2),
+}
+
+fn place(v: &Value) -> Option<Place> {
+    if let Some(p) = vec2(v) {
+        return Some(Place::At(p));
+    }
+    let Value::Struct(items) = v else { return None };
+    let p = items.iter().find_map(|(k, v)| match k {
+        None => vec2(v),
+        _ => None,
+    })?;
+    if v.has_flag(checksum("proportional")) {
+        Some(Place::Share(p))
+    } else if v.has_flag(checksum("relative")) {
+        Some(Place::By(p))
+    } else {
+        Some(Place::At(p))
+    }
+}
+
 fn vec2(v: &Value) -> Option<Vec2> {
     match v {
         Value::Pair([x, y]) => Some(Vec2::new(*x, *y)),
@@ -1124,6 +1260,10 @@ fn unescape(raw: &str) -> String {
         }
         match chars.next() {
             Some('n') => out.push('\n'),
+            // `\cN`: a colour from the font's set; drawn in the text's own.
+            Some('c') => {
+                chars.next();
+            }
             Some('b') => {
                 if let Some(n) = chars.next().and_then(|d| d.to_digit(16)) {
                     out.push(button(n));
@@ -1355,6 +1495,16 @@ impl Host for Ui<'_> {
                 thread: Thread::new(script, params),
                 then,
             });
+        } else if name == c("TerminateObjectsScripts") {
+            // An element's scripts stopped (those of one name, if named).
+            if let Some(i) = target_of(s) {
+                let only = named("script_name").and_then(|v| v.as_name());
+                let doomed = |r: &Running| {
+                    r.element == i && only.is_none_or(|n| r.thread.script() == Some(n))
+                };
+                s.starting.retain(|r| !doomed(r));
+                s.stopping.push((i, only));
+            }
         } else if name == c("FireEvent") || name == c("LaunchEvent") {
             let event = named("Type").and_then(|v| v.as_name());
             let to = named("target").and_then(|v| s.resolve(&v));

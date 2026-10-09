@@ -236,6 +236,12 @@ impl Thread {
         self.frames.is_empty()
     }
 
+    /// The script it was started with (`TerminateObjectsScripts
+    /// script_name = x`), while it runs.
+    pub fn script(&self) -> Option<u32> {
+        self.frames.first().map(|f| f.script)
+    }
+
     /// Runs `dt` seconds' worth: counts down a wait, then runs statements
     /// until the script waits again, ends, or uses up its budget.
     pub fn run(&mut self, program: &Program, host: &mut dyn Host, dt: f32) {
@@ -1073,6 +1079,26 @@ fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<
                     .find(|(k, _)| *k == Some(*n))
                     .and_then(|(_, v)| Num::of(v))
             }
+            // `global [ index ].member`: an array's item, a struct's field.
+            Token::Name(n) if tokens.get(i + 1) == Some(&Token::StartArray) => {
+                let close = tokens[i + 1..]
+                    .iter()
+                    .position(|t| *t == Token::EndArray)
+                    .map(|c| i + 1 + c)?;
+                let index = evaluate_num(&tokens[i + 2..close], params, program)?.scalar();
+                let mut value = match program.value(*n) {
+                    Some(Value::Array(items)) => items.get(index.max(0.0) as usize).cloned(),
+                    _ => None,
+                }?;
+                i = close;
+                while let (Some(Token::Dot), Some(Token::Name(field))) =
+                    (tokens.get(i + 1), tokens.get(i + 2))
+                {
+                    value = value.get(*field)?.clone();
+                    i += 2;
+                }
+                Num::of(&value)
+            }
             Token::Name(n) => Some(match program.value(*n).and_then(Num::of) {
                 Some(Num::Scalar(_)) | None => program
                     .value(*n)
@@ -1175,16 +1201,21 @@ fn first_number(tokens: &[Token], params: &Params, program: &Program) -> Option<
     }
 }
 
-/// `wait n`, `wait n seconds`, `wait n frames`.
+/// `wait n seconds`, `wait n frames` (or `gameframes`), and `wait n`:
+/// milliseconds (`Wait 1500` in the panel messages).
 fn wait_seconds(args: &Value) -> f32 {
     let Value::Struct(items) = args else {
         return 0.0;
     };
     let n = items.iter().find_map(|(_, v)| v.as_f32()).unwrap_or(1.0);
-    let in_seconds = [checksum("seconds"), checksum("second")]
-        .iter()
-        .any(|&s| args.has_flag(s));
-    if in_seconds { n } else { n / 60.0 }
+    let unit = |names: &[&str]| names.iter().any(|s| args.has_flag(checksum(s)));
+    if unit(&["seconds", "second"]) {
+        n
+    } else if unit(&["frame", "frames", "gameframe", "gameframes", "game"]) {
+        n / 60.0
+    } else {
+        n / 1000.0
+    }
 }
 
 /// Tokens that parse back into `value`.
