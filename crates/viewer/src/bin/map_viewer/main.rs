@@ -5126,27 +5126,6 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     level.behaviour.sounds.clear();
                 }
             }
-            if let Some(level) = &app.level {
-                for m in &level.movers {
-                    let l = level.nodes.labels.get(&m.name).cloned().unwrap_or_default();
-                    if l.to_ascii_lowercase().starts_with("door") {
-                        let hit = level.world.as_ref().and_then(|w| {
-                            w.ray(
-                                m.pivot + Vec3::new(0.0, 60.0, 0.0),
-                                m.pivot - Vec3::new(0.0, 300.0, 0.0),
-                            )
-                        });
-                        eprintln!(
-                            "DBG {l} alive {} hit {:?}",
-                            m.last.0,
-                            hit.map(|h| (
-                                level.nodes.labels.get(&h.object).cloned(),
-                                h.point.y as i32
-                            ))
-                        );
-                    }
-                }
-            }
             if let Some(at) = args.replay_at {
                 app.replay = Some(0.0);
                 app.model.character.replaying = true;
