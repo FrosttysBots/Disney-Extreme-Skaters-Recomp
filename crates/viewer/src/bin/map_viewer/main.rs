@@ -2259,6 +2259,12 @@ impl<'a> App<'a> {
         for portal in &level.portals {
             markers.push((map.pixel(portal.warp.position), ui::MapMark::Warp));
         }
+        for pro in &level.pros {
+            markers.push((
+                map.pixel(level.behaviour.position(pro.object)),
+                ui::MapMark::Pro,
+            ));
+        }
         // The gaps' ends (where each scores), landed or not.
         for (object, trigger) in &skater.gap_triggers {
             let skate::gaps::GapTrigger::End { text, .. } = trigger else {

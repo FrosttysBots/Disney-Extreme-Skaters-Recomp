@@ -528,6 +528,8 @@ pub enum MapMark {
     Warp,
     /// A gap's end, landed or not yet.
     Gap(bool),
+    /// A goal's pro.
+    Pro,
 }
 
 /// The map in the corner: the level from above round the skater (north
@@ -568,6 +570,7 @@ fn minimap(ctx: &egui::Context, texture: &egui::TextureHandle, view: &MapView) {
                     MapMark::Warp => (egui::Color32::from_rgb(200, 120, 255), 4.5),
                     MapMark::Gap(false) => (egui::Color32::from_rgb(235, 235, 235), 2.0),
                     MapMark::Gap(true) => (egui::Color32::from_rgb(110, 220, 110), 2.0),
+                    MapMark::Pro => (egui::Color32::from_rgb(255, 150, 40), 5.0),
                 };
                 painter.circle_filled(p, radius, colour);
                 painter.circle_stroke(p, radius, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
