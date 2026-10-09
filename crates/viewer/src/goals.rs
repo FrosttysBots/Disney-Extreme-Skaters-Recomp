@@ -295,6 +295,21 @@ pub fn goal_pro(program: &Program, level: &str, kind: &str) -> Option<u32> {
     param(&params, program, "trigger_obj_id").and_then(Value::as_name)
 }
 
+/// The goal's camera paths: the one played as it starts
+/// (`start_cam_anim`) and the one when it's won (`success_cam_anim`).
+pub fn goal_cameras(program: &Program, level: &str, kind: &str) -> (Option<u32>, Option<u32>) {
+    let Some(params) = goal_params(program, level, kind) else {
+        return (None, None);
+    };
+    let name = |key: &str| {
+        params
+            .iter()
+            .find(|(k, _)| *k == checksum(key))
+            .and_then(|(_, v)| v.as_name())
+    };
+    (name("start_cam_anim"), name("success_cam_anim"))
+}
+
 /// A goal to score so many points in the time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScoreGoal {

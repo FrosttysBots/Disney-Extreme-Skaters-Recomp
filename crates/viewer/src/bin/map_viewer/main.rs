@@ -1191,6 +1191,11 @@ struct App<'a> {
     /// Which replay camera, and where its eye is (eased).
     replay_camera: usize,
     replay_eye: Option<Vec3>,
+    /// A goal's camera path playing (skating held till it's over or
+    /// skipped), the one asked for next, and the goal on's success path.
+    cutscene: bool,
+    cutscene_request: Option<u32>,
+    success_camera: Option<u32>,
     /// F12 pressed: the next frame is saved as a picture too.
     photo: bool,
     /// The goal a pro's offering (its place in the level's pros).
@@ -1339,6 +1344,9 @@ impl<'a> App<'a> {
             letters: None,
             racing: None,
             photo: false,
+            cutscene: false,
+            cutscene_request: None,
+            success_camera: None,
             replay_camera: 0,
             replay_eye: None,
             vehicle_objects: Vec::new(),
@@ -1491,9 +1499,46 @@ impl<'a> App<'a> {
         self.model.camera_paths.time = 0.0;
     }
 
+    /// Plays a goal's camera path by name, holding the skater till it's
+    /// over (or skipped with a key).
+    fn play_cutscene(&mut self, name: u32) {
+        let Some(level) = &self.level else { return };
+        let Some(index) = level
+            .camera_paths
+            .iter()
+            .position(|(n, _)| qb::checksum(n) == name)
+        else {
+            return;
+        };
+        self.play_camera_path(index);
+        self.cutscene = true;
+    }
+
+    /// The cutscene asked for, started; and when one's over, the chase
+    /// camera back.
+    fn update_cutscene(&mut self) {
+        if let Some(name) = self.cutscene_request.take() {
+            self.play_cutscene(name);
+        }
+        if self.cutscene && self.model.camera_paths.playing.is_none() {
+            self.cutscene = false;
+        }
+    }
+
+    /// The goal on's camera paths (`kind` as in `<level>_AddGoal_<kind>`):
+    /// its start one plays now, its success one when it's won.
+    fn goal_cutscenes(&mut self, kind: &str) {
+        let Some(level) = &self.level else { return };
+        let (start, success) =
+            desa_viewer::goals::goal_cameras(level.behaviour.program(), &level.id, kind);
+        self.success_camera = success;
+        self.cutscene_request = start;
+    }
+
     /// Stops a camera path, leaving the free camera where the path was.
     fn stop_camera_path(&mut self) {
         self.model.camera_paths.playing = None;
+        self.cutscene = false;
         if let Some(level) = &mut self.level {
             if let Some(scripted) = level.renderer.scripted_camera.take() {
                 self.camera = scripted.to_fly();
@@ -1850,6 +1895,9 @@ impl<'a> App<'a> {
                 .zip(target.as_ref())
                 .map(|(pro, t)| (pro, t.name.clone(), t.score));
             self.model.character.run_goal_won = target.as_ref().map(|_| false);
+            if let Some(pro) = goal {
+                self.goal_cutscenes(if pro { "ProScore" } else { "HighScore" });
+            }
             self.run = Some(Run {
                 left: target.as_ref().map_or(RUN_TIME, |t| t.time),
                 ending: None,
@@ -2622,6 +2670,7 @@ impl<'a> App<'a> {
         });
         let _ = first_script;
         self.model.character.race_name = Some(race.name);
+        self.goal_cutscenes("Race");
     }
 
     /// Counts the race down and takes the waypoints the skater reaches
@@ -2662,6 +2711,9 @@ impl<'a> App<'a> {
             }
         }
         let won = race.next >= race.points.len();
+        if won {
+            self.cutscene_request = self.success_camera.take();
+        }
         if won || race.left == 0.0 {
             race.over = true;
             model.race_result = Some((won, race.time));
@@ -2717,6 +2769,7 @@ impl<'a> App<'a> {
                 .behaviour
                 .run_script(object, qb::checksum("bounce_skate_letter"));
         }
+        self.goal_cutscenes("SKATE");
         self.letters = Some(LetterRun {
             objects,
             got: [false; 5],
@@ -2758,6 +2811,9 @@ impl<'a> App<'a> {
         }
         model.letters = Some(run.got);
         let won = run.got.iter().all(|g| *g);
+        if won {
+            self.cutscene_request = self.success_camera.take();
+        }
         if won || run.left == 0.0 {
             run.over = true;
             let taken = run.time - run.left;
@@ -2803,6 +2859,7 @@ impl<'a> App<'a> {
         if let Some((score, win)) = run.goal.as_ref().filter(|_| !run.won) {
             if skater.score >= *score {
                 run.won = true;
+                self.cutscene_request = self.success_camera.take();
                 run.ending.get_or_insert(0.0);
                 self.model.character.run_goal_won = Some(true);
                 if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
@@ -3087,9 +3144,13 @@ impl<'a> App<'a> {
             self.play_replay(dt);
             return;
         }
-        // Held still while a warp or goal's offered (`PauseSkaters`) or
-        // paused.
-        if self.warp_offer.is_some() || self.goal_offer.is_some() || self.model.character.paused {
+        // Held still while a warp or goal's offered (`PauseSkaters`), a
+        // goal's camera path plays, or paused.
+        if self.warp_offer.is_some()
+            || self.goal_offer.is_some()
+            || self.cutscene
+            || self.model.character.paused
+        {
             // (The pad's still read, for Start.)
             let _ = self.pad_input();
             return;
@@ -3776,8 +3837,9 @@ impl<'a> App<'a> {
         self.last_frame = now;
         self.update(dt);
         self.skate(dt);
-        // Paused: the clocks stop too.
-        if !self.model.character.paused {
+        self.update_cutscene();
+        // Paused (or a goal's camera path playing): the clocks stop too.
+        if !self.model.character.paused && !self.cutscene {
             self.update_run(dt);
             self.update_letters(dt);
             self.update_race(dt);
@@ -4022,6 +4084,11 @@ impl<'a> App<'a> {
         }
         if code == KeyCode::KeyP && !repeat && self.skating.is_some() {
             self.toggle_pause();
+            return;
+        }
+        // A goal's camera path: any key skips it.
+        if self.cutscene && !repeat {
+            self.stop_camera_path();
             return;
         }
         // At a goal's pro: Enter starts it, Esc not now.
@@ -4436,6 +4503,8 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_breakables();
                 app.update_bouncies(1.0 / 60.0);
                 app.update_pros();
+                app.update_cutscene();
+                app.play(1.0 / 60.0);
                 app.update_collecting();
                 app.update_skitch();
                 app.update_records(1.0 / 60.0);
