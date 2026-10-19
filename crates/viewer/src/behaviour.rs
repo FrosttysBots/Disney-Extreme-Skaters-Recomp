@@ -241,6 +241,8 @@ pub struct Behaviour {
     pub knock_down: bool,
     /// The restart the scripts sent the skater back to (`KillSkater`).
     pub skater_restart: Option<u32>,
+    /// The skater hidden by the scripts (`skater:Hide`, till `Unhide`).
+    pub skater_hidden: bool,
     /// Sectors whose vertex colors the scripts have stopped, started or
     /// started over (`wibbleVC Name = x On`, `off`, `reset`): each one's
     /// own time in its colors and whether that's running. The others
@@ -463,6 +465,7 @@ impl Behaviour {
             camera_stop: false,
             knock_down: false,
             skater_restart: None,
+            skater_hidden: false,
             color_clocks: HashMap::new(),
             now: 0.0,
             terminating: Vec::new(),
@@ -1494,6 +1497,12 @@ impl Host for Commands<'_> {
         }
         // `skater:KillSkater node = restart`: back at that restart, for
         // the viewer to put it there (Free Zazu's tries).
+        if target == Some(checksum("skater"))
+            && (name == checksum("Hide") || name == checksum("Unhide"))
+        {
+            self.behaviour.skater_hidden = name == checksum("Hide");
+            return Outcome::Done(true);
+        }
         if about_skater && name == checksum("KillSkater") {
             let node = args
                 .get(checksum("node"))

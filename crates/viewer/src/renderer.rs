@@ -225,6 +225,8 @@ pub struct Renderer {
     /// When set, frames are drawn from this camera instead of the one
     /// passed to `render` / `encode` (for playing camera paths).
     pub scripted_camera: Option<ScriptedCamera>,
+    /// The character left out of frames (hidden by a goal's cutscene).
+    pub hide_character: bool,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
@@ -357,6 +359,7 @@ impl Renderer {
             collision_view: CollisionView::Hidden,
             show_sky: true,
             scripted_camera: None,
+            hide_character: false,
             min_light: 0.0,
             depth: None,
         }
@@ -632,7 +635,7 @@ impl Renderer {
                     draw(&mut pass, layer, &self.world_pipelines);
                 }
             }
-            if let Some(character) = &self.character {
+            if let Some(character) = self.character.as_ref().filter(|_| !self.hide_character) {
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
                 draw(&mut pass, character, &self.world_pipelines);
             }

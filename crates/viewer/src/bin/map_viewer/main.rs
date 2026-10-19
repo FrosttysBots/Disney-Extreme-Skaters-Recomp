@@ -2234,7 +2234,17 @@ impl<'a> App<'a> {
         }
         if self.cutscene && self.model.camera_paths.playing.is_none() {
             self.cutscene = false;
+            // (Shown again after the scripts' cutscene, whatever they do.)
+            if self.script_cutscene {
+                if let Some(level) = &mut self.level {
+                    level.behaviour.skater_hidden = false;
+                }
+            }
             self.script_cutscene = false;
+        }
+        // The skater hidden by the scripts while their cutscene plays.
+        if let Some(level) = &mut self.level {
+            level.renderer.hide_character = self.script_cutscene && level.behaviour.skater_hidden;
         }
         // A warp's camera path over: on to the level.
         if !self.cutscene {
