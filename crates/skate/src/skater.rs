@@ -1329,6 +1329,12 @@ impl Skater {
             .update(input.turn > 0.0, input.turn < 0.0, &p.skitch_balance, STEP);
         self.combo_tricks.tweak(SKITCH_TWEAK);
         if !input.push || lean != Lean::Balanced {
+            if self.trace {
+                eprintln!(
+                    "let go of the skitch at {:?}: push {}, {lean:?}",
+                    self.position, input.push
+                );
+            }
             self.let_go_skitch(velocity);
             return;
         }
@@ -1337,9 +1343,30 @@ impl Skater {
         let ground = world
             .ray(spot + Vec3::Y * 50.0, spot - Vec3::Y * 150.0)
             .filter(|hit| !is_wall(hit, p));
-        self.position = ground.map_or(spot, |hit| hit.point);
-        self.up = ground.map_or(Vec3::Y, |hit| hit.normal);
-        self.velocity = velocity;
+        // No ground there (off the end of a ramp: Zurg's UFO launch):
+        // off into the air at the car's speed, the way the slope was
+        // going.
+        let Some(hit) = ground else {
+            if self.trace {
+                eprintln!(
+                    "off the skitch into the air at {:?}, {:.0} fast",
+                    self.position, car.speed
+                );
+            }
+            self.skitch = None;
+            self.velocity = self.velocity.normalize_or(velocity.normalize_or_zero()) * car.speed;
+            self.on_ground = false;
+            self.up = Vec3::Y;
+            self.air_time = 0.0;
+            self.end_combo(true);
+            self.set_action(Action::Air);
+            return;
+        };
+        self.position = hit.point;
+        self.up = hit.normal;
+        // Along the slope it's on, at the car's speed.
+        let along = car.forward - hit.normal * car.forward.dot(hit.normal);
+        self.velocity = along.normalize_or(car.forward) * car.speed;
         self.heading = car.forward.x.atan2(car.forward.z);
         self.on_ground = true;
     }

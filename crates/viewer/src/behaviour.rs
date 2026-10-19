@@ -1012,6 +1012,7 @@ impl Behaviour {
             path.speed = (path.speed - rate * dt).max(path.top_speed);
         }
         let mut step = path.speed * dt;
+        let mut reached = None;
         let to = goal - state.position;
         let distance = to.length();
         if distance > 1e-3 && (path.turn || path.orient) {
@@ -1031,6 +1032,7 @@ impl Behaviour {
             state.position = goal;
             step -= distance;
             let _ = step;
+            reached = self.nodes[target].spawn_script;
             let links = &self.nodes[target].links;
             let next = match links.len() {
                 0 => None,
@@ -1046,6 +1048,10 @@ impl Behaviour {
             state.path.target = next;
         }
         state.dirty = true;
+        // The node reached's own script, run as what got there.
+        if let Some(script) = reached.filter(|s| self.program.has_script(*s)) {
+            self.spawning.push((i, Thread::new(script, Vec::new())));
+        }
     }
 
     fn object_named(&self, name: u32) -> Option<usize> {

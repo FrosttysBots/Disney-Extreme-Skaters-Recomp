@@ -134,6 +134,9 @@ pub struct PathNode {
     /// In mesh space; `None` for nodes without a position.
     pub position: Option<Vec3>,
     pub links: Vec<usize>,
+    /// Run by what reaches it along a path (`SpawnObjScript`: Zurg's UFO
+    /// speeding up for the launch).
+    pub spawn_script: Option<u32>,
 }
 
 impl ObjectNode {
@@ -278,6 +281,7 @@ impl LevelNodes {
                         .filter_map(|l| usize::try_from(l).ok())
                         .filter(|&l| l < nodes.len())
                         .collect(),
+                    spawn_script: node.get(key("SpawnObjScript")).and_then(Value::as_name),
                 })
                 .collect(),
             ..LevelNodes::default()
