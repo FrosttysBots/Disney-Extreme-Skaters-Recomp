@@ -1130,6 +1130,44 @@ impl Behaviour {
                 self.active_goal.is_some() || !self.side_goals.is_empty(),
             ));
         }
+        if name == c("GoalManager_CheckDistanceRecord")
+            && goal.is_some()
+            && goal == self.active_goal
+        {
+            // How far the skater is from the goal's start object
+            // (`distance_record_object`), across, in feet and inches, kept
+            // in its settings with the best; whether this beats it.
+            let from = self
+                .goal_params
+                .iter()
+                .find(|(k, _)| *k == Some(c("distance_record_object")))
+                .and_then(|(_, v)| v.as_name())
+                .and_then(|n| self.object_named(n))
+                .map(|o| self.states[o].position);
+            let (Some(from), Some(skater)) = (from, self.skater) else {
+                return Some(Outcome::Done(false));
+            };
+            let inches = (skater - from).with_y(0.0).length().round() as i32;
+            let best = self
+                .goal_params
+                .iter()
+                .find(|(k, _)| *k == Some(c("record_distance")))
+                .and_then(|(_, v)| v.as_int())
+                .unwrap_or(0);
+            let record = inches > best;
+            let best = best.max(inches);
+            for (key, value) in [
+                ("current_distance_feet", inches / 12),
+                ("current_distance_inches", inches % 12),
+                ("record_distance", best),
+                ("record_feet", best / 12),
+                ("record_inches", best % 12),
+            ] {
+                self.goal_params.retain(|(k, _)| *k != Some(c(key)));
+                self.goal_params.push((Some(c(key)), Value::Integer(value)));
+            }
+            return Some(Outcome::Done(record));
+        }
         if name == c("GoalManager_CheckMinigameRecord") {
             // A new best (`... Name = goal <number_collected>`)?
             let id = goal?;
