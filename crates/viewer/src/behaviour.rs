@@ -216,6 +216,10 @@ pub struct Behaviour {
     pub goal_params: Params,
     /// Lost by its scripts (`GoalManager_LoseGoal`, or deactivated).
     pub goal_lost: bool,
+    /// Its clock held by its scripts (`GoalManager_PauseGoal`,
+    /// `GoalManager_PauseAllGoals`: a cutscene's on).
+    pub goal_paused: bool,
+    paused_for: f32,
     /// Scripts to stop once this frame's have run: those spawned by name
     /// (`KillSpawnedScript Name = x`), and every one of an object's
     /// (`TerminateObjectsScripts id = obj`).
@@ -424,6 +428,8 @@ impl Behaviour {
             goal_won: false,
             goal_params: Vec::new(),
             goal_lost: false,
+            goal_paused: false,
+            paused_for: 0.0,
             killing: Vec::new(),
             shatters: Vec::new(),
             terminating: Vec::new(),
@@ -830,6 +836,15 @@ impl Behaviour {
             }
         }
         self.check_radii();
+        // (A pause its scripts never lifted, stopped midway, lapses.)
+        self.paused_for = if self.goal_paused {
+            self.paused_for + dt
+        } else {
+            0.0
+        };
+        if self.paused_for > 30.0 {
+            self.goal_paused = false;
+        }
         let program = std::mem::take(&mut self.program);
         let mut threads = std::mem::take(&mut self.threads);
         for (object, thread) in &mut threads {
@@ -1123,6 +1138,17 @@ impl Behaviour {
                 self.starting
                     .push((self.level_runner, Thread::new(script, gone.params)));
             }
+            return Some(Outcome::Done(true));
+        }
+        if name == c("GoalManager_PauseAllGoals") || name == c("GoalManager_UnPauseAllGoals") {
+            self.goal_paused = name == c("GoalManager_PauseAllGoals");
+            return Some(Outcome::Done(true));
+        }
+        if (name == c("GoalManager_PauseGoal") || name == c("GoalManager_UnPauseGoal"))
+            && goal.is_some()
+            && goal == self.active_goal
+        {
+            self.goal_paused = name == c("GoalManager_PauseGoal");
             return Some(Outcome::Done(true));
         }
         if name == c("GoalManager_HasActiveGoals") {

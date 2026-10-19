@@ -3677,6 +3677,7 @@ impl<'a> App<'a> {
         b.goal_needed = goal.needed;
         b.goal_won = false;
         b.goal_lost = false;
+        b.goal_paused = false;
         let mut params: qb::vm::Params = goal
             .params
             .iter()
@@ -3768,7 +3769,8 @@ impl<'a> App<'a> {
         }
         // (Held while the game's screen waits on a press: the goal's
         // speech box, before it starts.)
-        let waiting = self.screen.as_ref().is_some_and(|s| s.screen.takes_pad());
+        let waiting = self.screen.as_ref().is_some_and(|s| s.screen.takes_pad())
+            || level.behaviour.goal_paused;
         if let Some(left) = run.left.as_mut().filter(|_| !waiting) {
             *left = (*left - dt).max(0.0);
         }
