@@ -153,7 +153,7 @@ struct Args {
     #[arg(long, requires = "skate")]
     pause: bool,
     /// For --skate: presses to the game's screen at the end, in order (u up,
-    /// d down, c choose, b back): its pause menu with --pause, else
+    /// d down, c choose, b back, w wait): its pause menu with --pause, else
     /// whatever it shows (a goal's speech box)
     #[arg(long, requires = "skate", default_value = "")]
     pause_keys: String,
@@ -1152,6 +1152,7 @@ impl ScreenUi {
             "RetryCurrentGoal",
             "end_current_goal_run",
             "view_goals_menu_start_goal",
+            "really_change_level",
         ]);
         Some(ScreenUi {
             screen,
@@ -4597,6 +4598,27 @@ impl<'a> App<'a> {
         }
         let c = qb::checksum;
         for (name, args) in requests {
+            if name == c("really_change_level") {
+                // The level select: that level, skating there.
+                let wanted = args.get(c("level")).and_then(qb::Value::as_name);
+                let index = self
+                    .model
+                    .levels
+                    .iter()
+                    .position(|l| Some(c(&format!("load_{}", l.id))) == wanted);
+                self.model.character.paused = false;
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.clear();
+                }
+                if let Some(i) = index {
+                    if self.skating.is_some() {
+                        self.toggle_skate();
+                    }
+                    self.skate_on_load = true;
+                    self.start_load(i);
+                }
+                continue;
+            }
             if name == c("view_goals_menu_start_goal") {
                 // View Goals: a goal chosen, started.
                 let id = args.get(c("goal_ID")).and_then(qb::Value::as_name);
@@ -6335,13 +6357,15 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 for key in args.pause_keys.chars() {
                     use desa_viewer::screen::Pad;
                     let pad = match key {
-                        'u' => Pad::Up,
-                        'd' => Pad::Down,
-                        'c' => Pad::Choose,
-                        'b' => Pad::Back,
+                        'u' => Some(Pad::Up),
+                        'd' => Some(Pad::Down),
+                        'c' => Some(Pad::Choose),
+                        'b' => Some(Pad::Back),
+                        // (A third of a second more, for what animates in.)
+                        'w' => None,
                         _ => continue,
                     };
-                    if let Some(screen) = &mut app.screen {
+                    if let (Some(pad), Some(screen)) = (pad, &mut app.screen) {
                         screen.screen.pad(pad);
                     }
                     for _ in 0..20 {

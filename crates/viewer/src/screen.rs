@@ -1712,6 +1712,31 @@ impl Host for Ui<'_> {
                     then: None,
                 });
             }
+        } else if name == c("GoalManager_NumGoalsBeatenInLevel") {
+            // The level select's count: the level on's goals won (the
+            // others' aren't known here).
+            let level_num = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let level = match self.program.value(c("level_select_menu_level_info")) {
+                Some(Value::Array(levels)) => levels.iter().find_map(|l| {
+                    (l.get(c("level_num")).and_then(Value::as_int) == level_num)
+                        .then(|| l.get(c("level")).and_then(Value::as_name))
+                        .flatten()
+                }),
+                _ => None,
+            };
+            let here = level.is_some() && level == s.level;
+            let beaten = if here {
+                s.goal_list.iter().filter(|(_, _, won)| *won).count() as i32
+            } else {
+                0
+            };
+            return Outcome::Params(vec![(Some(c("num_beaten")), Value::Integer(beaten))]);
         } else if name == c("GoalManager_HasWonGoal") {
             let asked = named("Name").and_then(|v| v.as_name());
             return Outcome::Done(
