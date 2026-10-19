@@ -239,6 +239,8 @@ pub struct Behaviour {
     /// The skater knocked down (`MakeSkaterGoto PedKnockDown`: a
     /// heckler's swipe, Zurg's missile), for the viewer to bail.
     pub knock_down: bool,
+    /// The restart the scripts sent the skater back to (`KillSkater`).
+    pub skater_restart: Option<u32>,
     /// Sectors whose vertex colors the scripts have stopped, started or
     /// started over (`wibbleVC Name = x On`, `off`, `reset`): each one's
     /// own time in its colors and whether that's running. The others
@@ -460,6 +462,7 @@ impl Behaviour {
             shatters: Vec::new(),
             camera_stop: false,
             knock_down: false,
+            skater_restart: None,
             color_clocks: HashMap::new(),
             now: 0.0,
             terminating: Vec::new(),
@@ -1482,6 +1485,16 @@ impl Host for Commands<'_> {
             if let Some(answer) = self.behaviour.skater_state.answer(name, args) {
                 return Outcome::Done(answer);
             }
+        }
+        // `skater:KillSkater node = restart`: back at that restart, for
+        // the viewer to put it there (Free Zazu's tries).
+        if about_skater && name == checksum("KillSkater") {
+            let node = args
+                .get(checksum("node"))
+                .or_else(|| args.get(checksum("nodename")))
+                .and_then(Value::as_name);
+            self.behaviour.skater_restart = node;
+            return Outcome::Done(node.is_some());
         }
         let object = match target {
             Some(t) => match self.behaviour.object_named(t) {

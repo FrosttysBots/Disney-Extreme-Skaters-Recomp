@@ -3738,7 +3738,8 @@ impl<'a> App<'a> {
     /// its flags), the clock counts down, and it's won with all its flags
     /// or out of time lost.
     fn update_goal_run(&mut self, dt: f32) {
-        let (Some((skater, ..)), Some(level)) = (&mut self.skating, &mut self.level) else {
+        let (Some((skater, physics, chase)), Some(level)) = (&mut self.skating, &mut self.level)
+        else {
             return;
         };
         // Landed gaps' scripts run whether a goal's on or not (they ask).
@@ -3787,6 +3788,15 @@ impl<'a> App<'a> {
         // Knocked down by the scripts (a heckler, a missile).
         if std::mem::take(&mut level.behaviour.knock_down) {
             skater.knock_down();
+        }
+        // Sent back to a restart by them.
+        if let Some(name) = level.behaviour.skater_restart.take() {
+            let spawn = level.nodes.spawns.iter().find(|s| s.name == name);
+            if let (Some(spawn), Some(world)) = (spawn, &level.world) {
+                let facing = spawn.facing();
+                skater.place(spawn.position, facing.x.atan2(facing.z), physics, world);
+                *chase = ChaseCamera::behind(skater, physics);
+            }
         }
         let Some(run) = &mut self.goal_run else {
             return;
