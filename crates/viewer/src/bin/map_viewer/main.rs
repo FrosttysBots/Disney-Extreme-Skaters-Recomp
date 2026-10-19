@@ -1823,6 +1823,9 @@ struct App<'a> {
     /// skipped), the one asked for next, and the goal on's success path.
     cutscene: bool,
     cutscene_request: Option<u32>,
+    /// Whether the camera path playing is one the level's scripts asked
+    /// for (theirs to stop).
+    script_cutscene: bool,
     /// A goal just won (its kind), to keep.
     goal_won: Option<String>,
     /// A warp's level, to load when its camera path's over.
@@ -2022,6 +2025,7 @@ impl<'a> App<'a> {
             goal_streams: None,
             lines_to_say: Vec::new(),
             cutscene: false,
+            script_cutscene: false,
             cutscene_request: None,
             goal_won: None,
             load_after_cutscene: None,
@@ -2230,6 +2234,7 @@ impl<'a> App<'a> {
         }
         if self.cutscene && self.model.camera_paths.playing.is_none() {
             self.cutscene = false;
+            self.script_cutscene = false;
         }
         // A warp's camera path over: on to the level.
         if !self.cutscene {
@@ -3742,9 +3747,19 @@ impl<'a> App<'a> {
         }
         // Camera paths the scripts play (a goal's cutscenes: each arcade
         // machine coming on), one at a time.
+        // (Stopped by them, theirs ends there, and the next can start.)
+        if std::mem::take(&mut level.behaviour.camera_stop) && self.script_cutscene {
+            if self.cutscene {
+                self.model.camera_paths.playing = None;
+                self.cutscene = false;
+            }
+            self.script_cutscene = false;
+            self.cutscene_request = None;
+        }
         for path in std::mem::take(&mut level.behaviour.cameras) {
             if !self.cutscene && self.cutscene_request.is_none() {
                 self.cutscene_request = Some(path);
+                self.script_cutscene = true;
             }
         }
         // What the scripts put on screen, as the skater's message.

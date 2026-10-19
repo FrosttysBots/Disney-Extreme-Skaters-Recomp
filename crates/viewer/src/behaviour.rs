@@ -188,6 +188,9 @@ pub struct Behaviour {
     /// Camera paths scripts asked to play (`PlaySkaterCamAnim Name =
     /// path`), for the viewer.
     pub cameras: Vec<u32>,
+    /// The camera path playing stopped by the scripts (`KillSkaterCamAnim
+    /// current`, `PlaySkaterCamAnim ... STOP`), before any they play next.
+    pub camera_stop: bool,
     /// The goals won (their ids), for `GoalManager_HasWonGoal`.
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
@@ -455,6 +458,7 @@ impl Behaviour {
             paused_for: 0.0,
             killing: Vec::new(),
             shatters: Vec::new(),
+            camera_stop: false,
             knock_down: false,
             color_clocks: HashMap::new(),
             now: 0.0,
@@ -2039,6 +2043,10 @@ impl Host for Commands<'_> {
             let path = named("Name");
             // (Only a goal's: the one on, or just over.)
             let goal = b.active_goal.is_some() || b.ended_goal.is_some();
+            if args.has_flag(c("STOP")) {
+                b.cameras.clear();
+                b.camera_stop = true;
+            }
             if let (Some(path), false, false, true) = (
                 path,
                 args.has_flag(c("STOP")),
@@ -2049,6 +2057,10 @@ impl Host for Commands<'_> {
                     b.cameras.push(path);
                 }
             }
+        } else if name == c("KillSkaterCamAnim") {
+            // (Any asked for before it this frame go too.)
+            b.cameras.clear();
+            b.camera_stop = true;
         } else if name == c("SkaterCamAnimFinished") {
             // (The viewer plays them as cutscenes; scripts needn't wait.)
             return Outcome::Done(true);
