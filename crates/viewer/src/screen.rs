@@ -91,6 +91,9 @@ struct Element {
     /// A scrolling menu (`vscrollingmenu`): it holds its menu where that
     /// says, not lined up as items are.
     scrolling: bool,
+    /// How far a scrolling menu's scrolled (down or across), in its
+    /// units: following its menu's selected item.
+    scroll: std::cell::Cell<f32>,
     wrap: bool,
     padding: f32,
     /// A menu's gap between its children.
@@ -132,6 +135,7 @@ impl Element {
             selected: None,
             focusable_child: None,
             scrolling: false,
+            scroll: std::cell::Cell::new(0.0),
             wrap: true,
             padding: 1.0,
             spacing: 0.0,
@@ -448,14 +452,22 @@ impl Screen {
     /// A pad event: to the deepest focused element, then up through its
     /// parents till one takes it.
     pub fn pad(&mut self, pad: Pad) {
+        // The deepest focused element showing (focus can be given to a
+        // menu deep inside one that hasn't it: the gap checklist's).
         let mut at = ROOT;
-        while let Some(child) = self.el(at).and_then(|e| {
-            e.children
-                .iter()
-                .copied()
-                .find(|c| self.el(*c).is_some_and(|c| c.focused && !c.hidden))
-        }) {
-            at = child;
+        let mut deepest = 0;
+        let mut stack = vec![(ROOT, 0usize)];
+        while let Some((i, depth)) = stack.pop() {
+            let Some(e) = self.el(i).filter(|e| !e.hidden) else {
+                continue;
+            };
+            if e.focused && depth >= deepest {
+                at = i;
+                deepest = depth;
+            }
+            for &c in e.children.iter().rev() {
+                stack.push((c, depth + 1));
+            }
         }
         let event = pad.event();
         let mut el = Some(at);
@@ -799,11 +811,76 @@ impl Screen {
             }
             _ => {}
         }
+        if e.scrolling {
+            self.draw_scrolled(i, &children, at, scale, alpha, out);
+            return;
+        }
         for &c in &children {
             if self.el(c).is_some_and(|c| !c.behind_parent) {
                 self.draw_element(c, at, scale, alpha, out);
             }
         }
+    }
+
+    /// A scrolling menu's insides: moved by its scroll (kept so the
+    /// selected item shows), and only what's inside its box.
+    fn draw_scrolled(
+        &self,
+        i: usize,
+        children: &[usize],
+        at: Vec2,
+        scale: Vec2,
+        alpha: f32,
+        out: &mut Vec<Draw>,
+    ) {
+        let Some(e) = self.el(i) else { return };
+        let across = e.kind == Kind::HMenu;
+        let span = e.dims.unwrap_or_else(|| self.size(i));
+        let room = if across { span.x } else { span.y };
+        // The selected item of the menu inside, where it is in that.
+        let selected = children.iter().find_map(|&m| {
+            let menu = self.el(m)?;
+            let item = *menu.children.get(menu.selected?)?;
+            let (top_left, size) = self.local_rect(item);
+            let menu_at = self.local_rect(m).0;
+            Some(if across {
+                (menu_at.x + top_left.x, size.x)
+            } else {
+                (menu_at.y + top_left.y, size.y)
+            })
+        });
+        let mut scroll = e.scroll.get();
+        if let Some((start, length)) = selected {
+            if start < scroll {
+                scroll = start;
+            } else if start + length > scroll + room {
+                scroll = start + length - room;
+            }
+        }
+        e.scroll.set(scroll.max(0.0));
+        let shift = if across {
+            Vec2::new(-scroll.max(0.0) * scale.x, 0.0)
+        } else {
+            Vec2::new(0.0, -scroll.max(0.0) * scale.y)
+        };
+        let mut inside = Vec::new();
+        for &c in children {
+            self.draw_element(c, at + shift, scale, alpha, &mut inside);
+        }
+        let (lo, hi) = (at, at + span * scale);
+        // (A little slack: letters overhang their rows.)
+        let slack = 4.0;
+        out.extend(inside.into_iter().filter(|d| {
+            let r = match d {
+                Draw::Sprite { rect, .. } | Draw::Glyph { rect, .. } => rect,
+            };
+            let (mid_x, mid_y) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+            if across {
+                mid_x >= lo.x - slack && mid_x <= hi.x + slack
+            } else {
+                mid_y >= lo.y - slack && mid_y <= hi.y + slack
+            }
+        }));
     }
 
     /// The buttons font, for a controller button's character.
