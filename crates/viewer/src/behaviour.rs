@@ -1217,8 +1217,33 @@ impl Host for Commands<'_> {
                     state.was_outside = true;
                 }
             }
+        } else if name == c("SendException") {
+            // `SendException 1 Name = obj`: that object's exception of
+            // that number (or name) run, as an event would.
+            let ex = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(i)) => Some(*i as u32),
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let on = named("Name").and_then(|n| b.object_named(n));
+            if let (Some(ex), Some(on)) = (ex, on) {
+                let found = b.states[on]
+                    .exceptions
+                    .iter()
+                    .find(|(e, ..)| *e == ex)
+                    .map(|(_, script, params)| (*script, params.clone()));
+                if let Some((script, params)) = found {
+                    b.starting.push((on, Thread::new(script, params)));
+                }
+            }
         } else if name == c("Obj_SetException") {
-            if let (Some(ex), Some(scr)) = (named("ex"), named("scr")) {
+            // (Its event by name, or a number that `SendException` sends.)
+            let ex =
+                named("ex").or_else(|| args.get(c("ex")).and_then(Value::as_int).map(|i| i as u32));
+            if let (Some(ex), Some(scr)) = (ex, named("scr")) {
                 let params = match args.get(c("params")) {
                     Some(Value::Struct(items)) => items.clone(),
                     _ => Vec::new(),
