@@ -1777,6 +1777,9 @@ impl Host for Ui<'_> {
                 }
                 _ => Outcome::Done(false),
             };
+        } else if name == c("GetGameMode") {
+            // The career, as `GameModeEquals` has it.
+            return Outcome::Params(vec![(Some(c("GameMode")), Value::Name(c("career")))]);
         } else if name == c("GameModeEquals") {
             // The levels are played as the career has them.
             let asked = match &props {
