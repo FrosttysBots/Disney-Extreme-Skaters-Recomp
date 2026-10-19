@@ -263,6 +263,10 @@ pub struct Screen {
     /// "music\Jessie"`: the skater select's character theme), or none
     /// (`StopMusic`), when they've asked since the viewer last looked.
     pub music: Option<Option<String>>,
+    /// A movie asked for on the level's screen (`playmovie "movies\x"
+    /// mesh = moviescreen loop`: the skater select's character clip), by
+    /// its file's name and whether it loops; or none (`StopMovie`).
+    pub screen_movie: Option<Option<(String, bool)>>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -312,6 +316,7 @@ impl Screen {
             rumble: true,
             vibrations: Vec::new(),
             music: None,
+            screen_movie: None,
             rumble_changed: false,
             stopping: Vec::new(),
         }
@@ -1863,6 +1868,12 @@ impl Host for Ui<'_> {
                     .to_string();
                 s.music = Some(Some(name));
             }
+        } else if name == c("PlayMovie") && named("mesh").is_some() {
+            if let Some(movie) = crate::behaviour::screen_movie(&props) {
+                s.screen_movie = Some(Some(movie));
+            }
+        } else if name == c("StopMovie") {
+            s.screen_movie = Some(None);
         } else if name == c("StopMusic") || name == c("ClearMusicTrackList") {
             s.music = Some(None);
         } else if name == c("VibrateController") {

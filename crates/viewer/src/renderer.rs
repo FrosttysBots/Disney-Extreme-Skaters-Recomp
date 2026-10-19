@@ -205,6 +205,9 @@ pub struct Renderer {
     character: Option<GpuLevel>,
     /// Extra meshes drawn with the level, and whether each is shown.
     layers: Vec<(GpuLevel, bool)>,
+    /// Pictures shown over layers' own textures (a movie on a screen in
+    /// the level), by layer: the texture and its size.
+    layer_pictures: std::collections::HashMap<usize, (wgpu::Texture, u32, u32)>,
     pass_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     collision: Option<(wgpu::Buffer, u32)>,
@@ -345,6 +348,7 @@ impl Renderer {
             sky,
             character: None,
             layers: Vec::new(),
+            layer_pictures: std::collections::HashMap::new(),
             pass_layout,
             sampler,
             collision,
@@ -461,6 +465,69 @@ impl Renderer {
         if let Some(layer) = id.and_then(|id| self.layers.get_mut(id)) {
             layer.1 = shown;
         }
+    }
+
+    /// Draws every pass of a layer with this picture (RGBA, `width` by
+    /// `height`) instead of its own textures: a movie's frame on a screen
+    /// in the level. The same size as before, only the pixels change.
+    pub fn show_on_layer(&mut self, id: Option<usize>, width: u32, height: u32, rgba: &[u8]) {
+        let Some(id) = id.filter(|&i| i < self.layers.len()) else {
+            return;
+        };
+        if rgba.len() < (width * height * 4) as usize || width == 0 || height == 0 {
+            return;
+        }
+        let fresh =
+            !matches!(self.layer_pictures.get(&id), Some((_, w, h)) if (*w, *h) == (width, height));
+        if fresh {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("layer picture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let (layer, _) = &mut self.layers[id];
+            for pass in layer.batches.iter_mut().flat_map(|b| &mut b.passes) {
+                pass.bind_group = pass_bind_group(
+                    &self.device,
+                    &self.pass_layout,
+                    &view,
+                    &self.sampler,
+                    &layer.params,
+                    pass.params_slot,
+                );
+            }
+            self.layer_pictures.insert(id, (texture, width, height));
+        }
+        let (texture, ..) = &self.layer_pictures[&id];
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba[..(width * height * 4) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Replaces a layer's vertices from `first` on (same order as its mesh).

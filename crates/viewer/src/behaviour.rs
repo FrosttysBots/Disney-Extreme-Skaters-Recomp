@@ -239,6 +239,9 @@ pub struct Behaviour {
     /// The skater knocked down (`MakeSkaterGoto PedKnockDown`: a
     /// heckler's swipe, Zurg's missile), for the viewer to bail.
     pub knock_down: bool,
+    /// A movie asked for on the level's screen (Hub's `playmovie ... mesh
+    /// = moviescreen`), or none (`StopMovie`), as the screen's.
+    pub screen_movie: Option<Option<(String, bool)>>,
     /// The restart the scripts sent the skater back to (`KillSkater`).
     pub skater_restart: Option<u32>,
     /// The skater hidden by the scripts (`skater:Hide`, till `Unhide`).
@@ -464,6 +467,7 @@ impl Behaviour {
             shatters: Vec::new(),
             camera_stop: false,
             knock_down: false,
+            screen_movie: None,
             skater_restart: None,
             skater_hidden: false,
             color_clocks: HashMap::new(),
@@ -1060,6 +1064,20 @@ impl Behaviour {
     fn object_named(&self, name: u32) -> Option<usize> {
         self.by_name.get(&name).copied()
     }
+}
+
+/// The movie a `playmovie "movies\jessie" mesh = moviescreen loop` plays
+/// on a screen in the level: its file's name, and whether it loops.
+pub fn screen_movie(args: &Value) -> Option<(String, bool)> {
+    let Value::Struct(items) = args else {
+        return None;
+    };
+    let path = items.iter().find_map(|(k, v)| match (k, v) {
+        (None, Value::String(t) | Value::LocalString(t)) => Some(t.clone()),
+        _ => None,
+    })?;
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
+    Some((name, args.has_flag(checksum("loop"))))
 }
 
 /// A goal going alongside the one played (a minigame): its parameters,
@@ -1778,6 +1796,12 @@ impl Host for Commands<'_> {
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
             }
+        } else if name == c("PlayMovie") && named("mesh").is_some() {
+            if let Some(movie) = screen_movie(args) {
+                b.screen_movie = Some(Some(movie));
+            }
+        } else if name == c("StopMovie") {
+            b.screen_movie = Some(None);
         } else if name == c("MakeSkaterGoto") {
             // The skater's own scripts aren't run; a knock down is a bail.
             let to = match args {

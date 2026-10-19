@@ -310,6 +310,11 @@ struct LoadedLevel {
     bouncies: Vec<BouncyState>,
     /// The level's pieces scripts move.
     movers: Vec<MoverState>,
+    /// The screen a movie plays on (the `moviescreen` sector: the Skate
+    /// Shop's TV, the Hub's), in a layer of its own; the movie playing
+    /// there and when it started.
+    movie_screen: Option<usize>,
+    screen_movie: Option<(desa_viewer::movie::Movie, Instant, bool)>,
     /// The breakables (trigger object: its script, what it shatters, its
     /// sound) and the triggers already broken.
     breakables: HashMap<u32, (u32, Vec<u32>, Option<u32>)>,
@@ -394,11 +399,14 @@ fn load_level(
     let hidden = &nodes.hidden_sectors;
     // The pieces scripts move are in layers of their own too.
     let mover_names: HashSet<u32> = nodes.movers.iter().map(|m| m.name).collect();
+    // The screen movies play on (`playmovie ... mesh = moviescreen`).
+    let screen_name = qb::checksum("moviescreen");
     let world = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
         !hidden.contains(&s)
             && !breakable_sectors.contains(&s)
             && !bouncy_names.contains(&s)
             && !mover_names.contains(&s)
+            && s != screen_name
     })?;
     let goal_geometry = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
         hidden.contains(&s) && !mover_names.contains(&s)
@@ -572,6 +580,14 @@ fn load_level(
             since: f32::INFINITY,
         });
     }
+    // The movie screen, in a layer of its own to draw a movie's frames on
+    // (showing its own picture till one plays).
+    let movie_screen = Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| {
+        s == screen_name
+    })
+    .ok()
+    .filter(|mesh| !mesh.vertices.is_empty())
+    .and_then(|mesh| renderer.add_layer(&mesh, false));
     // The level's moving pieces, each in a layer of its own, shown while
     // its object is there and put where it is.
     let mut movers = Vec::new();
@@ -657,6 +673,8 @@ fn load_level(
             sector_centres,
             bouncies,
             movers,
+            movie_screen,
+            screen_movie: None,
             breakables,
             touch_scripts,
             broken: HashSet::new(),
@@ -1831,6 +1849,8 @@ struct App<'a> {
     /// The song the game's menus play (the skater select's theme for the
     /// character), by name, and whether it's started.
     menu_track: Option<(String, bool)>,
+    /// The movie last asked for on the level's screen, to loop it.
+    screen_movie_name: Option<String>,
     /// Whether the camera path playing is one the level's scripts asked
     /// for (theirs to stop).
     script_cutscene: bool,
@@ -2035,6 +2055,7 @@ impl<'a> App<'a> {
             cutscene: false,
             shop_skater: None,
             menu_track: None,
+            screen_movie_name: None,
             script_cutscene: false,
             cutscene_request: None,
             goal_won: None,
@@ -4766,6 +4787,66 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The movie the scripts play on the level's screen (the Skate Shop's
+    /// TV shows the skater select's character; the Hub's, a random one):
+    /// started when asked for, its frames drawn on the screen's layer as
+    /// they're due, round again if it loops. Without sound (the menus'
+    /// music plays over it).
+    fn update_screen_movie(&mut self) {
+        let asked = {
+            let from_screen = self
+                .screen
+                .as_mut()
+                .and_then(|s| s.screen.screen_movie.take());
+            let level = self.level.as_mut();
+            let from_level = level.and_then(|l| l.behaviour.screen_movie.take());
+            from_screen.or(from_level)
+        };
+        let Some(level) = &mut self.level else { return };
+        if level.movie_screen.is_none() {
+            return;
+        }
+        if let Some(asked) = asked {
+            level.screen_movie = None;
+            if let (Some((name, looping)), Some(data), Some(ffmpeg)) =
+                (asked, &self.data, desa_viewer::movie::ffmpeg())
+            {
+                if let Some(source) = data.movie(&name) {
+                    if let Ok((movie, _sound)) = desa_viewer::movie::Movie::start(&source, &ffmpeg)
+                    {
+                        level.screen_movie = Some((movie, Instant::now(), looping));
+                    }
+                }
+                self.screen_movie_name = Some(name);
+            }
+        }
+        let Some((movie, started, looping)) = &mut level.screen_movie else {
+            return;
+        };
+        let seconds = started.elapsed().as_secs_f64();
+        let (width, height) = (movie.info.width, movie.info.height);
+        if let Some((frame, true)) = movie.frame_at(seconds) {
+            level
+                .renderer
+                .show_on_layer(level.movie_screen, width, height, frame);
+        }
+        if movie.finished() && *looping {
+            // Round again.
+            if let (Some(name), Some(data), Some(ffmpeg)) = (
+                self.screen_movie_name.clone(),
+                &self.data,
+                desa_viewer::movie::ffmpeg(),
+            ) {
+                if let Some(source) = data.movie(&name) {
+                    if let Ok((movie, _sound)) = desa_viewer::movie::Movie::start(&source, &ffmpeg)
+                    {
+                        level.screen_movie = Some((movie, Instant::now(), true));
+                    }
+                }
+            }
+        }
+    }
+
     /// The game's skater select (in the Skate Shop) and the character
     /// shown: it starts on the one the viewer has (`disney_skater`, the
     /// `skater_select_array` index, which the game keeps), and the one it
@@ -5862,6 +5943,7 @@ impl<'a> App<'a> {
         self.hud_dt = dt;
         self.update_game_hud();
         self.update_screen(dt);
+        self.update_screen_movie();
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
@@ -6442,6 +6524,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         };
         app.placement = Mat4::from_translation(Vec3::Y * args.lift) * app.placement;
         camera = camera_around(app.placement, args.orbit, args.distance, args.camera_height);
+        // (An explicit camera still wins.)
+        if let Some(c) = args.camera {
+            camera = c;
+        }
         app.model.character.map_image = loaded
             .minimap
             .as_ref()
@@ -6476,6 +6562,11 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 for _ in 0..30 {
                     app.update_screen(1.0 / 60.0);
                 }
+            }
+            // A second of the screen's movie (it keeps its own time).
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(33));
+                app.update_screen_movie();
             }
             if let Some(level) = &app.level {
                 println!("menu: song {:?}", app.menu_track.as_ref().map(|(t, _)| t));
