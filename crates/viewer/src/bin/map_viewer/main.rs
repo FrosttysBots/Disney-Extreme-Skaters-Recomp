@@ -1502,7 +1502,8 @@ struct GoalRun {
 /// A Skatetris goal going: the tricks on the list (each its trick in the
 /// character's book and its element on the game's screen), the next slot
 /// from the goal's list, how long till the next joins, the time between
-/// them now, and the tricks of the skater's combo already counted.
+/// them now, and the skater's combos already counted (a trick counts once
+/// its combo's landed, not bailed).
 struct TetrisRun {
     rules: desa_viewer::goals::Tetris,
     list: Vec<(usize, u32)>,
@@ -1510,7 +1511,7 @@ struct TetrisRun {
     until: f32,
     interval: f32,
     since_faster: f32,
-    seen: usize,
+    combos: u32,
     made: u32,
     /// Lost (the list full), or won (none left once no more come).
     lost: bool,
@@ -1526,7 +1527,7 @@ impl TetrisRun {
             list: Vec::new(),
             next: 0,
             since_faster: 0.0,
-            seen: 0,
+            combos: u32::MAX,
             made: 0,
             lost: false,
             won: false,
@@ -1547,13 +1548,19 @@ impl TetrisRun {
     ) {
         use qb::{Value, checksum};
         let s = |k: &str| Some(checksum(k));
-        // Tricks done: the combo's new ones, each taking the first of its
-        // kind off the list.
-        let tricks = &skater.combo_tricks.tricks;
-        if tricks.len() < self.seen {
-            self.seen = 0;
+        // Tricks done: a combo landed, each of its tricks taking the
+        // first of its kind off the list.
+        if self.combos == u32::MAX {
+            self.combos = skater.combos_ended;
         }
-        for done in &tricks[self.seen..] {
+        let landed = match &skater.last_combo {
+            Some(last) if skater.combos_ended != self.combos && !last.bailed => {
+                last.combo.tricks.clone()
+            }
+            _ => Vec::new(),
+        };
+        self.combos = skater.combos_ended;
+        for done in &landed {
             let found = self.list.iter().position(|&(trick, _)| {
                 skater
                     .tricks
@@ -1583,7 +1590,6 @@ impl TetrisRun {
                 ));
             }
         }
-        self.seen = tricks.len();
         // Coming faster.
         self.since_faster += dt;
         if self.since_faster >= self.rules.acceleration_interval {
