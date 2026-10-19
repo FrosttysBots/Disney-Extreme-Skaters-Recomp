@@ -1828,6 +1828,9 @@ struct App<'a> {
     cutscene_request: Option<u32>,
     /// The skater select's choice last followed (`disney_skater`).
     shop_skater: Option<i32>,
+    /// The song the game's menus play (the skater select's theme for the
+    /// character), by name, and whether it's started.
+    menu_track: Option<(String, bool)>,
     /// Whether the camera path playing is one the level's scripts asked
     /// for (theirs to stop).
     script_cutscene: bool,
@@ -2031,6 +2034,7 @@ impl<'a> App<'a> {
             lines_to_say: Vec::new(),
             cutscene: false,
             shop_skater: None,
+            menu_track: None,
             script_cutscene: false,
             cutscene_request: None,
             goal_won: None,
@@ -2508,6 +2512,20 @@ impl<'a> App<'a> {
                         self.now_playing = Some((title.clone(), Instant::now()));
                         break;
                     }
+                }
+            }
+        } else if let Some((name, started)) = self
+            .menu_track
+            .as_mut()
+            .filter(|_| !skating && self.model.character.music)
+        {
+            // The menus' song, over and over (a new one in place of the
+            // last).
+            if !*started || audio.music_finished() {
+                *started = true;
+                match data.music(name) {
+                    Ok(Some(track)) => audio.play_music(track),
+                    _ => audio.stop_music(),
                 }
             }
         } else {
@@ -4749,6 +4767,8 @@ impl<'a> App<'a> {
         let Some(level) = &self.level else { return };
         if !level.id.eq_ignore_ascii_case("SkateShop") {
             self.shop_skater = None;
+            // (And its song stops: the menus' are the shop's.)
+            self.menu_track = None;
             return;
         }
         let program = level.behaviour.program();
@@ -4808,6 +4828,10 @@ impl<'a> App<'a> {
             return;
         };
         screen.screen.update(level.behaviour.program(), dt);
+        // The song they ask for.
+        if let Some(track) = screen.screen.music.take() {
+            self.menu_track = track.map(|t| (t, false));
+        }
         // The menus' rumbles (the Controls menu's test), with it on.
         for (strong, level) in std::mem::take(&mut screen.screen.vibrations) {
             if let (Some(gilrs), true) = (self.gamepads.as_mut(), self.model.character.rumble) {
@@ -6441,6 +6465,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 }
             }
             if let Some(level) = &app.level {
+                println!("menu: song {:?}", app.menu_track.as_ref().map(|(t, _)| t));
                 println!(
                     "menu: character {:?}, level {}",
                     app.model

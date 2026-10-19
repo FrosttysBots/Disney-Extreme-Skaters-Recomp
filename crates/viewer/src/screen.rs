@@ -259,6 +259,10 @@ pub struct Screen {
     /// Rumbles the menus asked for (`VibrateController`: the Controls
     /// menu's test): the strong motor or not, and how hard.
     pub vibrations: Vec<(bool, f32)>,
+    /// The song the menus asked for, as its file's name (`AddMusicTrack
+    /// "music\Jessie"`: the skater select's character theme), or none
+    /// (`StopMusic`), when they've asked since the viewer last looked.
+    pub music: Option<Option<String>>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -307,6 +311,7 @@ impl Screen {
             volumes_changed: false,
             rumble: true,
             vibrations: Vec::new(),
+            music: None,
             rumble_changed: false,
             stopping: Vec::new(),
         }
@@ -1842,6 +1847,24 @@ impl Host for Ui<'_> {
         } else if name == c("HawkControlsIsOn") {
             // (The full controls are the only ones: Simplified isn't done.)
             return Outcome::Done(true);
+        } else if name == c("AddMusicTrack") {
+            let track = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::String(t) | Value::LocalString(t)) => Some(t.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(track) = track {
+                let name = track
+                    .rsplit(['\\', '/'])
+                    .next()
+                    .unwrap_or(&track)
+                    .to_string();
+                s.music = Some(Some(name));
+            }
+        } else if name == c("StopMusic") || name == c("ClearMusicTrackList") {
+            s.music = Some(None);
         } else if name == c("VibrateController") {
             // `Actuator = 1 percent = 70`: that motor at that strength
             // (1 the strong one), for the viewer to rumble; 0 stops it.
