@@ -92,14 +92,32 @@ fn real_goal_scripts() {
             let breakables = desa_viewer::triggers::breakables(&nodes, first.program());
             let mut breakables: Vec<_> = breakables.into_iter().collect();
             breakables.sort_by_key(|(object, _)| *object);
-            for (object, (script, ..)) in breakables {
+            for (object, (script, ..)) in &breakables {
+                let there = shown
+                    .get(object)
+                    .copied()
+                    .unwrap_or(!nodes.hidden_sectors.contains(object));
+                if there {
+                    b.run_level_script(*script, Vec::new());
+                    run(&mut b, 2);
+                }
+            }
+            // And the other trigger faces that are there touched (as the
+            // viewer runs them: Pizza's stools).
+            shown.extend(b.other_creates.drain(..));
+            let teleports = desa_viewer::triggers::teleports(&nodes, first.program());
+            let gaps = desa_viewer::triggers::gaps(&nodes, first.program());
+            for &(object, script) in &nodes.geometry_scripts {
+                let other = !teleports.contains_key(&object)
+                    && !gaps.contains_key(&object)
+                    && !breakables.iter().any(|(o, _)| *o == object);
                 let there = shown
                     .get(&object)
                     .copied()
                     .unwrap_or(!nodes.hidden_sectors.contains(&object));
-                if there {
+                if other && there {
                     b.run_level_script(script, Vec::new());
-                    run(&mut b, 2);
+                    run(&mut b, 20);
                 }
             }
             // (Something that moves off, herded, is followed till it
@@ -173,9 +191,11 @@ fn real_goal_scripts() {
         }
     }
     println!("done by going near things: {done:?}");
+    println!("{} done in all", done.len() + gapped.len());
     if std::env::var("GOAL").is_ok() {
         return;
     }
+    assert!(done.len() + gapped.len() >= 33);
     println!("then by landing every gap: {gapped:?}");
     for goal in [
         "camp Gaps3",
