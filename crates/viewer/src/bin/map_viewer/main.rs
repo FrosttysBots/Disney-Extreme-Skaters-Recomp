@@ -4881,6 +4881,34 @@ impl<'a> App<'a> {
             .value(c("disney_skater"))
             .and_then(qb::Value::as_int)
             .unwrap_or(-1);
+        // On the stage while the skater select's up (where the game's
+        // stage characters stand, `TRG_Ped_Jessie` and the rest), else
+        // where the shop has the character.
+        let selecting = self
+            .screen
+            .as_ref()
+            .is_some_and(|s| s.screen.exists("select_skater_anchor"));
+        let stage = skaters
+            .get(usize::try_from(now).unwrap_or(0))
+            .and_then(|s| s.get(c("id")))
+            .and_then(qb::Value::as_name)
+            .and_then(|id| level.nodes.nodes.iter().find(|n| n.name == id))
+            .and_then(|n| {
+                // Facing the stage's camera (`Camera_stage`, which ends in
+                // front of the stage): the node's heading turned as the
+                // spawn points' are (`Spawn::facing`), the other way from
+                // `ObjectNode::rotation`, which had the character's back
+                // to it.
+                let turn = Quat::from_rotation_y(n.heading);
+                Some(Mat4::from_rotation_translation(turn, n.position?))
+            });
+        let placement = match (selecting, stage) {
+            (true, Some(stage)) => stage,
+            _ => level.home,
+        };
+        if self.skating.is_none() {
+            self.placement = placement;
+        }
         // Not set yet: the character the viewer has.
         if now < 0 || name_of(now).is_none() {
             let index =
@@ -4916,6 +4944,17 @@ impl<'a> App<'a> {
             return;
         };
         screen.screen.update(level.behaviour.program(), dt);
+        // The camera path they play (held at its end, as the free camera).
+        if let Some(path) = screen.screen.camera.take() {
+            let index = level
+                .camera_paths
+                .iter()
+                .position(|(name, _)| qb::checksum(name) == path);
+            if let Some(index) = index {
+                self.model.camera_paths.playing = Some(index);
+                self.model.camera_paths.time = 0.0;
+            }
+        }
         // The song they ask for.
         if let Some(track) = screen.screen.music.take() {
             // (Stopped: at once, the soundtrack on after.)
@@ -6567,6 +6606,17 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             for _ in 0..30 {
                 std::thread::sleep(std::time::Duration::from_millis(33));
                 app.update_screen_movie();
+            }
+            // The camera path the menus play, at its end (held there), for
+            // the picture (unless --camera).
+            if let (Some(index), Some(level)) = (app.model.camera_paths.playing, &mut app.level) {
+                if let Some((name, path)) = level.camera_paths.get(index) {
+                    let end = path_camera(path, path_length(path));
+                    println!("menu: camera {name} ends at {:.0}", end.position);
+                    if args.camera.is_none() {
+                        level.renderer.scripted_camera = Some(end);
+                    }
+                }
             }
             if let Some(level) = &app.level {
                 println!("menu: song {:?}", app.menu_track.as_ref().map(|(t, _)| t));

@@ -267,6 +267,9 @@ pub struct Screen {
     /// mesh = moviescreen loop`: the skater select's character clip), by
     /// its file's name and whether it loops; or none (`StopMovie`).
     pub screen_movie: Option<Option<(String, bool)>>,
+    /// A camera path the menus play (`playskaterCamAnim Name =
+    /// Camera_stage play_hold`: the skater select's view of the stage).
+    pub camera: Option<u32>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -317,6 +320,7 @@ impl Screen {
             vibrations: Vec::new(),
             music: None,
             screen_movie: None,
+            camera: None,
             rumble_changed: false,
             stopping: Vec::new(),
         }
@@ -2045,6 +2049,13 @@ impl Host for Ui<'_> {
                 }
             }
             return Outcome::Done(true);
+        } else if name == c("PlaySkaterCamAnim") {
+            if let (Some(path), false) = (
+                named("Name").and_then(|v| v.as_name()),
+                props.has_flag(c("STOP")),
+            ) {
+                s.camera = Some(path);
+            }
         } else if name == c("SkaterCamAnimFinished") {
             return Outcome::Done(true);
         } else if name == c("GetSkaterProfileInfo") {

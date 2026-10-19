@@ -137,6 +137,8 @@ pub struct PathNode {
     /// Run by what reaches it along a path (`SpawnObjScript`: Zurg's UFO
     /// speeding up for the launch).
     pub spawn_script: Option<u32>,
+    /// Its heading (`Angles` y, radians), as `ObjectNode::heading`.
+    pub heading: f32,
 }
 
 impl ObjectNode {
@@ -282,6 +284,10 @@ impl LevelNodes {
                         .filter(|&l| l < nodes.len())
                         .collect(),
                     spawn_script: node.get(key("SpawnObjScript")).and_then(Value::as_name),
+                    heading: node
+                        .get(key("Angles"))
+                        .and_then(Value::as_vector)
+                        .map_or(0.0, |a| a[1]),
                 })
                 .collect(),
             ..LevelNodes::default()
