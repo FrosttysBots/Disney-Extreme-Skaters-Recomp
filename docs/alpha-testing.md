@@ -145,12 +145,22 @@ skater is and what it's doing.
   with the game's own speech boxes, counters and cutscenes.
 - Skatetris (Pizza Planet's "Perform requested AIR tricks!"): tricks join
   the list on the right; land one to take it off, before the list fills.
+- Goals worth a try in play (the automatic checks can't time them):
+  Hub's lighthouse (grind three laps round the top; the balance needs
+  minding, and falling to the gallery ends it), the Graveyard's Free
+  Zazu (jump at the cage: each try puts you back on the ramp, three hits
+  free him), Beach's Trap Clayton (drop the cage as he walks under it).
+- Hecklers knock you down if you skate into them (Scar in Pride Rock,
+  the hyenas, Clayton), and so do Zurg's missiles once he's on his
+  platform.
 
 ## Known differences from the game
 
-- Not yet: the Simplified controls, the game's skater select, a few goals
-  that need things the viewer can't do yet (Hub's lighthouse minigame lap
-  counter needs real laps, Zurg's UFO launch), and two players.
+- Not yet: the Simplified controls, the game's skater select, Zurg's UFO
+  launch, and two players.
+- Scripts that swap a texture (Pizza's arcade screens flickering,
+  Tarzan's animated sign) don't: the disc's textures aren't named the
+  way the scripts name them.
 - Wallrides have no animation of their own (the characters on the disc
   have none): the skater leans off the wall instead.
 - Approximations of our own: the camera follows the game's camera
