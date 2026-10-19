@@ -184,6 +184,9 @@ fn real_goal_scripts() {
         "graveyard Trickspot",
         "HUB Gaps2",
         "PrideRock Gaps",
+        "camp Collect",
+        "canyon Gaps3",
+        "ToyStory_Bedroom Trickspot",
     ] {
         assert!(gapped.contains(&goal.to_string()), "{goal}");
     }
@@ -199,6 +202,10 @@ fn real_goal_scripts() {
         "HUB Collect",
         "beach Counter3",
         "camp Counter",
+        "beach Counter2",
+        "HUB Collect2",
+        "HUB Counter",
+        "PrideRock Collect",
     ] {
         assert!(done.contains(&goal.to_string()), "{goal}");
     }

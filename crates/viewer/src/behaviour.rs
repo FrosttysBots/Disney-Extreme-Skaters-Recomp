@@ -309,6 +309,14 @@ impl Behaviour {
             .enumerate()
             .filter(|(_, o)| o.created_at_start)
             .filter_map(|(i, o)| Some((i, Thread::new(o.script?, Vec::new()))))
+            .chain(
+                nodes
+                    .movers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.created_at_start)
+                    .filter_map(|(i, m)| Some((movers + i, Thread::new(m.script?, Vec::new())))),
+            )
             .collect();
         Behaviour {
             program,
@@ -360,7 +368,7 @@ impl Behaviour {
                 .objects
                 .iter()
                 .map(|o| o.script)
-                .chain(nodes.movers.iter().map(|_| None))
+                .chain(nodes.movers.iter().map(|m| m.script))
                 .chain(nodes.bouncies.iter().map(|_| None))
                 .chain([None])
                 .collect(),

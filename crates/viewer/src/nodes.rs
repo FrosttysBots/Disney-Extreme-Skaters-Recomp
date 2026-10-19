@@ -183,6 +183,9 @@ pub struct Mover {
     pub position: Vec3,
     pub heading: f32,
     pub created_at_start: bool,
+    /// What it runs while it's there (`TriggerScript`: Hub's sodas spin
+    /// and wait to be got).
+    pub script: Option<u32>,
 }
 
 impl Mover {
@@ -320,6 +323,7 @@ impl LevelNodes {
                                     .and_then(Value::as_vector)
                                     .map_or(0.0, |a| a[1]),
                                 created_at_start: node.has_flag(key("CreatedAtStart")),
+                                script: node.get(key("TriggerScript")).and_then(Value::as_name),
                             });
                         }
                     }
