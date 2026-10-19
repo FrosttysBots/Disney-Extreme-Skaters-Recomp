@@ -272,6 +272,11 @@ impl Audio {
         seconds
     }
 
+    /// Cuts the line being said off.
+    pub fn stop_line(&mut self) {
+        self.voice = None;
+    }
+
     /// The panel's volumes, 0 to 1: the effects and the music (playing
     /// ones follow at once).
     pub fn set_volumes(&mut self, effects: f32, music: f32) {

@@ -248,6 +248,8 @@ pub struct Behaviour {
     /// Whether voice lines are being said (the viewer with sound): only
     /// then do scripts wait on them.
     pub voices_heard: bool,
+    /// The line being said cut off (`Obj_StopStream`, `StopStream`).
+    pub stop_voice: bool,
     /// A movie asked for on the level's screen (Hub's `playmovie ... mesh
     /// = moviescreen`), or none (`StopMovie`), as the screen's.
     pub screen_movie: Option<Option<(String, bool)>>,
@@ -478,6 +480,7 @@ impl Behaviour {
             knock_down: false,
             voice_until: 0.0,
             voices_heard: false,
+            stop_voice: false,
             screen_movie: None,
             skater_restart: None,
             skater_hidden: false,
@@ -1834,6 +1837,9 @@ impl Host for Commands<'_> {
                 *b.unknown.entry(name).or_default() += 1;
                 return Outcome::Done(false);
             }
+        } else if name == c("Obj_StopStream") || name == c("StopStream") {
+            b.stop_voice = true;
+            b.voice_until = b.now;
         } else if name == c("Obj_WaitStreamFinished") {
             // Till the line being said is over (the one line at a time
             // the viewer says).

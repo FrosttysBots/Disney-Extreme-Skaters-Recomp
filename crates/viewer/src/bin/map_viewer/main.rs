@@ -2301,6 +2301,12 @@ impl<'a> App<'a> {
         let heard = self.audio.is_some() && self.model.character.sound;
         if let Some(level) = &mut self.level {
             level.behaviour.voices_heard = heard;
+            // (Cut off by the scripts, unless a new one's said after.)
+            if std::mem::take(&mut level.behaviour.stop_voice) {
+                if let Some(audio) = &mut self.audio {
+                    audio.stop_line();
+                }
+            }
             self.lines_to_say
                 .extend(std::mem::take(&mut level.behaviour.voice_lines));
         }
