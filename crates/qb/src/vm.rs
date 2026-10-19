@@ -703,6 +703,31 @@ impl Thread {
             }
             return false;
         }
+        // Built in: a parameter taken away (`RemoveComponent Name =
+        // ObjectDistance`, `RemoveParameter is_hidden`).
+        if target.is_none()
+            && (name == checksum("RemoveComponent") || name == checksum("RemoveParameter"))
+        {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let gone = args
+                .get(checksum("Name"))
+                .and_then(Value::as_name)
+                .or_else(|| {
+                    items.iter().find_map(|(k, v)| match (k, v) {
+                        (None, Value::Name(n)) => Some(*n),
+                        _ => None,
+                    })
+                });
+            if let Some(gone) = gone {
+                let frame = self.frames.last_mut().unwrap();
+                frame
+                    .params
+                    .retain(|(k, v)| *k != Some(gone) && !(k.is_none() && *v == Value::Name(gone)));
+            }
+            return true;
+        }
         // Built in: whether the script was given a parameter, and the
         // object's tags.
         if target.is_none() && name == checksum("GotParam") {

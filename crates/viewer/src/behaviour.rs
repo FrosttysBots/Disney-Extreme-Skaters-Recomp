@@ -1214,7 +1214,15 @@ impl Behaviour {
                 self.goal_lost = true;
                 return Some(Outcome::Done(true));
             }
-            let gone = self.side_goals.remove(&id)?;
+            // (One that's not on: nothing to do, as in the game. Zurg's
+            // height minigame deactivates its own every frame on the
+            // ground.)
+            let Some(gone) = self.side_goals.remove(&id) else {
+                return self
+                    .goal_defs
+                    .contains_key(&id)
+                    .then_some(Outcome::Done(true));
+            };
             let deactivate = gone
                 .params
                 .iter()
