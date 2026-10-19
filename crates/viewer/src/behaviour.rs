@@ -1569,7 +1569,7 @@ impl Host for Commands<'_> {
                     b.starting.push((on, Thread::new(script, params)));
                 }
             }
-        } else if name == c("Obj_SetException") {
+        } else if name == c("Obj_SetException") || name == c("SetException") {
             // (Its event by name, or a number that `SendException` sends.)
             let ex =
                 named("ex").or_else(|| args.get(c("ex")).and_then(Value::as_int).map(|i| i as u32));
