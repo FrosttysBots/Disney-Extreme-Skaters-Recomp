@@ -157,6 +157,11 @@ struct Args {
     /// whatever it shows (a goal's speech box)
     #[arg(long, requires = "skate", default_value = "")]
     pause_keys: String,
+    /// For --screenshot in the Skate Shop with --character: the game's
+    /// main menu, given these presses in order (u d l r up down left
+    /// right, c choose, b back, w wait): its skater select, say.
+    #[arg(long, requires = "character", default_value = "")]
+    menu_keys: String,
     /// For --skate: play another of the level's goals from its own
     /// scripts, by its type (`Gaps`, `Gaps2`...)
     #[arg(long, requires = "skate")]
@@ -1158,8 +1163,6 @@ impl ScreenUi {
         // choices whose screens need the career's profiles.
         screen.listen(&[
             "unpausegame",
-            "preview_skater_menu",
-            "launch_select_skater_menu",
             "start_2p",
             "launch_options_menu_load_game_sequence",
             "launch_options_menu_save_game_sequence",
@@ -1823,6 +1826,8 @@ struct App<'a> {
     /// skipped), the one asked for next, and the goal on's success path.
     cutscene: bool,
     cutscene_request: Option<u32>,
+    /// The skater select's choice last followed (`disney_skater`).
+    shop_skater: Option<i32>,
     /// Whether the camera path playing is one the level's scripts asked
     /// for (theirs to stop).
     script_cutscene: bool,
@@ -2025,6 +2030,7 @@ impl<'a> App<'a> {
             goal_streams: None,
             lines_to_say: Vec::new(),
             cutscene: false,
+            shop_skater: None,
             script_cutscene: false,
             cutscene_request: None,
             goal_won: None,
@@ -4735,10 +4741,69 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The game's skater select (in the Skate Shop) and the character
+    /// shown: it starts on the one the viewer has (`disney_skater`, the
+    /// `skater_select_array` index, which the game keeps), and the one it
+    /// moves to is loaded to stand on the stage.
+    fn follow_skater_select(&mut self) {
+        let Some(level) = &self.level else { return };
+        if !level.id.eq_ignore_ascii_case("SkateShop") {
+            self.shop_skater = None;
+            return;
+        }
+        let program = level.behaviour.program();
+        let c = qb::checksum;
+        let Some(qb::Value::Array(skaters)) = program.value(c("skater_select_array")).cloned()
+        else {
+            return;
+        };
+        let name_of = |i: i32| {
+            skaters
+                .get(usize::try_from(i).ok()?)?
+                .get(c("Name"))
+                .and_then(qb::Value::as_name)
+        };
+        let current = self
+            .model
+            .character
+            .current
+            .and_then(|i| self.model.character.characters.get(i))
+            .map(|ch| c(&ch.id));
+        let now = program
+            .value(c("disney_skater"))
+            .and_then(qb::Value::as_int)
+            .unwrap_or(-1);
+        // Not set yet: the character the viewer has.
+        if now < 0 || name_of(now).is_none() {
+            let index =
+                (0..skaters.len() as i32).find(|&i| name_of(i).is_some() && name_of(i) == current);
+            if let Some(index) = index {
+                program.change(c("disney_skater"), qb::Value::Integer(index));
+                self.shop_skater = Some(index);
+            }
+            return;
+        }
+        if self.shop_skater == Some(now) {
+            return;
+        }
+        self.shop_skater = Some(now);
+        let wanted = name_of(now).filter(|n| Some(*n) != current).and_then(|n| {
+            self.model
+                .character
+                .characters
+                .iter()
+                .position(|ch| c(&ch.id) == n)
+        });
+        if let Some(index) = wanted {
+            self.load_character(Some(index));
+        }
+    }
+
     /// The game's menus run on: their scripts (with the level's), sounds,
     /// and what they ask of the viewer (`unpausegame`: resume).
     fn update_screen(&mut self, dt: f32) {
         self.menu_pad();
+        self.follow_skater_select();
         let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
             return;
         };
@@ -4847,29 +4912,6 @@ impl<'a> App<'a> {
                 if let Some(screen) = &mut self.screen {
                     screen.screen.destroy_id("pause_menu");
                     screen.screen.destroy_id("current_menu_anchor");
-                }
-            } else if name == c("preview_skater_menu") || name == c("launch_select_skater_menu") {
-                // Play Game: skating in the Hub, as the career starts.
-                // Free Skate: on the level last skated.
-                let level = if name == c("preview_skater_menu") {
-                    "HUB".to_string()
-                } else {
-                    self.settings
-                        .last_skated
-                        .clone()
-                        .unwrap_or_else(|| "HUB".into())
-                };
-                if let Some(screen) = &mut self.screen {
-                    screen.screen.clear();
-                }
-                if let Some(i) = self
-                    .model
-                    .levels
-                    .iter()
-                    .position(|l| l.id.eq_ignore_ascii_case(&level))
-                {
-                    self.skate_on_load = true;
-                    self.start_load(i);
                 }
             } else {
                 // Saving, loading and two players aren't the viewer's.
@@ -6329,7 +6371,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
 
     if let Some(id) = &args.character {
         app.model.character.characters = data.characters();
-        if args.skate > 0.0 {
+        if args.skate > 0.0 || !args.menu_keys.is_empty() {
             app.screen = ScreenUi::load(&mut data);
         }
         app.data = Some(data);
@@ -6362,6 +6404,48 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             .as_ref()
             .map(|m| egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels));
         app.level = Some(loaded);
+        // The game's main menu, and the presses given it.
+        if !args.menu_keys.is_empty() {
+            if let (Some(screen), Some(level)) = (&mut app.screen, &app.level) {
+                screen.screen.level = Some(qb::checksum(&format!("load_{}", level.id)));
+                screen
+                    .screen
+                    .run(qb::checksum("launch_main_menu"), Vec::new());
+            }
+            for _ in 0..60 {
+                app.update_screen(1.0 / 60.0);
+            }
+            for key in args.menu_keys.chars() {
+                use desa_viewer::screen::Pad;
+                let pad = match key {
+                    'u' => Some(Pad::Up),
+                    'd' => Some(Pad::Down),
+                    'l' => Some(Pad::Left),
+                    'r' => Some(Pad::Right),
+                    'c' => Some(Pad::Choose),
+                    'b' => Some(Pad::Back),
+                    'w' => None,
+                    _ => continue,
+                };
+                if let (Some(pad), Some(screen)) = (pad, &mut app.screen) {
+                    screen.screen.pad(pad);
+                }
+                for _ in 0..30 {
+                    app.update_screen(1.0 / 60.0);
+                }
+            }
+            if let Some(level) = &app.level {
+                println!(
+                    "menu: character {:?}, level {}",
+                    app.model
+                        .character
+                        .current
+                        .and_then(|i| app.model.character.characters.get(i))
+                        .map(|c| c.id.clone()),
+                    level.id
+                );
+            }
+        }
         if args.skate > 0.0 {
             if let Some(from) = &args.skate_from {
                 let v: Vec<f32> = from

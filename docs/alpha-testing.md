@@ -13,6 +13,11 @@ character. This page is for anyone trying it out.
 3. Press **Skate**. AutoKick is on: the skater pushes by itself (untick
    it to push with W yourself).
 
+Or go the game's way: its main menu in the Skate Shop (Play Game or Free
+Skate), then its skater select (left and right change the character
+standing in the shop, with their stats; Enter picks), then its level
+select.
+
 ## Controls
 
 | Keyboard | Gamepad | What it does |
@@ -156,8 +161,9 @@ skater is and what it's doing.
 
 ## Known differences from the game
 
-- Not yet: the Simplified controls, the game's skater select, Zurg's UFO
-  launch, and two players.
+- Not yet: the Simplified controls, creating a kid, Zurg's UFO launch,
+  and two players. Every character can be picked, where the career
+  unlocks some as goals are won.
 - Scripts that swap a texture (Pizza's arcade screens flickering,
   a piece of Tarzan's Treehouse cycling five frames) don't: the disc's textures aren't named the
   way the scripts name them.

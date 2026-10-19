@@ -353,3 +353,43 @@ fn real_panel_message() {
     }
     println!("{}", screen.describe());
 }
+
+/// The skater select as the Skate Shop makes it (`launch_select_skater_menu`):
+/// what it puts up and what of it isn't understood yet.
+#[test]
+#[ignore = "needs the game data"]
+fn real_select_skater() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, images) = screen_from_disc(&mut data);
+    let shop = data.load_level("SkateShop").unwrap();
+    for file in &shop.scripts {
+        let _ = program.add(file);
+    }
+    screen.level = Some(qb::checksum("load_skateshop"));
+    // Jessie's the one chosen (`disney_skater` is the skater_select_array
+    // index; the game sets it before this).
+    program.change(qb::checksum("disney_skater"), qb::Value::Integer(7));
+    screen.character = Some("jessie".into());
+    screen.run(qb::checksum("launch_select_skater_menu"), Vec::new());
+    for _ in 0..90 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    let mut symbols = qb::Symbols::new();
+    for file in data.global_scripts().unwrap().iter().chain(&shop.scripts) {
+        if let Ok(t) = qb::tokenize(file) {
+            symbols.add_tokens(&t);
+        }
+    }
+    let mut unknown: Vec<_> = screen
+        .unknown
+        .iter()
+        .map(|(n, c)| (symbols.name(*n), *c))
+        .collect();
+    unknown.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    println!("unknown {unknown:?}");
+    println!("{}", screen.describe());
+    render(&screen, &images, "select_skater");
+    assert!(screen.exists("select_skater_anchor"));
+}

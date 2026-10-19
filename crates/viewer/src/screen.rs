@@ -1928,14 +1928,18 @@ impl Host for Ui<'_> {
                 });
             }
         } else if name == c("GetSkaterProfileInfoByName") {
-            // Another character's profile (the skater select's).
+            // Another character's profile (the skater select's), none of
+            // them hidden: the viewer lets every character skate, where
+            // the career unlocks some (`is_hidden` till a goal's won).
             let Some(Value::Struct(profile)) = named("Name")
                 .and_then(|v| v.as_name())
                 .and_then(|n| skate::constants::profile_named(self.program, n))
             else {
                 return Outcome::Done(false);
             };
-            return Outcome::Params(profile.clone());
+            let mut profile = profile.clone();
+            profile.retain(|(k, _)| *k != Some(c("is_hidden")));
+            return Outcome::Params(profile);
         } else if name == c("GetStatValue") {
             // `GetStatValue air skater = jessie`: a stat of that skater's
             // profile (or the one picked), as `stat_value`.

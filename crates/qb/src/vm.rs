@@ -41,6 +41,9 @@ pub struct Program {
     changed: std::sync::Mutex<HashMap<u32, &'static Value>>,
     /// The game's global flags set (`SetFlag flag = GOAL_DECK`).
     flags: std::sync::Mutex<std::collections::HashSet<u32>>,
+    /// The names the files' symbol tables give checksums, for text made
+    /// from one (`FormatText ... "stats_menu_names_%n" n = air`).
+    names: crate::Symbols,
 }
 
 impl Program {
@@ -51,6 +54,7 @@ impl Program {
     /// Adds a `.qb` file's scripts and values (later files win).
     pub fn add(&mut self, data: &[u8]) -> Result<()> {
         let tokens = tokenize(data)?;
+        self.names.add_tokens(&tokens);
         for def in parse_definitions(&tokens)? {
             match def {
                 Definition::Script {
@@ -797,11 +801,16 @@ impl Thread {
                     Some(Value::Integer(i)) => text.push_str(&i.to_string()),
                     Some(Value::Float(f)) => text.push_str(&f.to_string()),
                     Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
-                    Some(Value::Name(n)) => {
-                        if let Some(Value::String(s) | Value::LocalString(s)) = program.value(*n) {
-                            text.push_str(s);
-                        }
-                    }
+                    Some(Value::Name(n)) => match program.value(*n) {
+                        Some(Value::String(s) | Value::LocalString(s)) => text.push_str(s),
+                        // A name as itself (as the game's symbol table
+                        // gives it), else its checksum: either way, rows
+                        // named by it come out apart.
+                        _ => match program.names.get(*n) {
+                            Some(name) => text.push_str(name),
+                            None => text.push_str(&format!("{n:#010x}")),
+                        },
+                    },
                     _ => {}
                 }
             }
