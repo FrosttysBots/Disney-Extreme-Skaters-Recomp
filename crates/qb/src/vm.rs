@@ -39,6 +39,8 @@ pub struct Program {
     /// over the loaded ones. (Each new value is kept for good, so lookups
     /// can hand out references: the scripts change few, and rarely.)
     changed: std::sync::Mutex<HashMap<u32, &'static Value>>,
+    /// The game's global flags set (`SetFlag flag = GOAL_DECK`).
+    flags: std::sync::Mutex<std::collections::HashSet<u32>>,
 }
 
 impl Program {
@@ -634,6 +636,27 @@ impl Thread {
                 None => None,
             };
             return matches!((number("a"), number("b")), (Some(a), Some(b)) if a == b);
+        }
+        // Built in: the game's global flags (`SetFlag flag = X`,
+        // `UnSetFlag flag = X`, `GetFlag flag = X`). (An object's,
+        // `SetFlag X Name = obj`, aren't these: no `flag =`.)
+        if target.is_none()
+            && (name == checksum("SetFlag")
+                || name == checksum("UnSetFlag")
+                || name == checksum("GetFlag"))
+        {
+            if let Some(flag) = args.get(checksum("flag")).and_then(Value::as_name) {
+                if let Ok(mut flags) = program.flags.lock() {
+                    if name == checksum("GetFlag") {
+                        return flags.contains(&flag);
+                    } else if name == checksum("SetFlag") {
+                        flags.insert(flag);
+                    } else {
+                        flags.remove(&flag);
+                    }
+                }
+                return true;
+            }
         }
         // Built in: `change started_goal_id = <goal_ID>`, a global
         // changed.

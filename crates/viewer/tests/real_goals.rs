@@ -25,6 +25,9 @@ fn real_goal_scripts() {
     let sets = data.animation_sets().unwrap();
     let mut done = Vec::new();
     let mut gapped = Vec::new();
+    // What goals' scripts used that isn't understood (`UNKNOWN=1`).
+    let mut unknown: std::collections::HashMap<u32, usize> = Default::default();
+    let mut symbols = qb::Symbols::new();
     for level in data.levels() {
         let mut files = data.load_level(&level.id).unwrap();
         let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
@@ -33,6 +36,11 @@ fn real_goal_scripts() {
         data.add_animations(&mut files, &objects::needed_animations(&nodes, &sets))
             .unwrap();
         let mut objects = LevelObjects::build(&nodes, &files, &sets);
+        for file in &scripts {
+            if let Ok(t) = qb::tokenize(file) {
+                symbols.add_tokens(&t);
+            }
+        }
         let first = Behaviour::new(&nodes, &scripts);
         for goal in desa_viewer::goals::level_goals(first.program(), &level.id) {
             if ["HighScore", "ProScore", "Skate", "Race"].contains(&goal.kind.as_str()) {
@@ -190,6 +198,9 @@ fn real_goal_scripts() {
                 run(&mut b, 120);
             }
             run(&mut b, 300);
+            for (name, count) in &b.unknown {
+                *unknown.entry(*name).or_default() += count;
+            }
             if g.needed > 0 && b.goal_progress() >= g.needed && near < g.needed {
                 gapped.push(format!("{} {}", level.id, goal.kind));
             }
@@ -205,6 +216,13 @@ fn real_goal_scripts() {
             if g.needed > 0 && near >= g.needed {
                 done.push(format!("{} {}", level.id, goal.kind));
             }
+        }
+    }
+    if std::env::var("UNKNOWN").is_ok() {
+        let mut list: Vec<_> = unknown.iter().collect();
+        list.sort_by_key(|(_, c)| std::cmp::Reverse(**c));
+        for (name, count) in list.iter().take(40) {
+            println!("unknown {count:6} {}", symbols.name(**name));
         }
     }
     println!("done by going near things: {done:?}");

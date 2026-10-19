@@ -212,6 +212,11 @@ pub struct Behaviour {
     pub goal_params: Params,
     /// Lost by its scripts (`GoalManager_LoseGoal`, or deactivated).
     pub goal_lost: bool,
+    /// Scripts to stop once this frame's have run: those spawned by name
+    /// (`KillSpawnedScript Name = x`), and every one of an object's
+    /// (`TerminateObjectsScripts id = obj`).
+    killing: Vec<u32>,
+    terminating: Vec<usize>,
     /// Every goal the level's set-up added (`GoalManager_AddGoal`): its
     /// parameters, by its id; the ids made with the level's prefix
     /// (`GoalManager_CreateGoalName`).
@@ -408,6 +413,8 @@ impl Behaviour {
             goal_won: false,
             goal_params: Vec::new(),
             goal_lost: false,
+            killing: Vec::new(),
+            terminating: Vec::new(),
             goal_defs: HashMap::new(),
             goal_prefix: String::new(),
             side_goals: HashMap::new(),
@@ -829,6 +836,18 @@ impl Behaviour {
         // Scripts started meanwhile (by `create`) join in, and those of
         // objects gone stop.
         threads.retain(|(o, _)| self.states[*o].alive);
+        let (killing, terminating) = (
+            std::mem::take(&mut self.killing),
+            std::mem::take(&mut self.terminating),
+        );
+        if !killing.is_empty() || !terminating.is_empty() {
+            let stopped = |o: &usize, t: &Thread| {
+                terminating.contains(o) || t.script().is_some_and(|s| killing.contains(&s))
+            };
+            threads.retain(|(o, t)| !stopped(o, t));
+            self.spawning.retain(|(o, t)| !stopped(o, t));
+            self.starting.retain(|(o, t)| !stopped(o, t));
+        }
         self.threads = threads;
         for (i, thread) in std::mem::take(&mut self.starting) {
             self.start(i, thread);
@@ -1550,6 +1569,27 @@ impl Host for Commands<'_> {
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
             }
+        } else if name == c("KillSpawnedScript") {
+            if let Some(script) = named("Name") {
+                b.killing.push(script);
+            }
+        } else if name == c("TerminateObjectsScripts") {
+            if let Some(o) = named("id").and_then(|n| b.object_named(n)) {
+                b.terminating.push(o);
+            }
+        } else if name == c("Obj_GetID") {
+            // Its own name, as `objId`.
+            let id = b
+                .by_name
+                .iter()
+                .find(|(_, o)| **o == object)
+                .map(|(n, _)| *n);
+            return match id {
+                Some(id) => Outcome::Params(vec![(Some(c("objId")), Value::Name(id))]),
+                None => Outcome::Done(false),
+            };
+        } else if name == c("GetSkaterId") {
+            return Outcome::Params(vec![(Some(c("objId")), Value::Name(c("skater")))]);
         } else if name == c("obj_applyscaling") {
             if let Some(k) = args.get(c("scale")).and_then(Value::as_f32) {
                 b.states[object].scale = k;
