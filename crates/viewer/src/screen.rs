@@ -240,6 +240,9 @@ pub struct Screen {
     /// The music and effects volumes as the sound options show them, 0
     /// to 10 (`GetValueFromVolume cdvol`, `sfxvol`), and whether the
     /// menu's changed them (`SetMusicVolume`, `SetSfxVolume`).
+    /// Every level's goals won and gaps landed so far (by its
+    /// `load_<level>` checksum), for the level select and Game Progress.
+    pub progress: HashMap<u32, (i32, i32)>,
     pub music_level: i32,
     pub sound_level: i32,
     pub volumes_changed: bool,
@@ -283,6 +286,7 @@ impl Screen {
             character: None,
             gaps: Vec::new(),
             goal_list: Vec::new(),
+            progress: HashMap::new(),
             music_level: 10,
             sound_level: 10,
             volumes_changed: false,
@@ -1796,11 +1800,15 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             let here = level.is_some() && level == s.level;
+            let saved = level
+                .and_then(|l| s.progress.get(&l))
+                .copied()
+                .unwrap_or((0, 0));
             if name == c("GetLevelGapTotals") {
                 let landed = if here {
                     s.gaps.iter().filter(|(_, _, times)| *times > 0).count() as i32
                 } else {
-                    0
+                    saved.1
                 };
                 return Outcome::Params(vec![(
                     Some(c("num_collected_gaps")),
@@ -1810,7 +1818,7 @@ impl Host for Ui<'_> {
             let beaten = if here {
                 s.goal_list.iter().filter(|(_, _, won)| *won).count() as i32
             } else {
-                0
+                saved.0
             };
             return Outcome::Params(vec![(Some(c("num_beaten")), Value::Integer(beaten))]);
         } else if name == c("GoalManager_HasWonGoal") {

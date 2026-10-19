@@ -4089,6 +4089,37 @@ impl<'a> App<'a> {
                 self.settings.best.contains_key(&format!("won.{id:08x}"))
             })
             .collect();
+        // How many, kept for the level's count elsewhere (the level select).
+        let won = self
+            .model
+            .character
+            .goals_won
+            .iter()
+            .filter(|w| **w)
+            .count() as u32;
+        let key = format!("goals_won.{}", level.id.to_ascii_lowercase());
+        if self.settings.best.get(&key) != Some(&won) {
+            self.settings.best.insert(key, won);
+            self.settings.save();
+        }
+        // Every level's, for the game's screens.
+        if let Some(screen) = &mut self.screen {
+            screen.screen.progress = self
+                .model
+                .levels
+                .iter()
+                .map(|l| {
+                    let won = self
+                        .settings
+                        .best
+                        .get(&format!("goals_won.{}", l.id.to_ascii_lowercase()))
+                        .copied()
+                        .unwrap_or(0) as i32;
+                    let gaps = self.settings.gaps.get(&l.id).map_or(0, |g| g.len()) as i32;
+                    (qb::checksum(&format!("load_{}", l.id)), (won, gaps))
+                })
+                .collect();
+        }
     }
 
     /// Each level's progress for the character shown, beside its name in
