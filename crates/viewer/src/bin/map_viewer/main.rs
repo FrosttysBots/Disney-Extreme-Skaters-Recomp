@@ -5666,7 +5666,13 @@ impl<'a> App<'a> {
                     .iter()
                     .map(|(n, _)| n.clone())
                     .collect();
-                model.animation = ["StandIdle", "Stage_Idle"]
+                // (On the shop's stage, its pose: `SkateStageAi`'s.)
+                let idles = if shop {
+                    ["Stage_Idle", "StandIdle"]
+                } else {
+                    ["StandIdle", "Stage_Idle"]
+                };
+                model.animation = idles
                     .iter()
                     .find_map(|name| character.animation(name))
                     .unwrap_or(0);
