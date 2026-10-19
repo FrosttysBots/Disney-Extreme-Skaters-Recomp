@@ -4808,6 +4808,12 @@ impl<'a> App<'a> {
             return;
         };
         screen.screen.update(level.behaviour.program(), dt);
+        // The menus' rumbles (the Controls menu's test), with it on.
+        for (strong, level) in std::mem::take(&mut screen.screen.vibrations) {
+            if let (Some(gilrs), true) = (self.gamepads.as_mut(), self.model.character.rumble) {
+                self.rumble.menu_pulse(gilrs, strong, level);
+            }
+        }
         // The pause menu's bar (`SlicePause_1`) fitted round its items:
         // the game's script scales it by a `paused_bar_scale` the disc
         // doesn't set, and at its own size the items run to its edges.

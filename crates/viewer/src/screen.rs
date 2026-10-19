@@ -256,6 +256,9 @@ pub struct Screen {
     /// (`VibrationIsOn`, `VibrationOn`, `VibrationOff`).
     pub rumble: bool,
     pub rumble_changed: bool,
+    /// Rumbles the menus asked for (`VibrateController`: the Controls
+    /// menu's test): the strong motor or not, and how hard.
+    pub vibrations: Vec<(bool, f32)>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -303,6 +306,7 @@ impl Screen {
             sound_level: 10,
             volumes_changed: false,
             rumble: true,
+            vibrations: Vec::new(),
             rumble_changed: false,
             stopping: Vec::new(),
         }
@@ -1838,6 +1842,14 @@ impl Host for Ui<'_> {
         } else if name == c("HawkControlsIsOn") {
             // (The full controls are the only ones: Simplified isn't done.)
             return Outcome::Done(true);
+        } else if name == c("VibrateController") {
+            // `Actuator = 1 percent = 70`: that motor at that strength
+            // (1 the strong one), for the viewer to rumble; 0 stops it.
+            let actuator = named("Actuator").and_then(|v| v.as_int()).unwrap_or(1);
+            let percent = named("percent").and_then(|v| v.as_f32()).unwrap_or(0.0);
+            if percent > 0.0 && s.vibrations.len() < 8 {
+                s.vibrations.push((actuator == 1, percent / 100.0));
+            }
         } else if name == c("VibrationIsOn") {
             return Outcome::Done(s.rumble);
         } else if name == c("VibrationOn") || name == c("VibrationOff") {
