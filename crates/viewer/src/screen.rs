@@ -270,6 +270,9 @@ pub struct Screen {
     /// A camera path the menus play (`playskaterCamAnim Name =
     /// Camera_stage play_hold`: the skater select's view of the stage).
     pub camera: Option<u32>,
+    /// Movies the menus play over the whole screen (`playmovie
+    /// "movies\intro"`: the Options' Movies), by file name.
+    pub movies: Vec<String>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -321,6 +324,7 @@ impl Screen {
             music: None,
             screen_movie: None,
             camera: None,
+            movies: Vec::new(),
             rumble_changed: false,
             stopping: Vec::new(),
         }
@@ -1874,6 +1878,12 @@ impl Host for Ui<'_> {
                     .unwrap_or(&track)
                     .to_string();
                 s.music = Some(Some(name));
+            }
+        } else if name == c("PlayMovie") && named("mesh").is_none() {
+            if let Some((movie, _)) = crate::behaviour::screen_movie(&props) {
+                if s.movies.len() < 4 {
+                    s.movies.push(movie);
+                }
             }
         } else if name == c("PlayMovie") && named("mesh").is_some() {
             if let Some(movie) = crate::behaviour::screen_movie(&props) {

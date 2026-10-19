@@ -5081,6 +5081,10 @@ impl<'a> App<'a> {
                 self.model.camera_paths.time = 0.0;
             }
         }
+        // Movies over the whole screen (the Options' Movies).
+        for movie in std::mem::take(&mut screen.screen.movies) {
+            self.movie_queue.push_back(movie);
+        }
         // The song they ask for.
         if let Some(track) = screen.screen.music.take() {
             // (Stopped: at once, the soundtrack on after.)
@@ -6774,6 +6778,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             }
             if let Some(level) = &app.level {
                 println!("menu: song {:?}", app.menu_track.as_ref().map(|(t, _)| t));
+                println!("menu: movies waiting {:?}", app.movie_queue);
                 println!(
                     "menu: character {:?}, level {}",
                     app.model
