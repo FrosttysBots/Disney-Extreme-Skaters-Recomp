@@ -218,6 +218,9 @@ pub struct Screen {
     /// The goal on (its id) and its settings, as
     /// `GoalManager_GetGoalParams` gives them to the UI's scripts.
     pub goal: Option<(u32, Params)>,
+    /// Whether there's a goal to retry (`GoalManager_CanRetryGoal`: one
+    /// played since the level loaded).
+    pub can_retry: bool,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -254,6 +257,7 @@ impl Screen {
             unknown: HashMap::new(),
             level: None,
             goal: None,
+            can_retry: false,
             stopping: Vec::new(),
         }
     }
@@ -1559,7 +1563,12 @@ impl Host for Ui<'_> {
             }
         } else if name == c("FireEvent") || name == c("LaunchEvent") {
             let event = named("Type").and_then(|v| v.as_name());
-            let to = named("target").and_then(|v| s.resolve(&v));
+            // (No target: the element the script runs on. `animate_in`,
+            // run on a menu's anchor, focuses it so.)
+            let to = match named("target") {
+                Some(v) => s.resolve(&v),
+                None => Some(self.element),
+            };
             let data = match props.get(c("data")) {
                 Some(Value::Struct(d)) => d.clone(),
                 _ => Vec::new(),
@@ -1574,6 +1583,22 @@ impl Host for Ui<'_> {
                 }
                 _ => Outcome::Done(false),
             };
+        } else if name == c("GameModeEquals") {
+            // The levels are played as the career has them.
+            let asked = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            return Outcome::Done(asked == Some(c("is_career")));
+        } else if name == c("GoalManager_HasActiveGoals") {
+            return Outcome::Done(s.goal.is_some());
+        } else if name == c("GoalManager_CanRetryGoal") {
+            return Outcome::Done(s.can_retry);
+        } else if name == c("GoalManager_IsInCompetition") {
+            return Outcome::Done(false);
         } else if name == c("LevelIs") {
             let asked = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {

@@ -1149,6 +1149,8 @@ impl ScreenUi {
             "start_2p",
             "launch_options_menu_load_game_sequence",
             "launch_options_menu_save_game_sequence",
+            "RetryCurrentGoal",
+            "end_current_goal_run",
         ]);
         Some(ScreenUi {
             screen,
@@ -4199,7 +4201,9 @@ impl<'a> App<'a> {
         for (script, params) in screen_scripts {
             s.run(script, params);
         }
-        // The goal on, for the UI's scripts that ask after it.
+        // The goal on, for the UI's scripts that ask after it (and
+        // whether there's one to retry).
+        s.can_retry = self.goal_run.is_some();
         let b = &level.behaviour;
         s.goal = b
             .active_goal
@@ -4559,10 +4563,28 @@ impl<'a> App<'a> {
         }
         let c = qb::checksum;
         for (name, _) in requests {
-            if name == c("unpausegame") && self.model.character.paused {
+            if name == c("RetryCurrentGoal") || name == c("end_current_goal_run") {
+                // The pause menu's Retry Last Goal and End Current Goal.
                 self.model.character.paused = false;
                 if let Some(screen) = &mut self.screen {
-                    screen.screen.clear();
+                    screen.screen.destroy_id("pause_menu");
+                    screen.screen.destroy_id("current_menu_anchor");
+                }
+                if name == c("RetryCurrentGoal") {
+                    self.restart();
+                } else if let Some(run) = self.goal_run.take() {
+                    self.end_goal_run(run);
+                    self.model.character.goal_progress = None;
+                    self.model.character.run_clock = None;
+                }
+                continue;
+            }
+            if name == c("unpausegame") && self.model.character.paused {
+                // The menu away; the panel stays.
+                self.model.character.paused = false;
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.destroy_id("pause_menu");
+                    screen.screen.destroy_id("current_menu_anchor");
                 }
             } else if name == c("preview_skater_menu") || name == c("launch_select_skater_menu") {
                 // Play Game: skating in the Hub, as the career starts.

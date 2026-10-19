@@ -208,6 +208,10 @@ struct Frame {
     loops: Vec<(usize, Option<i64>)>,
     /// Whether the header's defaults are in yet.
     started: bool,
+    /// What scripts it called have handed back (`return pos = ...`),
+    /// handed on in turn if it ends without a `return` of its own (a
+    /// script that only calls another: `GetStackedScreenElementPos`).
+    returned: Params,
 }
 
 pub struct Thread {
@@ -226,6 +230,7 @@ impl Thread {
                 params,
                 loops: Vec::new(),
                 started: false,
+                returned: Vec::new(),
             }],
             wait: 0.0,
             tags: Vec::new(),
@@ -287,13 +292,27 @@ impl Thread {
             frame.pc += 1;
         }
         let Some(token) = body.get(frame.pc) else {
+            let values = std::mem::take(&mut frame.returned);
             self.frames.pop();
+            self.hand_back(values);
             return;
         };
         let line_end = line_end(body, frame.pc);
         match token {
             Token::EndScript | Token::Return => {
+                // What it hands back: `return pos = (...)`'s, or (ending
+                // without) what it was handed.
+                let mut values = std::mem::take(&mut frame.returned);
+                if *token == Token::Return && frame.pc + 1 < line_end {
+                    let mut tokens = vec![Token::StartStruct];
+                    tokens.extend_from_slice(&body[frame.pc + 1..line_end]);
+                    tokens.push(Token::EndStruct);
+                    if let Value::Struct(items) = resolve(&tokens, &frame.params, program) {
+                        values = items.into_iter().filter(|(k, _)| k.is_some()).collect();
+                    }
+                }
                 self.frames.pop();
+                self.hand_back(values);
             }
             Token::If => {
                 let mut condition = (frame.pc + 1, line_end);
@@ -425,6 +444,9 @@ impl Thread {
             Token::Arg => {
                 let line = frame_line(body, frame.pc, line_end).to_vec();
                 frame.pc = line_end;
+                // (What was handed back before is only handed on by a
+                // script that ends right after.)
+                frame.returned.clear();
                 let named = match line.get(1) {
                     Some(Token::Name(n)) => frame
                         .params
@@ -442,9 +464,22 @@ impl Thread {
             Token::Name(_) => {
                 let line = frame_line(body, frame.pc, line_end).to_vec();
                 frame.pc = line_end;
+                frame.returned.clear();
                 self.call(program, host, &line);
             }
             _ => frame.pc = line_end, // switch, random choices and the like
+        }
+    }
+
+    /// Values a script ended with, into the script that called it.
+    fn hand_back(&mut self, values: Params) {
+        if let Some(caller) = self.frames.last_mut() {
+            for (k, v) in values {
+                if let Some(k) = k {
+                    set_param(&mut caller.params, k, v.clone());
+                    set_param(&mut caller.returned, k, v);
+                }
+            }
         }
     }
 
@@ -495,6 +530,7 @@ impl Thread {
                     params,
                     loops: Vec::new(),
                     started: false,
+                    returned: Vec::new(),
                 });
             }
             return true;
@@ -545,6 +581,7 @@ impl Thread {
                 params,
                 loops: Vec::new(),
                 started: false,
+                returned: Vec::new(),
             });
             return true;
         }
@@ -777,6 +814,7 @@ impl Thread {
                     params,
                     loops: Vec::new(),
                     started: false,
+                    returned: Vec::new(),
                 });
             }
             return true;
@@ -1449,6 +1487,44 @@ mod tests {
         let mut log = Log::default();
         Thread::new(checksum("Check"), Vec::new()).run(&program, &mut log, 0.0);
         assert_eq!(names(&log), vec![checksum("Yes")]);
+    }
+
+    #[test]
+    fn returned_values_reach_the_caller_through_a_wrapper() {
+        let mut program = Program::new();
+        // script Caller: Wrapper / Report value = <pos>
+        program.add_script(
+            checksum("Caller"),
+            vec![
+                n("Wrapper"),
+                Token::EndOfLine,
+                n("Report"),
+                n("value"),
+                Token::Equals,
+                Token::Arg,
+                n("pos"),
+                Token::EndOfLine,
+            ],
+        );
+        // script Wrapper: Inner (and ends)
+        program.add_script(checksum("Wrapper"), vec![n("Inner"), Token::EndOfLine]);
+        // script Inner: return pos = 7
+        program.add_script(
+            checksum("Inner"),
+            vec![
+                Token::Return,
+                n("pos"),
+                Token::Equals,
+                Token::Integer(7),
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        Thread::new(checksum("Caller"), Vec::new()).run(&program, &mut log, 0.0);
+        assert_eq!(
+            log.calls[0].2.get(checksum("value")),
+            Some(&Value::Integer(7))
+        );
     }
 
     #[test]
