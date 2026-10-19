@@ -234,6 +234,9 @@ pub struct Screen {
     /// The level's gaps for its checklist (`AddGapsToMenu`): name, points
     /// and times landed.
     pub gaps: Vec<(String, u32, u32)>,
+    /// The level's goals for View Goals (`GoalManager_AddViewGoalsList`):
+    /// id, what the list calls it, and whether it's won.
+    pub goal_list: Vec<(u32, String, bool)>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -273,6 +276,7 @@ impl Screen {
             can_retry: false,
             character: None,
             gaps: Vec::new(),
+            goal_list: Vec::new(),
             stopping: Vec::new(),
         }
     }
@@ -1192,6 +1196,11 @@ impl Screen {
             .collect();
         for (script, mut params) in handlers.iter().cloned() {
             params.extend(data.iter().cloned());
+            // A script the viewer does itself (View Goals' start a goal).
+            if self.listening.contains(&script) {
+                self.requests.push((script, Value::Struct(params)));
+                continue;
+            }
             self.starting.push(Running {
                 element: i,
                 thread: Thread::new(script, params),
@@ -1688,6 +1697,33 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             return Outcome::Done(asked == Some(c("is_career")));
+        } else if name == c("GoalManager_AddViewGoalsList") {
+            // View Goals' rows: `view_goals_menu_add_item` for each goal.
+            for (id, text, _) in s.goal_list.clone() {
+                s.starting.push(Running {
+                    element: self.element,
+                    thread: Thread::new(
+                        c("view_goals_menu_add_item"),
+                        vec![
+                            (Some(c("goal_ID")), Value::Name(id)),
+                            (Some(c("text")), Value::String(text)),
+                        ],
+                    ),
+                    then: None,
+                });
+            }
+        } else if name == c("GoalManager_HasWonGoal") {
+            let asked = named("Name").and_then(|v| v.as_name());
+            return Outcome::Done(
+                s.goal_list
+                    .iter()
+                    .any(|(id, _, won)| *won && Some(*id) == asked),
+            );
+        } else if name == c("GoalManager_GoalIsLocked") {
+            // (Every goal's open in the viewer.)
+            return Outcome::Done(false);
+        } else if name == c("GoalManager_HasSeenGoal") {
+            return Outcome::Done(true);
         } else if name == c("AddGapsToMenu") {
             // The gap checklist's rows: `gap_menu_add_item` for each gap.
             let count = s.gaps.len();

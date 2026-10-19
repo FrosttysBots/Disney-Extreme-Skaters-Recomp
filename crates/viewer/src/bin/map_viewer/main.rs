@@ -1151,6 +1151,7 @@ impl ScreenUi {
             "launch_options_menu_save_game_sequence",
             "RetryCurrentGoal",
             "end_current_goal_run",
+            "view_goals_menu_start_goal",
         ]);
         Some(ScreenUi {
             screen,
@@ -4211,6 +4212,26 @@ impl<'a> App<'a> {
         // The goal on, for the UI's scripts that ask after it (and
         // whether there's one to retry).
         s.can_retry = self.goal_run.is_some();
+        // The goals for View Goals.
+        s.goal_list = self
+            .model
+            .character
+            .goals
+            .iter()
+            .enumerate()
+            .map(|(i, (kind, text))| {
+                (
+                    desa_viewer::goals::goal_id(&level.id, kind),
+                    text.clone(),
+                    self.model
+                        .character
+                        .goals_won
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false),
+                )
+            })
+            .collect();
         s.character = self
             .model
             .character
@@ -4575,7 +4596,25 @@ impl<'a> App<'a> {
             }
         }
         let c = qb::checksum;
-        for (name, _) in requests {
+        for (name, args) in requests {
+            if name == c("view_goals_menu_start_goal") {
+                // View Goals: a goal chosen, started.
+                let id = args.get(c("goal_ID")).and_then(qb::Value::as_name);
+                let index = self.level.as_ref().and_then(|level| {
+                    self.model.character.goals.iter().position(|(kind, _)| {
+                        Some(desa_viewer::goals::goal_id(&level.id, kind)) == id
+                    })
+                });
+                self.model.character.paused = false;
+                if let Some(screen) = &mut self.screen {
+                    screen.screen.destroy_id("pause_menu");
+                    screen.screen.destroy_id("current_menu_anchor");
+                }
+                if let Some(index) = index {
+                    self.start_goal(index);
+                }
+                continue;
+            }
             if name == c("RetryCurrentGoal") || name == c("end_current_goal_run") {
                 // The pause menu's Retry Last Goal and End Current Goal.
                 self.model.character.paused = false;
