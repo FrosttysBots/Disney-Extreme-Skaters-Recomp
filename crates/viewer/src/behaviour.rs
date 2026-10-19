@@ -1497,6 +1497,15 @@ impl Host for Commands<'_> {
         }
         // `skater:KillSkater node = restart`: back at that restart, for
         // the viewer to put it there (Free Zazu's tries).
+        // `ResetSkaters node_name = restart` (Camp's rope snaps): the same.
+        // (Without a node it's the game's own flow, not a level's.)
+        if target.is_none() && name == checksum("ResetSkaters") {
+            let node = args.get(checksum("node_name")).and_then(Value::as_name);
+            if node.is_some() {
+                self.behaviour.skater_restart = node;
+            }
+            return Outcome::Done(node.is_some());
+        }
         if target == Some(checksum("skater"))
             && (name == checksum("Hide") || name == checksum("Unhide"))
         {
