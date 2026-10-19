@@ -4306,6 +4306,11 @@ impl<'a> App<'a> {
         // The volumes: the sound options' changes taken, else the panel's
         // shown.
         let model = &mut self.model.character;
+        if std::mem::take(&mut s.rumble_changed) {
+            model.rumble = s.rumble;
+        } else {
+            s.rumble = model.rumble;
+        }
         if std::mem::take(&mut s.volumes_changed) {
             model.music_volume = s.music_level as f32 / 10.0;
             model.effects_volume = s.sound_level as f32 / 10.0;

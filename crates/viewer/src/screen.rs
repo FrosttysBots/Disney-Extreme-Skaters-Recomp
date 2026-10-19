@@ -252,6 +252,10 @@ pub struct Screen {
     pub music_level: i32,
     pub sound_level: i32,
     pub volumes_changed: bool,
+    /// The controller's rumble, as the controls options show and set it
+    /// (`VibrationIsOn`, `VibrationOn`, `VibrationOff`).
+    pub rumble: bool,
+    pub rumble_changed: bool,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -298,6 +302,8 @@ impl Screen {
             music_level: 10,
             sound_level: 10,
             volumes_changed: false,
+            rumble: true,
+            rumble_changed: false,
             stopping: Vec::new(),
         }
     }
@@ -1807,6 +1813,11 @@ impl Host for Ui<'_> {
                 (Some(c("longestliptrick")), single(r[4])),
                 (Some(c("longestcombo")), single(r[5])),
             ]);
+        } else if name == c("VibrationIsOn") {
+            return Outcome::Done(s.rumble);
+        } else if name == c("VibrationOn") || name == c("VibrationOff") {
+            s.rumble = name == c("VibrationOn");
+            s.rumble_changed = true;
         } else if name == c("GetValueFromVolume") {
             let which = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
