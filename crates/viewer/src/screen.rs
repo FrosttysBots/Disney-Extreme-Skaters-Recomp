@@ -1756,6 +1756,18 @@ impl Host for Ui<'_> {
                     then: None,
                 });
             }
+        } else if name == c("GetGlobalFlag") {
+            // The levels' unlock flags (`LEVEL_UNLOCKED_PIZZA_PLANET`, as
+            // the level list names them): every level's open in the
+            // viewer. (Others, cheats and the like, are off.)
+            let flag = named("flag").and_then(|v| v.as_name());
+            let unlock = match self.program.value(c("level_select_menu_level_info")) {
+                Some(Value::Array(levels)) => levels
+                    .iter()
+                    .any(|l| flag.is_some() && l.get(c("flag")).and_then(Value::as_name) == flag),
+                _ => false,
+            };
+            return Outcome::Done(unlock);
         } else if name == c("GetLevelRecords") {
             // `GetLevelRecords level = 3`: the level's records, as the
             // records screen reads them (tables of one, and values).

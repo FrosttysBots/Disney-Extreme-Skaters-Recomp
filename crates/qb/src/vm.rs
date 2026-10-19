@@ -612,6 +612,29 @@ impl Thread {
             });
             return true;
         }
+        // Built in: questions about values. `IsTrue Bootstrap_Build` (a
+        // global set and not 0), and `IntegerEquals a = 3 b = <n>`.
+        if target.is_none() && name == checksum("IsTrue") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            return items.iter().any(|(k, v)| match (k, v) {
+                (None, Value::Name(n)) => program
+                    .value(*n)
+                    .and_then(Value::as_f32)
+                    .is_some_and(|v| v != 0.0),
+                (None, v) => v.as_f32().is_some_and(|v| v != 0.0),
+                _ => false,
+            });
+        }
+        if target.is_none() && name == checksum("IntegerEquals") {
+            let number = |key: &str| match args.get(checksum(key)) {
+                Some(Value::Name(n)) => program.value(*n).and_then(Value::as_int),
+                Some(v) => v.as_int().or_else(|| v.as_f32().map(|f| f as i32)),
+                None => None,
+            };
+            return matches!((number("a"), number("b")), (Some(a), Some(b)) if a == b);
+        }
         // Built in: `change started_goal_id = <goal_ID>`, a global
         // changed.
         if target.is_none() && name == checksum("change") {

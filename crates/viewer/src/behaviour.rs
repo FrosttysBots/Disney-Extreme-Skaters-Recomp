@@ -88,6 +88,9 @@ struct State {
     exceptions: Vec<(u32, u32, Params)>,
     /// Turning about Y (radians a second; `Obj_RotY`).
     spin: f32,
+    /// The axis it spins about, in its own frame (Y unless `Obj_RotX`,
+    /// `Obj_RotZ`).
+    spin_axis: Vec3,
     /// Bobbing up and down (`Obj_Hover Amp = units Freq = hertz`), shown
     /// only: where it is stays put.
     hover: Option<(f32, f32)>,
@@ -250,6 +253,7 @@ impl Behaviour {
                 was_outside: true,
                 exceptions: Vec::new(),
                 spin: 0.0,
+                spin_axis: Vec3::Y,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -274,6 +278,7 @@ impl Behaviour {
                 was_outside: true,
                 exceptions: Vec::new(),
                 spin: 0.0,
+                spin_axis: Vec3::Y,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -299,6 +304,7 @@ impl Behaviour {
                 was_outside: true,
                 exceptions: Vec::new(),
                 spin: 0.0,
+                spin_axis: Vec3::Y,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -322,6 +328,7 @@ impl Behaviour {
             was_outside: true,
             exceptions: Vec::new(),
             spin: 0.0,
+            spin_axis: Vec3::Y,
             hover: None,
             stick: None,
             flags: Vec::new(),
@@ -673,7 +680,12 @@ impl Behaviour {
             state.dirty = true;
         }
         if state.spin != 0.0 && state.alive {
-            state.rotation = Quat::from_rotation_y(state.spin * dt) * state.rotation;
+            state.rotation = if state.spin_axis == Vec3::Y {
+                Quat::from_rotation_y(state.spin * dt) * state.rotation
+            } else {
+                // (About its own axis.)
+                state.rotation * Quat::from_axis_angle(state.spin_axis, state.spin * dt)
+            };
             state.dirty = true;
         }
         let Some((to, speed, orient)) = state.moving else {
@@ -1527,9 +1539,40 @@ impl Host for Commands<'_> {
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
             }
-        } else if name == c("Obj_RotY") {
+        } else if name == c("Obj_RotY") || name == c("Obj_RotX") || name == c("Obj_RotZ") {
+            // `Obj_RotY speed = 250`: spinning (degrees a second); with
+            // `angle = -95`, turning that far at that speed and stopping
+            // (Hub's doors, Camp's tent flaps).
+            let axis = if name == c("Obj_RotX") {
+                Vec3::X
+            } else if name == c("Obj_RotZ") {
+                Vec3::Z
+            } else {
+                Vec3::Y
+            };
             let speed = args.get(c("speed")).and_then(Value::as_f32).unwrap_or(0.0);
-            b.states[object].spin = speed.to_radians();
+            let state = &mut b.states[object];
+            match args.get(c("angle")).and_then(Value::as_f32) {
+                Some(angle) => {
+                    let to = state.rotation * Quat::from_axis_angle(axis, angle.to_radians());
+                    let time = if speed.abs() > 0.0 {
+                        (angle / speed).abs()
+                    } else {
+                        0.0
+                    };
+                    state.spin = 0.0;
+                    if time > 0.0 {
+                        state.turn = Some((state.rotation, to, 0.0, time));
+                    } else {
+                        state.rotation = to;
+                        state.dirty = true;
+                    }
+                }
+                None => {
+                    state.spin = speed.to_radians();
+                    state.spin_axis = axis;
+                }
+            }
         } else if name == c("Obj_Hover") {
             let amp = args.get(c("Amp")).and_then(Value::as_f32).unwrap_or(0.0);
             let freq = args.get(c("Freq")).and_then(Value::as_f32).unwrap_or(1.0);
