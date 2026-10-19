@@ -55,6 +55,7 @@ fn real_goal_scripts() {
             run(&mut b, 30);
             b.active_goal = Some(g.id);
             b.goal_needed = g.needed;
+            b.goal_collects = desa_viewer::goals::counts_collected(&goal.kind);
             let mut params: qb::vm::Params = g
                 .params
                 .iter()

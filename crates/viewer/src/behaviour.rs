@@ -149,6 +149,9 @@ pub struct Behaviour {
     /// Names scripts created or killed that aren't objects (particle
     /// emitters, sectors), for the viewer: (name, created?).
     pub other_creates: Vec<(u32, bool)>,
+    /// Globals the scripts have changed (`change started_goal_id =
+    /// <goal_ID>`), set once this frame's scripts have run.
+    changes: Vec<(u32, Value)>,
     /// What the skater's doing, for the scripts' `skater:OnGround` and
     /// the like (set by whoever skates it).
     pub skater_state: SkaterState,
@@ -189,6 +192,11 @@ pub struct Behaviour {
     pub goal_flags: std::collections::HashSet<u32>,
     /// A counter goal's things got (`GoalManager_GotCounterObject`).
     pub goal_count: usize,
+    /// The `number_collected` its scripts keep (`GoalManager_EditGoal`),
+    /// and whether it counts towards winning (a collect or counter goal's:
+    /// Hub's groceries, five dollars an item, and sodas).
+    pub goal_collected: usize,
+    pub goal_collects: bool,
     pub goal_needed: usize,
     pub goal_won: bool,
     /// The goal on's parameters, as `GoalManager_GetGoalParams` gives
@@ -361,6 +369,8 @@ impl Behaviour {
             ended_goal: None,
             goal_flags: Default::default(),
             goal_count: 0,
+            goal_collected: 0,
+            goal_collects: false,
             goal_needed: 0,
             goal_won: false,
             goal_params: Vec::new(),
@@ -388,6 +398,7 @@ impl Behaviour {
             starting: Vec::new(),
             sounds: Vec::new(),
             other_creates: Vec::new(),
+            changes: Vec::new(),
             skater_state: SkaterState::default(),
             voice_lines: Vec::new(),
             messages: Vec::new(),
@@ -531,19 +542,27 @@ impl Behaviour {
             .collect()
     }
 
-    /// How far the goal on's got: its flags set and things counted.
-    ///
-    /// Its flags set, or its count (things got with
-    /// `GoalManager_GotCounterObject`, or the `number_collected` its
-    /// scripts keep: Hub's groceries, five dollars an item), whichever's
+    /// How far the goal on's got, towards winning it: its flags set or
+    /// things got (`GoalManager_GotCounterObject`, or for a collect or
+    /// counter goal the `number_collected` its scripts keep), whichever's
     /// further; a goal its scripts have won is done.
     pub fn goal_progress(&self) -> usize {
-        let got = self.goal_flags.len().max(self.goal_count);
+        let mut got = self.goal_flags.len().max(self.goal_count);
+        if self.goal_collects {
+            got = got.max(self.goal_collected);
+        }
         if self.goal_won {
             got.max(self.goal_needed)
         } else {
             got
         }
+    }
+
+    /// How far it's got to show: that, or the `number_collected` its
+    /// scripts keep, if more (a gaps goal's isn't what wins it: Free Zazu
+    /// keeps its tries there).
+    pub fn goal_shown(&self) -> usize {
+        self.goal_progress().max(self.goal_collected)
     }
 
     /// Runs `script` on the object named `name` (a bouncy's
@@ -742,6 +761,9 @@ impl Behaviour {
         }
         self.threads.append(&mut self.spawning);
         self.program = program;
+        for (name, value) in std::mem::take(&mut self.changes) {
+            self.program.add_value(name, value);
+        }
 
         for i in 0..self.states.len() {
             self.follow_path(i, dt);
@@ -992,7 +1014,12 @@ impl Host for Commands<'_> {
     }
 
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
-        if target == Some(checksum("skater")) {
+        // About the skater: `skater:OnGround`, or a plain `OnRail` in what
+        // the level runs for it (a trigger's script runs as the skater
+        // that touched it: Hub's lighthouse counts laps grinding).
+        let about_skater = target == Some(checksum("skater"))
+            || (target.is_none() && self.object == self.behaviour.level_runner);
+        if about_skater {
             if let Some(answer) = self.behaviour.skater_state.answer(name, args) {
                 return Outcome::Done(answer);
             }
@@ -1307,14 +1334,12 @@ impl Host for Commands<'_> {
             let to = (skater - state.position).with_y(0.0).normalize_or_zero();
             let angle = facing.dot(to).clamp(-1.0, 1.0).acos().to_degrees();
             return Outcome::Done(angle > degrees);
-        } else if name == c("printf") {
-            // The scripts' own tracing, with `DESA_PRINTF` set.
-            if std::env::var_os("DESA_PRINTF").is_some() {
-                if let Value::Struct(items) = args {
-                    for (_, v) in items {
-                        if let Value::String(s) | Value::LocalString(s) = v {
-                            eprintln!("printf: {s}");
-                        }
+        } else if name == c("change") {
+            // A global changed (`change started_goal_id = <goal_ID>`).
+            if let Value::Struct(items) = args {
+                for (k, v) in items {
+                    if let Some(k) = k {
+                        b.changes.push((*k, v.clone()));
                     }
                 }
             }
@@ -1516,7 +1541,7 @@ impl Host for Commands<'_> {
             ));
             params.push((
                 Some(c("number_collected")),
-                Value::Integer(b.goal_count as i32),
+                Value::Integer(b.goal_count.max(b.goal_collected) as i32),
             ));
             return Outcome::Params(params);
         } else if name == c("GoalManager_EditGoal") {
@@ -1524,9 +1549,13 @@ impl Host for Commands<'_> {
                 && (named("Name") == b.active_goal || named("Name") == b.ended_goal);
             if let (true, Some(Value::Struct(items))) = (ours, args.get(c("params"))) {
                 for (k, v) in items.iter().filter(|(k, _)| k.is_some()) {
-                    // How many it's got, kept as its count.
+                    // How many it's got, kept as its count; and how many
+                    // it needs.
                     if *k == Some(c("number_collected")) {
-                        b.goal_count = v.as_int().unwrap_or(0).max(0) as usize;
+                        b.goal_collected = v.as_int().unwrap_or(0).max(0) as usize;
+                    }
+                    if *k == Some(c("num_flags_to_win")) && b.active_goal.is_some() {
+                        b.goal_needed = v.as_int().unwrap_or(0).max(0) as usize;
                     }
                     b.goal_params.retain(|(o, _)| o != k);
                     b.goal_params.push((*k, v.clone()));

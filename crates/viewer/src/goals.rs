@@ -283,6 +283,14 @@ pub struct GenericGoal {
     pub params: Vec<(u32, Value)>,
 }
 
+/// Whether a goal of this type (`Collect2`, `Counter`...) is won by the
+/// `number_collected` its scripts keep, as collect and counter goals are
+/// (a gaps goal goes by its flags).
+pub fn counts_collected(kind: &str) -> bool {
+    let kind = kind.to_ascii_lowercase();
+    kind.starts_with("collect") || kind.starts_with("counter")
+}
+
 /// The level's goal of this type (`Gaps`, `Gaps2`...), as played from its
 /// own scripts.
 pub fn generic_goal(program: &Program, level: &str, kind: &str) -> Option<GenericGoal> {

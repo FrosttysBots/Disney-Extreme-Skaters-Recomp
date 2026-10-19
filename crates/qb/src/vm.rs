@@ -597,6 +597,16 @@ impl Thread {
             return true;
         }
         if target.is_none() && (name == checksum("printf") || name == checksum("printstruct")) {
+            // The scripts' own tracing, with `DESA_PRINTF` set.
+            if trace_printf() {
+                if let Value::Struct(items) = &args {
+                    for (_, v) in items {
+                        if let Value::String(s) | Value::LocalString(s) = v {
+                            eprintln!("printf: {s}");
+                        }
+                    }
+                }
+            }
             return true;
         }
         // Built in: text made from a pattern (`FormatText TextName = msg
@@ -1216,13 +1226,14 @@ fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<
                 }
                 Num::of(&value)
             }
-            Token::Name(n) => Some(match program.value(*n).and_then(Num::of) {
-                Some(Num::Scalar(_)) | None => program
+            // A global's value (a number, or a name it holds:
+            // `started_goal_id`), or the name itself.
+            Token::Name(n) => Some(
+                program
                     .value(*n)
-                    .and_then(Value::as_f32)
-                    .map_or(Num::Scalar(f64::from(*n)), |f| Num::Scalar(f64::from(f))),
-                Some(v) => v,
-            }),
+                    .and_then(Num::of)
+                    .unwrap_or(Num::Scalar(f64::from(*n))),
+            ),
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
                 let v = evaluate_num(&tokens[i + 1..close], params, program);
@@ -1369,6 +1380,12 @@ fn value_tokens(value: &Value) -> Vec<Token> {
     }
 }
 
+/// Whether to print the scripts' `printf` lines (`DESA_PRINTF` set).
+fn trace_printf() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("DESA_PRINTF").is_some())
+}
+
 /// Whether to print each script called (`DESA_QB_TRACE` set), for
 /// following what the game's scripts do.
 fn trace_calls() -> bool {
@@ -1400,6 +1417,32 @@ mod tests {
 
     fn names(log: &Log) -> Vec<u32> {
         log.calls.iter().map(|c| c.1).collect()
+    }
+
+    #[test]
+    fn a_global_holding_a_name_compares_by_it() {
+        let mut program = Program::new();
+        program.add_value(checksum("started_goal_id"), Value::Name(checksum("Zazu")));
+        // script Check: if (started_goal_id = Zazu) / Yes / endif
+        program.add_script(
+            checksum("Check"),
+            vec![
+                Token::If,
+                Token::OpenParen,
+                n("started_goal_id"),
+                Token::Equals,
+                n("Zazu"),
+                Token::CloseParen,
+                Token::EndOfLine,
+                n("Yes"),
+                Token::EndOfLine,
+                Token::EndIf,
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        Thread::new(checksum("Check"), Vec::new()).run(&program, &mut log, 0.0);
+        assert_eq!(names(&log), vec![checksum("Yes")]);
     }
 
     #[test]

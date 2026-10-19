@@ -3461,6 +3461,8 @@ impl<'a> App<'a> {
         b.active_goal = Some(goal.id);
         b.goal_flags.clear();
         b.goal_count = 0;
+        b.goal_collected = 0;
+        b.goal_collects = desa_viewer::goals::counts_collected(&kind);
         b.goal_needed = goal.needed;
         b.goal_won = false;
         let mut params: qb::vm::Params = goal
@@ -3526,6 +3528,9 @@ impl<'a> App<'a> {
         };
         let model = &mut self.model.character;
         let got = level.behaviour.goal_progress();
+        // (What it needs, as its scripts may have changed it: Free Zazu's
+        // ten tries come down to one once the cage is smashed.)
+        let needed = level.behaviour.goal_needed;
         // (What it asks, unless that's its name over.)
         let text = if run.goal.text == run.goal.name {
             String::new()
@@ -3535,8 +3540,8 @@ impl<'a> App<'a> {
         model.goal_progress = Some((
             run.goal.name.clone(),
             text,
-            got.min(run.goal.needed),
-            run.goal.needed,
+            level.behaviour.goal_shown().min(needed),
+            needed,
         ));
         model.run_clock = run.left;
         if run.over {
@@ -3545,7 +3550,7 @@ impl<'a> App<'a> {
         if let Some(left) = &mut run.left {
             *left = (*left - dt).max(0.0);
         }
-        let won = level.behaviour.goal_won || (run.goal.needed > 0 && got >= run.goal.needed);
+        let won = level.behaviour.goal_won || (needed > 0 && got >= needed);
         if won || run.left == Some(0.0) {
             run.over = true;
             model.goal_result = Some((run.goal.name.clone(), won));
