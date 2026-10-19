@@ -173,6 +173,8 @@ pub struct Behaviour {
     /// Where the level's moving pieces start among the objects (one each,
     /// in `LevelNodes::movers` order).
     movers: usize,
+    /// Where the bouncy things are among them.
+    bouncies: std::ops::Range<usize>,
     /// Every named node's name as written (for `create prefix = "..."`).
     labels: Vec<(u32, String)>,
     /// The goal manager: the goal on (its id), the flags its scripts have
@@ -254,6 +256,31 @@ impl Behaviour {
                 slide: false,
             });
         }
+        // And the bouncy things knocked about (their `CollideScript`s set
+        // their own exceptions: Hub's groceries), whose comings and goings
+        // the viewer's told of too.
+        let bouncies = states.len()..states.len() + nodes.bouncies.len();
+        for bouncy in &nodes.bouncies {
+            states.push(State {
+                position: bouncy.position,
+                rotation: Quat::IDENTITY,
+                alive: bouncy.created_at_start,
+                dirty: false,
+                path: Path::default(),
+                moving: None,
+                inner: 0.0,
+                outer: 0.0,
+                was_inside: false,
+                was_outside: true,
+                exceptions: Vec::new(),
+                spin: 0.0,
+                hover: None,
+                stick: None,
+                flags: Vec::new(),
+                turn: None,
+                slide: false,
+            });
+        }
         // One more, the level's own: what runs scripts that are nobody's
         // (a gap's, a goal's).
         let level_runner = states.len();
@@ -293,10 +320,12 @@ impl Behaviour {
                 .iter()
                 .map(|o| o.name)
                 .chain(nodes.movers.iter().map(|m| m.name))
+                .chain(nodes.bouncies.iter().map(|b| b.name))
                 .enumerate()
                 .map(|(i, name)| (name, i))
                 .collect(),
             movers,
+            bouncies,
             node_by_name: nodes
                 .nodes
                 .iter()
@@ -308,6 +337,7 @@ impl Behaviour {
                 .iter()
                 .map(|o| o.node)
                 .chain(nodes.movers.iter().map(|_| 0))
+                .chain(nodes.bouncies.iter().map(|_| 0))
                 .chain([0])
                 .collect(),
             level_runner,
@@ -331,6 +361,7 @@ impl Behaviour {
                 .iter()
                 .map(|o| o.script)
                 .chain(nodes.movers.iter().map(|_| None))
+                .chain(nodes.bouncies.iter().map(|_| None))
                 .chain([None])
                 .collect(),
             goal: nodes
@@ -338,6 +369,7 @@ impl Behaviour {
                 .iter()
                 .map(|o| !o.created_at_start)
                 .chain(nodes.movers.iter().map(|_| false))
+                .chain(nodes.bouncies.iter().map(|_| false))
                 .chain([false])
                 .collect(),
             goal_shown: None,
@@ -488,8 +520,29 @@ impl Behaviour {
     }
 
     /// How far the goal on's got: its flags set and things counted.
+    ///
+    /// Its flags set, or its count (things got with
+    /// `GoalManager_GotCounterObject`, or the `number_collected` its
+    /// scripts keep: Hub's groceries, five dollars an item), whichever's
+    /// further; a goal its scripts have won is done.
     pub fn goal_progress(&self) -> usize {
-        self.goal_flags.len() + self.goal_count
+        let got = self.goal_flags.len().max(self.goal_count);
+        if self.goal_won {
+            got.max(self.goal_needed)
+        } else {
+            got
+        }
+    }
+
+    /// Runs `script` on the object named `name` (a bouncy's
+    /// `CollideScript`, knocked: it sets the object's own exceptions),
+    /// alongside its own; or, with no such object, on its own.
+    pub fn run_object_script(&mut self, name: u32, script: u32) {
+        let thread = Thread::new(script, Vec::new());
+        match self.object_named(name) {
+            Some(o) => self.spawning.push((o, thread)),
+            None => self.starting.push((self.level_runner, thread)),
+        }
     }
 
     /// Runs a script that's nobody's (a gap's `Gapscript`, a goal's
@@ -611,6 +664,12 @@ impl Behaviour {
     }
 
     /// Whether an object exists now (created and not killed).
+    /// Whether the object named `name` is there (created, not killed).
+    pub fn is_alive(&self, name: u32) -> bool {
+        self.object_named(name)
+            .is_some_and(|o| self.states[o].alive)
+    }
+
     pub fn alive(&self, object: usize) -> bool {
         self.states[object].alive
     }
@@ -1182,6 +1241,17 @@ impl Host for Commands<'_> {
             let to = (skater - state.position).with_y(0.0).normalize_or_zero();
             let angle = facing.dot(to).clamp(-1.0, 1.0).acos().to_degrees();
             return Outcome::Done(angle > degrees);
+        } else if name == c("printf") {
+            // The scripts' own tracing, with `DESA_PRINTF` set.
+            if std::env::var_os("DESA_PRINTF").is_some() {
+                if let Value::Struct(items) = args {
+                    for (_, v) in items {
+                        if let Value::String(s) | Value::LocalString(s) = v {
+                            eprintln!("printf: {s}");
+                        }
+                    }
+                }
+            }
         } else if name == c("GoalManager_GoalIsActive") {
             return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
         } else if name == c("GoalManager_HasSeenGoal") {
@@ -1362,6 +1432,9 @@ impl Host for Commands<'_> {
                 return Outcome::Done(false);
             }
             let mut params = b.goal_params.clone();
+            params.retain(|(k, _)| {
+                *k != Some(c("num_flags_set")) && *k != Some(c("number_collected"))
+            });
             params.push((
                 Some(c("num_flags_set")),
                 Value::Integer(b.goal_flags.len() as i32),
@@ -1376,6 +1449,10 @@ impl Host for Commands<'_> {
                 && (named("Name") == b.active_goal || named("Name") == b.ended_goal);
             if let (true, Some(Value::Struct(items))) = (ours, args.get(c("params"))) {
                 for (k, v) in items.iter().filter(|(k, _)| k.is_some()) {
+                    // How many it's got, kept as its count.
+                    if *k == Some(c("number_collected")) {
+                        b.goal_count = v.as_int().unwrap_or(0).max(0) as usize;
+                    }
                     b.goal_params.retain(|(o, _)| o != k);
                     b.goal_params.push((*k, v.clone()));
                 }
@@ -1487,6 +1564,9 @@ impl Host for Commands<'_> {
                 }
                 b.states[o].alive = create;
                 b.states[o].dirty = true;
+                if b.bouncies.contains(&o) {
+                    b.other_creates.push((target, create));
+                }
             }
         } else if name == c("Die") {
             b.states[object].alive = false;

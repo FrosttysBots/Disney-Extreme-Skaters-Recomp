@@ -9,7 +9,10 @@ use glam::Vec3;
 /// Every level's goals that its own scripts play (not the score, letters
 /// and race goals): started as the viewer starts them, then the skater
 /// taken to each thing that does something when it's near, in turn
-/// (following what moves off), then every gap landed and trick spot done.
+/// (following what moves off), every bouncy thing knocked and breakable
+/// broken first; then every gap landed and trick spot done.
+/// `GOAL=HUB:Collect` runs one; `DESA_QB_TRACE` and `DESA_PRINTF` trace
+/// its scripts.
 /// The goals that are only that much get done.
 /// Run with `cargo test --release -p desa_viewer -- --ignored`; the game
 /// data is a disc image or folder in `DESA_GAME_DATA`, by default `extracted`.
@@ -35,6 +38,12 @@ fn real_goal_scripts() {
             if ["HighScore", "ProScore", "Skate", "Race"].contains(&goal.kind.as_str()) {
                 continue;
             }
+            // `GOAL=HUB:Collect` runs just that one.
+            if let Ok(only) = std::env::var("GOAL") {
+                if only != format!("{}:{}", level.id, goal.kind) {
+                    continue;
+                }
+            }
             let g =
                 desa_viewer::goals::generic_goal(first.program(), &level.id, &goal.kind).unwrap();
             let mut b = Behaviour::new(&nodes, &scripts);
@@ -58,6 +67,41 @@ fn real_goal_scripts() {
                 b.run_level_script(script, params.clone());
             }
             run(&mut b, 90);
+            // Every bouncy with a script knocked (each that's there), first:
+            // leaving Hub's store, its groceries are put away.
+            for bouncy in &nodes.bouncies {
+                let Some(script) = bouncy.collide_script else {
+                    continue;
+                };
+                if !b.is_alive(bouncy.name) {
+                    continue;
+                }
+                b.set_skater(Some(bouncy.position));
+                b.run_object_script(bouncy.name, script);
+                run(&mut b, 3);
+
+                // (Off it, but not far: Hub's store puts its groceries
+                // away when the skater leaves.)
+                b.set_skater(Some(bouncy.position + Vec3::Y * 200.0));
+                run(&mut b, 1);
+            }
+            // And every breakable that's there touched (its script run),
+            // there from the start or created since.
+            let mut shown: std::collections::HashMap<u32, bool> = Default::default();
+            shown.extend(b.other_creates.drain(..));
+            let breakables = desa_viewer::triggers::breakables(&nodes, first.program());
+            let mut breakables: Vec<_> = breakables.into_iter().collect();
+            breakables.sort_by_key(|(object, _)| *object);
+            for (object, (script, ..)) in breakables {
+                let there = shown
+                    .get(&object)
+                    .copied()
+                    .unwrap_or(!nodes.hidden_sectors.contains(&object));
+                if there {
+                    b.run_level_script(script, Vec::new());
+                    run(&mut b, 2);
+                }
+            }
             // (Something that moves off, herded, is followed till it
             // stops: a skater keeping up with it.)
             let mut visited: Vec<Vec3> = Vec::new();
@@ -129,6 +173,9 @@ fn real_goal_scripts() {
         }
     }
     println!("done by going near things: {done:?}");
+    if std::env::var("GOAL").is_ok() {
+        return;
+    }
     println!("then by landing every gap: {gapped:?}");
     for goal in [
         "camp Gaps3",
@@ -149,6 +196,9 @@ fn real_goal_scripts() {
         "canyon Collect2",
         "pizza Collect3",
         "PrideRock Collect2",
+        "HUB Collect",
+        "beach Counter3",
+        "camp Counter",
     ] {
         assert!(done.contains(&goal.to_string()), "{goal}");
     }

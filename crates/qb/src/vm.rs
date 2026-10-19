@@ -486,6 +486,9 @@ impl Thread {
                         (None, v) => params.push((None, v)),
                     }
                 }
+                if trace_calls() {
+                    eprintln!("qb: call {name:#010x} (depth {})", self.frames.len());
+                }
                 self.frames.push(Frame {
                     script: name,
                     pc: 0,
@@ -712,6 +715,9 @@ impl Thread {
                 });
             }
             return true;
+        }
+        if trace_calls() {
+            eprintln!("qb: command {name:#010x} (depth {})", self.frames.len());
         }
         match host.command(target, name, &args) {
             Outcome::Done(result) => result,
@@ -1312,6 +1318,13 @@ fn value_tokens(value: &Value) -> Vec<Token> {
         }
         Value::Script(_) => vec![Token::Name(0)],
     }
+}
+
+/// Whether to print each script called (`DESA_QB_TRACE` set), for
+/// following what the game's scripts do.
+fn trace_calls() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("DESA_QB_TRACE").is_some())
 }
 
 #[cfg(test)]

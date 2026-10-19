@@ -3141,7 +3141,7 @@ impl<'a> App<'a> {
                     b.moving = true;
                     // Its script, the first knock.
                     if !std::mem::replace(&mut b.collided, true) {
-                        scripts.extend(b.spec.collide_script);
+                        scripts.extend(b.spec.collide_script.map(|s| (b.spec.name, s)));
                     }
                     b.velocity = velocity.with_y(0.0) * 1.1 + Vec3::Y * b.spec.up * FEET;
                     b.spin = Vec3::new(random(), random(), random()).normalize_or(Vec3::X)
@@ -3198,8 +3198,8 @@ impl<'a> App<'a> {
                 .collect();
             level.renderer.update_layer(b.layer, 0, &moved);
         }
-        for script in scripts {
-            level.behaviour.run_level_script(script, Vec::new());
+        for (name, script) in scripts {
+            level.behaviour.run_object_script(name, script);
         }
     }
 
