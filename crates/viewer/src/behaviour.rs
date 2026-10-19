@@ -184,6 +184,8 @@ pub struct Behaviour {
     movers: usize,
     /// Where the bouncy things are among them.
     bouncies: std::ops::Range<usize>,
+    /// Which of the level's objects are pedestrians (in `objects` order).
+    peds: Vec<bool>,
     /// Every named node's name as written (for `create prefix = "..."`).
     labels: Vec<(u32, String)>,
     /// The goal manager: the goal on (its id), the flags its scripts have
@@ -348,6 +350,11 @@ impl Behaviour {
                 .collect(),
             movers,
             bouncies,
+            peds: nodes
+                .objects
+                .iter()
+                .map(|o| o.kind == crate::nodes::ObjectKind::Pedestrian)
+                .collect(),
             node_by_name: nodes
                 .nodes
                 .iter()
@@ -1380,9 +1387,19 @@ impl Host for Commands<'_> {
             } else {
                 radius
             };
-            let near = b
-                .skater
-                .is_some_and(|s| s.distance(b.states[object].position) < radius);
+            // (`Type = ped`: any pedestrian that near: Beach's cage
+            // dropped on Clayton.)
+            let at = b.states[object].position;
+            let near = if named("Type") == Some(c("ped")) {
+                (0..b.peds.len()).any(|o| {
+                    o != object
+                        && b.peds[o]
+                        && b.states[o].alive
+                        && b.states[o].position.distance(at) < radius
+                })
+            } else {
+                b.skater.is_some_and(|s| s.distance(at) < radius)
+            };
             return Outcome::Done(near);
         } else if name == c("Obj_AngleToNearestSkaterGreaterThan") {
             let Some(skater) = b.skater else {

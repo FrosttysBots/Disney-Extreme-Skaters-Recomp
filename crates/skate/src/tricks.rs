@@ -442,6 +442,31 @@ impl TrickBook {
             .map(|(_, t)| t.clone())
     }
 
+    /// The trick in an air slot named by its checksum (`Air_CircleU`,
+    /// `Air_SquareDL`, `Air_Square`...: a Skatetris goal's list), if it's
+    /// a button with one direction or none.
+    pub fn slot_trick(&self, slot: u32) -> Option<usize> {
+        let dirs = [
+            ("", None),
+            ("U", Some(Dir::Up)),
+            ("D", Some(Dir::Down)),
+            ("L", Some(Dir::Left)),
+            ("R", Some(Dir::Right)),
+            ("UL", Some(Dir::UpLeft)),
+            ("UR", Some(Dir::UpRight)),
+            ("DL", Some(Dir::DownLeft)),
+            ("DR", Some(Dir::DownRight)),
+        ];
+        for (button, name) in [(Button::Flip, "Square"), (Button::Grab, "Circle")] {
+            for (suffix, dir) in dirs {
+                if checksum(&format!("Air_{name}{suffix}")) == slot {
+                    return self.air_trick(button, dir);
+                }
+            }
+        }
+        None
+    }
+
     /// The trick for a button pressed with a direction held (or none).
     pub fn air_trick(&self, button: Button, dir: Option<Dir>) -> Option<usize> {
         match dir {

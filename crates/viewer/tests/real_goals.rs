@@ -243,3 +243,30 @@ fn real_goal_scripts() {
         assert!(done.contains(&goal.to_string()), "{goal}");
     }
 }
+
+/// Pizza's Skatetris: its list of trick slots and timings, and a trick in
+/// each slot for the character playing it.
+#[test]
+#[ignore = "needs the game data"]
+fn real_skatetris() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let files = data.load_level("pizza").unwrap();
+    let nodes = LevelNodes::from_bytes(files.nodes.as_deref().unwrap()).unwrap();
+    let mut scripts = data.global_scripts().unwrap();
+    scripts.extend(files.scripts.iter().cloned());
+    let b = Behaviour::new(&nodes, &scripts);
+    let goal = desa_viewer::goals::generic_goal(b.program(), "pizza", "Tetris").unwrap();
+    let tetris = desa_viewer::goals::Tetris::of(&goal).unwrap();
+    println!("{tetris:?}");
+    assert_eq!(tetris.combos.len(), 8);
+    assert_eq!(tetris.trick_time, 3.0);
+    assert_eq!(tetris.stop_adding, 13.0);
+    let stats = skate::Stats::of(b.program(), "jessie");
+    let book = skate::TrickBook::new(b.program(), "jessie", &stats);
+    for slot in &tetris.combos {
+        let trick = book.slot_trick(*slot).expect("a trick in the slot");
+        println!("{}", book.tricks[trick].name);
+    }
+}

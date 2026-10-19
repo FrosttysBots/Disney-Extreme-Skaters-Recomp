@@ -118,7 +118,8 @@ struct Args {
     #[arg(long, requires = "character", default_value_t = 0.0)]
     skate: f32,
     /// For --skate: keys pressed and let go at times, as "seconds:+Key" and
-    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R J L);
+    /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R J L,
+    /// and Enter: A on the game's screen);
     /// without it W is held throughout
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
@@ -1491,9 +1492,169 @@ struct GoalRun {
     goal: desa_viewer::goals::GenericGoal,
     left: Option<f32>,
     over: bool,
+    /// A Skatetris goal's list of tricks to do (see [`TetrisRun`]).
+    tetris: Option<TetrisRun>,
     /// The objects that already reacted to the skater coming near before
     /// it started (what's new since is the goal's, for the map).
     before: HashSet<usize>,
+}
+
+/// A Skatetris goal going: the tricks on the list (each its trick in the
+/// character's book and its element on the game's screen), the next slot
+/// from the goal's list, how long till the next joins, the time between
+/// them now, and the tricks of the skater's combo already counted.
+struct TetrisRun {
+    rules: desa_viewer::goals::Tetris,
+    list: Vec<(usize, u32)>,
+    next: usize,
+    until: f32,
+    interval: f32,
+    since_faster: f32,
+    seen: usize,
+    made: u32,
+    /// Lost (the list full), or won (none left once no more come).
+    lost: bool,
+    won: bool,
+}
+
+impl TetrisRun {
+    fn new(rules: desa_viewer::goals::Tetris) -> Self {
+        TetrisRun {
+            interval: rules.trick_time,
+            until: 1.0,
+            rules,
+            list: Vec::new(),
+            next: 0,
+            since_faster: 0.0,
+            seen: 0,
+            made: 0,
+            lost: false,
+            won: false,
+        }
+    }
+
+    /// One frame of it: tricks done come off the list, the next joins in
+    /// its time (none in the last seconds), the list full loses and empty
+    /// once they've stopped coming wins. Screen commands for the game's
+    /// Skatetris list go to `screen`.
+    fn update(
+        &mut self,
+        dt: f32,
+        left: Option<f32>,
+        skater: &Skater,
+        program: &qb::vm::Program,
+        screen: &mut Vec<(u32, qb::Value)>,
+    ) {
+        use qb::{Value, checksum};
+        let s = |k: &str| Some(checksum(k));
+        // Tricks done: the combo's new ones, each taking the first of its
+        // kind off the list.
+        let tricks = &skater.combo_tricks.tricks;
+        if tricks.len() < self.seen {
+            self.seen = 0;
+        }
+        for done in &tricks[self.seen..] {
+            let found = self.list.iter().position(|&(trick, _)| {
+                skater
+                    .tricks
+                    .tricks
+                    .get(trick)
+                    .is_some_and(|t| t.name == done.name)
+            });
+            if let Some(i) = found {
+                let (_, id) = self.list.remove(i);
+                screen.push((
+                    checksum("RunScriptOnScreenElement"),
+                    Value::Struct(vec![
+                        (s("id"), Value::Name(id)),
+                        (None, Value::Name(checksum("goal_tetris_remove_trick"))),
+                        (s("params"), Value::Struct(vec![(s("id"), Value::Name(id))])),
+                    ]),
+                ));
+                screen.push((
+                    checksum("RunScriptOnScreenElement"),
+                    Value::Struct(vec![
+                        (s("id"), Value::Name(id)),
+                        (
+                            None,
+                            Value::Name(checksum("goal_tetris_play_trick_removed_sound")),
+                        ),
+                    ]),
+                ));
+            }
+        }
+        self.seen = tricks.len();
+        // Coming faster.
+        self.since_faster += dt;
+        if self.since_faster >= self.rules.acceleration_interval {
+            self.since_faster = 0.0;
+            self.interval *= 1.0 - self.rules.acceleration_percent;
+        }
+        let adding = left.is_none_or(|l| l > self.rules.stop_adding);
+        self.until -= dt;
+        if adding && self.until <= 0.0 && !self.rules.combos.is_empty() {
+            self.until = self.interval;
+            // The next slot the character has a trick in.
+            for _ in 0..self.rules.combos.len() {
+                let slot = self.rules.combos[self.next % self.rules.combos.len()];
+                self.next += 1;
+                let Some(trick) = skater.tricks.slot_trick(slot) else {
+                    continue;
+                };
+                self.made += 1;
+                let id = checksum(&format!("tetris_trick_{}", self.made));
+                let name = skater.tricks.tricks[trick].name.clone();
+                // Its buttons, as the game spells them.
+                let buttons = match program.value(checksum("goal_tetris_trick_text")) {
+                    Some(table) => table.get(slot).cloned(),
+                    None => None,
+                }
+                .unwrap_or(Value::String(String::new()));
+                let element = |items: Vec<(Option<u32>, Value)>| {
+                    (checksum("CreateScreenElement"), Value::Struct(items))
+                };
+                screen.push(element(vec![
+                    (s("Type"), Value::Name(checksum("ContainerElement"))),
+                    (s("parent"), Value::Name(checksum("tetris_tricks_menu"))),
+                    (s("id"), Value::Name(id)),
+                    (s("dims"), Value::Pair([100.0, 20.0])),
+                ]));
+                for text in [Value::String(name), buttons] {
+                    screen.push(element(vec![
+                        (s("Type"), Value::Name(checksum("TextElement"))),
+                        (s("parent"), Value::Name(id)),
+                        (s("font"), Value::Name(checksum("small"))),
+                        (s("text"), text),
+                        (
+                            s("rgba"),
+                            Value::Array([128, 128, 128, 75].map(Value::Integer).to_vec()),
+                        ),
+                    ]));
+                }
+                // Red once the list's nearly full.
+                let script = if self.list.len() + 1 >= self.rules.max_tricks.saturating_sub(2) {
+                    "goal_tetris_add_red_trick"
+                } else {
+                    "goal_tetris_add_trick"
+                };
+                screen.push((
+                    checksum("RunScriptOnScreenElement"),
+                    Value::Struct(vec![
+                        (s("id"), Value::Name(id)),
+                        (None, Value::Name(checksum(script))),
+                        (s("params"), Value::Struct(vec![(s("id"), Value::Name(id))])),
+                    ]),
+                ));
+                self.list.push((trick, id));
+                break;
+            }
+        }
+        if self.list.len() >= self.rules.max_tricks {
+            self.lost = true;
+        } else if !adding && self.list.is_empty() {
+            self.won = true;
+        }
+    }
 }
 
 /// How near the skater reaches a race waypoint (`Obj_SetInnerRadius 8`).
@@ -3488,12 +3649,14 @@ impl<'a> App<'a> {
             b.run_level_script(script, params.clone());
         }
         self.goal_cutscenes(&kind);
+        let tetris = desa_viewer::goals::Tetris::of(&goal).map(TetrisRun::new);
         self.goal_run = Some(GoalRun {
             kind,
             index,
             left: goal.time,
             goal,
             over: false,
+            tetris,
             before,
         });
     }
@@ -3552,11 +3715,25 @@ impl<'a> App<'a> {
         if run.over {
             return;
         }
-        if let Some(left) = &mut run.left {
+        // (Held while the game's screen waits on a press: the goal's
+        // speech box, before it starts.)
+        let waiting = self.screen.as_ref().is_some_and(|s| s.screen.takes_pad());
+        if let Some(left) = run.left.as_mut().filter(|_| !waiting) {
             *left = (*left - dt).max(0.0);
         }
+        // Skatetris: its list, won cleared, lost full.
+        let mut tetris_lost = false;
+        if let Some(t) = run.tetris.as_mut().filter(|_| !waiting) {
+            let mut calls = Vec::new();
+            t.update(dt, run.left, skater, level.behaviour.program(), &mut calls);
+            level.behaviour.screen_calls.extend(calls);
+            if t.won {
+                level.behaviour.goal_won = true;
+            }
+            tetris_lost = t.lost;
+        }
         let won = level.behaviour.goal_won || (needed > 0 && got >= needed);
-        if won || run.left == Some(0.0) {
+        if won || run.left == Some(0.0) || tetris_lost {
             run.over = true;
             model.goal_result = Some((run.goal.name.clone(), won));
             if won {
@@ -6004,7 +6181,11 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 let now = step as f32 / 60.0;
                 for &(at, key, down) in script.iter().flatten() {
                     if (at - now).abs() < 0.5 / 60.0 {
-                        if down {
+                        if key == KeyCode::Enter {
+                            if let (true, Some(screen)) = (down, &mut app.screen) {
+                                screen.screen.pad(desa_viewer::screen::Pad::Choose);
+                            }
+                        } else if down {
                             app.keys.insert(key);
                         } else {
                             app.keys.remove(&key);
@@ -6291,6 +6472,8 @@ fn parse_skate_keys(spec: &str) -> Result<Vec<(f32, KeyCode, bool)>> {
                 "J" => KeyCode::KeyJ,
                 "L" => KeyCode::KeyL,
                 "SPACE" => KeyCode::Space,
+                // (A press on the game's screen: a speech box's A.)
+                "ENTER" => KeyCode::Enter,
                 other => anyhow::bail!("unknown key {other:?}"),
             };
             Ok((at, key, down))

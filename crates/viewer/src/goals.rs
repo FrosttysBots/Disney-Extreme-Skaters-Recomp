@@ -283,6 +283,49 @@ pub struct GenericGoal {
     pub params: Vec<(u32, Value)>,
 }
 
+/// A Skatetris goal's rules (`AddGoal_Tetris`, `goal_tetris_genericParams`;
+/// the game runs it in its own code): tricks join a list on screen, from
+/// `goal_tetris_key_combos` in turn, one every `trick_time`, coming
+/// faster by `acceleration_percent` every `acceleration_interval`; doing
+/// one takes it off. `max_tricks` on the list loses; none are added in the
+/// last `time_to_stop_adding_tricks`, and clearing them then wins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tetris {
+    /// The trick slots (`Air_CircleU`...), as checksums.
+    pub combos: Vec<u32>,
+    /// Seconds between tricks to begin with.
+    pub trick_time: f32,
+    pub max_tricks: usize,
+    pub acceleration_interval: f32,
+    pub acceleration_percent: f32,
+    pub stop_adding: f32,
+}
+
+impl Tetris {
+    /// A goal's Skatetris rules, if it's one.
+    pub fn of(goal: &GenericGoal) -> Option<Tetris> {
+        let get = |key: &str| {
+            goal.params
+                .iter()
+                .find(|(k, _)| *k == checksum(key))
+                .map(|(_, v)| v)
+        };
+        let combos: Vec<u32> = match get("goal_tetris_key_combos") {
+            Some(Value::Array(items)) => items.iter().filter_map(Value::as_name).collect(),
+            _ => return None,
+        };
+        let number = |key: &str, default: f32| get(key).and_then(Value::as_f32).unwrap_or(default);
+        Some(Tetris {
+            combos,
+            trick_time: number("trick_time", 3000.0) / 1000.0,
+            max_tricks: number("max_tricks", 15.0).max(1.0) as usize,
+            acceleration_interval: number("acceleration_interval", 5.0),
+            acceleration_percent: number("acceleration_percent", 0.1),
+            stop_adding: number("time_to_stop_adding_tricks", 5.0),
+        })
+    }
+}
+
 /// Whether a goal of this type (`Collect2`, `Counter`...) is won by the
 /// `number_collected` its scripts keep, as collect and counter goals are
 /// (a gaps goal goes by its flags).
