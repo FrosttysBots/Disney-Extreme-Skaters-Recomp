@@ -27,13 +27,14 @@ character. This page is for anyone trying it out.
 | W then S | Up then down | Manual (balance with W / S) |
 | F + direction | B + direction | Manuals 2 to 5, on the ground or from a manual |
 | E as you launch off a quarter pipe's lip | Y | Lip trick on the coping (balance with A / D) |
+| E held, jumping at a wall alongside it | Y held | Wallride; let go of Space (crouch) for a Wallie, with W for a Wallplant |
 | R as you land from vert | Shoulder buttons | Revert (keeps the combo going into a manual) |
 | R held going up a quarter pipe | Shoulder buttons held | Spine transfer over to the ramp behind |
 | W held going up a quarter pipe | Stick up held | Launch out over the lip instead of straight up |
 | R tapped on the ground | Shoulder button tapped | 180 slide (A or D for backside/frontside), riding on the other way round |
 | Two directions, then Q (or E in a manual) | Two directions, then X (or Y) | Special trick, when the special meter is full |
 | J / L | Right stick | Look round (springs back when let go) |
-| P | Start | Pause (Resume, Restart, Stop skating); paused, W A S D fly the camera and right-drag looks, for pictures |
+| P | Start | Pause: the game's own pause menu (arrows choose, Enter picks, Esc goes back), and paused, W A S D fly the camera and right-drag looks, for pictures |
 | M | | Show or hide the map |
 | C | Back | Next chase camera (the game's Near, Standard, Far, Standard LTG; also in the panel) |
 | F12 | | Save a picture (`Pictures\DESA Map Viewer`), handy for bug reports |
@@ -128,12 +129,30 @@ skater is and what it's doing.
   and Skitch, Always Special, Moon Gravity and Slomo (the game's
   Moon_gravity and slomo_speed, both 0.5), Stats 13.
 - Every level, and a few characters (each has its own tricks and stats).
+- Wallrides: jump at a wall alongside it, fast enough, holding Grind (E):
+  "FS Wallride" or "BS Wallride", then Wallie or Wallplant off it. The
+  game only lets you ride Canyon's few wall-ridable faces; the "Wallride
+  any wall" box (on) lets you ride any steep wall.
+- The game's pause menu (P / Start): Goals (Retry Last Goal, End Current
+  Goal, View Goals to pick and start one, the gap checklist, the special
+  tricks), Change Level (the game's level select), and Options (Game
+  Progress, Record Scores, Controls, Sound with the volumes and Skip
+  Track).
+- The goals from the level's own scripts (the panel's Goals list, or
+  View Goals): Hub's groceries and sodas, Beach's seaweed and gorilla keys,
+  Camp's tent and campfires, Tarzan's fruit and bowsprit, the Bedroom's
+  A-N-D-Y blocks and chest lock, Zurg's batteries and spine, and the rest,
+  with the game's own speech boxes, counters and cutscenes.
+- Skatetris (Pizza Planet's "Perform requested AIR tricks!"): tricks join
+  the list on the right; land one to take it off, before the list fills.
 
 ## Known differences from the game
 
-- Not yet: wall rides (the game barely uses them), the
-  Simplified controls, goals besides the letters, scores and races and the
-  other gameplay modes, and goal pickups.
+- Not yet: the Simplified controls, the game's skater select, a few goals
+  that need things the viewer can't do yet (Hub's lighthouse minigame lap
+  counter needs real laps, Zurg's UFO launch), and two players.
+- Wallrides have no animation of their own (the characters on the disc
+  have none): the skater leans off the wall instead.
 - Approximations of our own: the camera follows the game's camera
   update (a lagging focus, turning, the quick swing after vert, zooming
   for big air tricks, grinds and lips) but sees past walls its own way
@@ -144,8 +163,7 @@ skater is and what it's doing.
   collision, and the skater is put back at the nearest spawn when it
   falls out of a level (the game uses out-of-bounds triggers).
 - Skating starts from the character's spot rather than the game's level
-  start, and goals, pedestrians' reactions and moving objects don't
-  interact with the skater.
+  start.
 
 ## Reporting a problem
 
