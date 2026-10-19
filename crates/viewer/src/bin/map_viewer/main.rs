@@ -4610,8 +4610,17 @@ impl<'a> App<'a> {
                     screen.screen.destroy_id("pause_menu");
                     screen.screen.destroy_id("current_menu_anchor");
                 }
-                if let Some(index) = index {
-                    self.start_goal(index);
+                // (The score, letters and race goals the viewer plays its
+                // own ways, as their pros start them.)
+                let kind =
+                    index.and_then(|i| self.model.character.goals.get(i).map(|g| g.0.clone()));
+                match (index, kind.as_deref()) {
+                    (_, Some("HighScore")) => self.start_run(Some(false)),
+                    (_, Some("ProScore")) => self.start_run(Some(true)),
+                    (_, Some("Skate")) => self.start_letters(),
+                    (_, Some("Race")) => self.start_race(),
+                    (Some(index), _) => self.start_goal(index),
+                    _ => {}
                 }
                 continue;
             }
