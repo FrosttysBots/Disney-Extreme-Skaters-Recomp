@@ -149,9 +149,6 @@ pub struct Behaviour {
     /// Names scripts created or killed that aren't objects (particle
     /// emitters, sectors), for the viewer: (name, created?).
     pub other_creates: Vec<(u32, bool)>,
-    /// Globals the scripts have changed (`change started_goal_id =
-    /// <goal_ID>`), set once this frame's scripts have run.
-    changes: Vec<(u32, Value)>,
     /// What the skater's doing, for the scripts' `skater:OnGround` and
     /// the like (set by whoever skates it).
     pub skater_state: SkaterState,
@@ -425,7 +422,6 @@ impl Behaviour {
             starting: Vec::new(),
             sounds: Vec::new(),
             other_creates: Vec::new(),
-            changes: Vec::new(),
             skater_state: SkaterState::default(),
             voice_lines: Vec::new(),
             messages: Vec::new(),
@@ -820,9 +816,6 @@ impl Behaviour {
         }
         self.threads.append(&mut self.spawning);
         self.program = program;
-        for (name, value) in std::mem::take(&mut self.changes) {
-            self.program.add_value(name, value);
-        }
 
         for i in 0..self.states.len() {
             self.follow_path(i, dt);
@@ -1665,15 +1658,6 @@ impl Host for Commands<'_> {
             let to = (skater - state.position).with_y(0.0).normalize_or_zero();
             let angle = facing.dot(to).clamp(-1.0, 1.0).acos().to_degrees();
             return Outcome::Done(angle > degrees);
-        } else if name == c("change") {
-            // A global changed (`change started_goal_id = <goal_ID>`).
-            if let Value::Struct(items) = args {
-                for (k, v) in items {
-                    if let Some(k) = k {
-                        b.changes.push((*k, v.clone()));
-                    }
-                }
-            }
         } else if name == c("GoalManager_GetProsetNotPrefix") {
             // The other pro sets' pieces, hidden while a goal's are shown
             // (`goal_start`: `kill prefix = <proset_not_prefix>`, and

@@ -229,8 +229,10 @@ pub struct Screen {
     /// Whether there's a goal to retry (`GoalManager_CanRetryGoal`: one
     /// played since the level loaded).
     pub can_retry: bool,
-    /// The character skating (`jessie`), for `GetSkaterProfileInfo`.
+    /// The character skating (`jessie`), for `GetSkaterProfileInfo`, and
+    /// the one picked in the skater select (`SelectCurrentSkater`).
     pub character: Option<String>,
+    pub selected_skater: Option<u32>,
     /// The level's gaps for its checklist (`AddGapsToMenu`): name, points
     /// and times landed.
     pub gaps: Vec<(String, u32, u32)>,
@@ -288,6 +290,7 @@ impl Screen {
             goal: None,
             can_retry: false,
             character: None,
+            selected_skater: None,
             gaps: Vec::new(),
             goal_list: Vec::new(),
             progress: HashMap::new(),
@@ -1898,6 +1901,54 @@ impl Host for Ui<'_> {
                     then: None,
                 });
             }
+        } else if name == c("GetSkaterProfileInfoByName") {
+            // Another character's profile (the skater select's).
+            let Some(Value::Struct(profile)) = named("Name")
+                .and_then(|v| v.as_name())
+                .and_then(|n| skate::constants::profile_named(self.program, n))
+            else {
+                return Outcome::Done(false);
+            };
+            return Outcome::Params(profile.clone());
+        } else if name == c("GetStatValue") {
+            // `GetStatValue air skater = jessie`: a stat of that skater's
+            // profile (or the one picked), as `stat_value`.
+            let stat = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let skater = named("skater")
+                .and_then(|v| v.as_name())
+                .or(s.selected_skater)
+                .or_else(|| s.character.as_deref().map(c));
+            let value = skater
+                .and_then(|n| skate::constants::profile_named(self.program, n))
+                .zip(stat)
+                .and_then(|(p, stat)| p.get(stat))
+                .and_then(Value::as_int)
+                .unwrap_or(0);
+            return Outcome::Params(vec![(Some(c("stat_value")), Value::Integer(value))]);
+        } else if name == c("GetCurrentSkaterProfileIndex") {
+            return Outcome::Params(vec![(
+                Some(c("currentSkaterProfileIndex")),
+                Value::Integer(0),
+            )]);
+        } else if name == c("SelectCurrentSkater") {
+            // The skater picked: asked about (`if SelectCurrentSkater
+            // Name = kid`), or chosen, for the viewer to load.
+            let picked = named("Name").and_then(|v| v.as_name());
+            if let Some(picked) = picked {
+                let was = s.selected_skater.replace(picked);
+                if was != Some(picked) && s.listening.contains(&name) {
+                    s.requests.push((name, props.clone()));
+                }
+            }
+            return Outcome::Done(true);
+        } else if name == c("SkaterCamAnimFinished") {
+            return Outcome::Done(true);
         } else if name == c("GetSkaterProfileInfo") {
             // The character's profile (its name, stats...), its three
             // special tricks assigned as the career gives them (lip,

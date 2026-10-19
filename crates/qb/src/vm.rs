@@ -35,6 +35,10 @@ pub struct Program {
     /// Each script's default parameters, from its header (`script TransAm
     /// DefaultSpeed = 30`): a call gets them where it doesn't pass its own.
     defaults: HashMap<u32, Params>,
+    /// Globals the scripts have changed (`change started_goal_id = x`),
+    /// over the loaded ones. (Each new value is kept for good, so lookups
+    /// can hand out references: the scripts change few, and rarely.)
+    changed: std::sync::Mutex<HashMap<u32, &'static Value>>,
 }
 
 impl Program {
@@ -141,7 +145,20 @@ impl Program {
     }
 
     pub fn value(&self, name: u32) -> Option<&Value> {
+        if let Some(v) = self.changed.lock().ok().and_then(|c| c.get(&name).copied()) {
+            return Some(v);
+        }
         self.values.get(&name)
+    }
+
+    /// Changes a global as the scripts' `change` does, from now on.
+    pub fn change(&self, name: u32, value: Value) {
+        if self.value(name) == Some(&value) {
+            return;
+        }
+        if let Ok(mut changed) = self.changed.lock() {
+            changed.insert(name, Box::leak(Box::new(value)));
+        }
     }
 
     /// Adds or replaces a global value.
@@ -593,6 +610,18 @@ impl Thread {
                 started: false,
                 returned: Vec::new(),
             });
+            return true;
+        }
+        // Built in: `change started_goal_id = <goal_ID>`, a global
+        // changed.
+        if target.is_none() && name == checksum("change") {
+            if let Value::Struct(items) = &args {
+                for (k, v) in items {
+                    if let Some(k) = k {
+                        program.change(*k, v.clone());
+                    }
+                }
+            }
             return true;
         }
         if target.is_none() && name == checksum("wait") {

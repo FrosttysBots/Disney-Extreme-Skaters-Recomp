@@ -61,7 +61,11 @@ impl Stats {
 /// The skater profile whose `Name` is `character` (in `disneytricks.q`):
 /// stats, trick mapping and more.
 pub fn profile<'a>(program: &'a Program, character: &str) -> Option<&'a Value> {
-    let name = checksum(character);
+    profile_named(program, checksum(character))
+}
+
+/// A character's profile by its name's checksum (`Name = jessie`).
+pub fn profile_named(program: &Program, name: u32) -> Option<&Value> {
     let mut found = None;
     for (_, value) in program.values() {
         find_profile(value, name, &mut found);
