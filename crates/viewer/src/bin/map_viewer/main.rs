@@ -2499,10 +2499,17 @@ impl<'a> App<'a> {
             }
         }
         let skating = self.skating.is_some();
+        // In the Skate Shop's menus the soundtrack plays too (the game's
+        // `SetCDToMusic`), but for a song they ask for themselves.
+        let shop = self
+            .level
+            .as_ref()
+            .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"))
+            && self.menu_track.is_none();
         let (Some(audio), Some(data)) = (&mut self.audio, &mut self.data) else {
             return;
         };
-        if skating && self.model.character.music && !self.playlist.is_empty() {
+        if (skating || shop) && self.model.character.music && !self.playlist.is_empty() {
             if audio.music_finished() {
                 for _ in 0..self.playlist.len() {
                     let (name, title) = &self.playlist[self.next_track % self.playlist.len()];
@@ -4830,6 +4837,12 @@ impl<'a> App<'a> {
         screen.screen.update(level.behaviour.program(), dt);
         // The song they ask for.
         if let Some(track) = screen.screen.music.take() {
+            // (Stopped: at once, the soundtrack on after.)
+            if track.is_none() {
+                if let Some(audio) = &mut self.audio {
+                    audio.stop_music();
+                }
+            }
             self.menu_track = track.map(|t| (t, false));
         }
         // The menus' rumbles (the Controls menu's test), with it on.
