@@ -2030,6 +2030,16 @@ impl Host for Commands<'_> {
             return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
         } else if name == c("GoalManager_HasSeenGoal") {
             return Outcome::Done(true);
+        } else if name == c("isngc") || name == c("CD") {
+            // The GameCube disc's.
+            return Outcome::Done(true);
+        } else if name == c("isxbox") || name == c("IsPs2") || name == c("IsPC") {
+            return Outcome::Done(false);
+        } else if name == c("GetPlatform") {
+            return Outcome::Params(vec![(Some(c("Platform")), Value::Name(c("NGC")))]);
+        } else if name == c("HawkControlsIsOn") {
+            // The full controls are the only ones (no Simplified yet).
+            return Outcome::Done(true);
         } else if name == c("IsCareerMode") || name == c("GoalManager_GoalExists") {
             // The levels are played as the career has them (their set-up
             // scripts leave things as the goals won say), with all their

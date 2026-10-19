@@ -1813,6 +1813,9 @@ impl Host for Ui<'_> {
                 (Some(c("longestliptrick")), single(r[4])),
                 (Some(c("longestcombo")), single(r[5])),
             ]);
+        } else if name == c("HawkControlsIsOn") {
+            // (The full controls are the only ones: Simplified isn't done.)
+            return Outcome::Done(true);
         } else if name == c("VibrationIsOn") {
             return Outcome::Done(s.rumble);
         } else if name == c("VibrationOn") || name == c("VibrationOff") {
@@ -2024,6 +2027,8 @@ impl Host for Ui<'_> {
             return Outcome::Done(true);
         } else if name == c("isxbox") || name == c("IsPs2") || name == c("IsPC") {
             return Outcome::Done(false);
+        } else if name == c("GetPlatform") {
+            return Outcome::Params(vec![(Some(c("Platform")), Value::Name(c("NGC")))]);
         } else if name == c("playsound") {
             if let Some(sound) = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
