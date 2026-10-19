@@ -1938,6 +1938,15 @@ impl Skater {
                 return false;
             }
         }
+        // Not with the feet at or below a floor there (coming down onto it
+        // beside a wall that goes on below: a landing, not a wallride).
+        let feet = hit.point + n - Vec3::Y * p.forward_collision_height;
+        if world
+            .ray(hit.point + n, feet - Vec3::Y)
+            .is_some_and(|floor| !is_wall(&floor, p))
+        {
+            return false;
+        }
         let left = Vec3::new(-n.z, 0.0, n.x).dot(self.velocity) < 0.0;
         self.wall = Some(WallRide { normal: n, left });
         self.since_wallride = 0.0;
