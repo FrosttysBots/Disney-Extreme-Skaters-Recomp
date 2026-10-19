@@ -308,7 +308,17 @@ impl Thread {
                     tokens.extend_from_slice(&body[frame.pc + 1..line_end]);
                     tokens.push(Token::EndStruct);
                     if let Value::Struct(items) = resolve(&tokens, &frame.params, program) {
-                        values = items.into_iter().filter(|(k, _)| k.is_some()).collect();
+                        // (`return { a = 1 b = 2 }`: the struct's fields.)
+                        values = Vec::new();
+                        for (k, v) in items {
+                            match (k, v) {
+                                (Some(k), v) => values.push((Some(k), v)),
+                                (None, Value::Struct(fields)) => {
+                                    values.extend(fields.into_iter().filter(|(k, _)| k.is_some()))
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
                 self.frames.pop();
@@ -588,6 +598,31 @@ impl Thread {
         if target.is_none() && name == checksum("wait") {
             self.wait += wait_seconds(&args);
             return true;
+        }
+        // Built in: an array's item (`GetElement <specials> index = 1`, the
+        // array maybe held in a struct), as `element`.
+        if target.is_none() && name == checksum("GetElement") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let array = items.iter().find_map(|(k, v)| match (k, v) {
+                (None, Value::Array(a)) => Some(a),
+                (None, Value::Struct(inner)) => inner.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Array(a)) => Some(a),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            let index = args.get(checksum("index")).and_then(Value::as_int);
+            if let (Some(array), Some(index)) = (array, index) {
+                if let Some(item) = array.get(index.max(0) as usize) {
+                    let item = item.clone();
+                    let frame = self.frames.last_mut().unwrap();
+                    set_param(&mut frame.params, checksum("element"), item);
+                    return true;
+                }
+            }
+            return false;
         }
         // Built in: whether the script was given a parameter, and the
         // object's tags.
@@ -988,21 +1023,57 @@ fn indexed(tokens: &[Token], params: &Params, program: &Program) -> Option<Value
         [Token::Name(n), ..] => (program.value(*n)?, 1),
         _ => return None,
     };
-    if tokens.get(i) != Some(&Token::StartArray) {
-        return None;
-    }
-    let close = i + tokens[i..].iter().position(|t| *t == Token::EndArray)?;
-    let index = evaluate_num(&tokens[i + 1..close], params, program)?.scalar();
-    let Value::Array(items) = array else {
+    let mut value = if tokens.get(i) == Some(&Token::StartArray) {
+        let close = i + tokens[i..].iter().position(|t| *t == Token::EndArray)?;
+        let index = evaluate_num(&tokens[i + 1..close], params, program)?.scalar();
+        let Value::Array(items) = array else {
+            return None;
+        };
+        i = close + 1;
+        items.get(index.max(0.0) as usize)?.clone()
+    } else if matches!(
+        (tokens.get(i), tokens.get(i + 1)),
+        (Some(Token::Dot), Some(Token::Name(_) | Token::Arg))
+    ) {
+        array.clone()
+    } else {
         return None;
     };
-    let mut value = items.get(index.max(0.0) as usize)?.clone();
-    i = close + 1;
-    while let (Some(Token::Dot), Some(Token::Name(field))) = (tokens.get(i), tokens.get(i + 1)) {
-        value = value.get(*field)?.clone();
-        i += 2;
-    }
+    member_chain(&mut value, tokens, &mut i, params, program)?;
     (i == tokens.len()).then_some(value)
+}
+
+/// `.field.field` after an operand (`<element>.TrickSlot`,
+/// `<trickname>.params.Name`): each field of the struct it is, or of the
+/// global struct a name names. `i` moves past them.
+fn member_chain(
+    value: &mut Value,
+    tokens: &[Token],
+    i: &mut usize,
+    params: &Params,
+    program: &Program,
+) -> Option<()> {
+    loop {
+        // `.field`, or `.<param>`: the field the parameter names
+        // (`goal_tetris_trick_text.<special_trickslot>`).
+        let (field, width) = match (tokens.get(*i), tokens.get(*i + 1), tokens.get(*i + 2)) {
+            (Some(Token::Dot), Some(Token::Name(f)), _) => (*f, 2),
+            (Some(Token::Dot), Some(Token::Arg), Some(Token::Name(p))) => {
+                let named = params
+                    .iter()
+                    .find(|(k, _)| *k == Some(*p))
+                    .and_then(|(_, v)| v.as_name())?;
+                (named, 3)
+            }
+            _ => return Some(()),
+        };
+        let holder = match &*value {
+            Value::Name(g) if value.get(field).is_none() => program.value(*g)?.clone(),
+            v => v.clone(),
+        };
+        *value = holder.get(field)?.clone();
+        *i += width;
+    }
 }
 
 /// Past the `endswitch` closing the switch `at` is inside.
@@ -1240,6 +1311,25 @@ fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<
             Token::Float(v) => Some(Num::Scalar(f64::from(*v))),
             Token::Pair(p) => Num::of(&Value::Pair(*p)),
             Token::Vector(p) => Num::of(&Value::Vector(*p)),
+            // `<element>.TrickSlot`: a field of a parameter.
+            Token::Arg
+                if matches!(
+                    (tokens.get(i + 2), tokens.get(i + 3)),
+                    (Some(Token::Dot), Some(Token::Name(_)))
+                ) =>
+            {
+                let Some(Token::Name(n)) = tokens.get(i + 1) else {
+                    return None;
+                };
+                let mut value = params
+                    .iter()
+                    .find(|(k, _)| *k == Some(*n))
+                    .map(|(_, v)| v.clone())?;
+                i += 2;
+                member_chain(&mut value, tokens, &mut i, params, program)?;
+                i -= 1;
+                Num::of(&value)
+            }
             Token::Arg => {
                 i += 1;
                 let Some(Token::Name(n)) = tokens.get(i) else {

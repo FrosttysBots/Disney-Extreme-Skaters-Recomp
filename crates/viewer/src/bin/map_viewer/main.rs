@@ -2672,6 +2672,13 @@ impl<'a> App<'a> {
             }
         }
         gap_list.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        // (And for the game's own gap checklist.)
+        if let Some(screen) = &mut self.screen {
+            screen.screen.gaps = gap_list
+                .iter()
+                .map(|(name, score, got)| (name.clone(), *score, u32::from(*got)))
+                .collect();
+        }
         self.model.character.gap_list = gap_list;
         self.start_audio();
         self.stop_camera_path();
@@ -4204,6 +4211,12 @@ impl<'a> App<'a> {
         // The goal on, for the UI's scripts that ask after it (and
         // whether there's one to retry).
         s.can_retry = self.goal_run.is_some();
+        s.character = self
+            .model
+            .character
+            .current
+            .and_then(|i| self.model.character.characters.get(i))
+            .map(|c| c.id.clone());
         let b = &level.behaviour;
         s.goal = b
             .active_goal

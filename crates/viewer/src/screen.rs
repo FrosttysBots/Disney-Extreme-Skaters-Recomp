@@ -88,6 +88,9 @@ struct Element {
     /// A menu's focused child (its place among the children).
     selected: Option<usize>,
     focusable_child: Option<u32>,
+    /// A scrolling menu (`vscrollingmenu`): it holds its menu where that
+    /// says, not lined up as items are.
+    scrolling: bool,
     wrap: bool,
     padding: f32,
     /// A menu's gap between its children.
@@ -128,6 +131,7 @@ impl Element {
             focused: false,
             selected: None,
             focusable_child: None,
+            scrolling: false,
             wrap: true,
             padding: 1.0,
             spacing: 0.0,
@@ -221,6 +225,11 @@ pub struct Screen {
     /// Whether there's a goal to retry (`GoalManager_CanRetryGoal`: one
     /// played since the level loaded).
     pub can_retry: bool,
+    /// The character skating (`jessie`), for `GetSkaterProfileInfo`.
+    pub character: Option<String>,
+    /// The level's gaps for its checklist (`AddGapsToMenu`): name, points
+    /// and times landed.
+    pub gaps: Vec<(String, u32, u32)>,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -258,6 +267,8 @@ impl Screen {
             level: None,
             goal: None,
             can_retry: false,
+            character: None,
+            gaps: Vec::new(),
             stopping: Vec::new(),
         }
     }
@@ -651,7 +662,7 @@ impl Screen {
         let Some(parent) = e.parent.and_then(|p| self.el(p)) else {
             return e.look.pos;
         };
-        if !matches!(parent.kind, Kind::VMenu | Kind::HMenu) {
+        if !matches!(parent.kind, Kind::VMenu | Kind::HMenu) || parent.scrolling {
             return e.look.pos;
         }
         let across = parent.kind == Kind::HMenu;
@@ -1444,6 +1455,13 @@ impl Host for Ui<'_> {
             let parent = named("parent").and_then(|p| s.resolve(&p)).unwrap_or(ROOT);
             let id = named("id").and_then(|v| v.as_name()).filter(|id| *id != 0);
             let i = s.create(kind, parent, id);
+            let scrolling = props
+                .get(c("Type"))
+                .and_then(Value::as_name)
+                .is_some_and(|t| t == c("vscrollingmenu") || t == c("hscrollingmenu"));
+            if let Some(e) = s.el_mut(i) {
+                e.scrolling = scrolling;
+            }
             s.apply(i, &props, self.program);
             let id = s.el(i).map_or(0, |e| e.id);
             return Outcome::Params(vec![(Some(c("id")), Value::Name(id))]);
@@ -1593,6 +1611,49 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             return Outcome::Done(asked == Some(c("is_career")));
+        } else if name == c("AddGapsToMenu") {
+            // The gap checklist's rows: `gap_menu_add_item` for each gap.
+            let count = s.gaps.len();
+            for (n, (gap, score, times)) in s.gaps.clone().into_iter().enumerate() {
+                let mut params = vec![
+                    (Some(c("gap_name")), Value::String(gap)),
+                    (Some(c("gap_score")), Value::Integer(score as i32)),
+                    (Some(c("times")), Value::Integer(times as i32)),
+                ];
+                if n == 0 {
+                    params.push((None, Value::Name(c("first_item"))));
+                }
+                if n + 1 == count {
+                    params.push((None, Value::Name(c("last_item"))));
+                }
+                s.starting.push(Running {
+                    element: self.element,
+                    thread: Thread::new(c("gap_menu_add_item"), params),
+                    then: None,
+                });
+            }
+        } else if name == c("GetSkaterProfileInfo") {
+            // The character's profile (its name, stats...), its three
+            // special tricks assigned as the career gives them (lip,
+            // manual, air: `goal_get_special_trick_display_text`).
+            let Some(Value::Struct(profile)) = s
+                .character
+                .as_deref()
+                .and_then(|id| skate::constants::profile(self.program, id))
+            else {
+                return Outcome::Done(false);
+            };
+            let special = Value::Struct(vec![
+                (Some(c("TrickSlot")), Value::Name(c("Assigned"))),
+                (Some(c("trickname")), Value::Name(c("Assigned"))),
+            ]);
+            let mut params = profile.clone();
+            params.retain(|(k, _)| *k != Some(c("specials")));
+            params.push((
+                Some(c("specials")),
+                Value::Struct(vec![(None, Value::Array(vec![special; 3]))]),
+            ));
+            return Outcome::Params(params);
         } else if name == c("GoalManager_HasActiveGoals") {
             return Outcome::Done(s.goal.is_some());
         } else if name == c("GoalManager_CanRetryGoal") {
