@@ -1844,8 +1844,10 @@ struct App<'a> {
     /// skipped), the one asked for next, and the goal on's success path.
     cutscene: bool,
     cutscene_request: Option<u32>,
-    /// The skater select's choice last followed (`disney_skater`).
+    /// The skater select's choice last followed (`disney_skater`), and
+    /// whether the shop's stage camera has been put up since arriving.
     shop_skater: Option<i32>,
+    shop_staged: bool,
     /// The song the game's menus play (the skater select's theme for the
     /// character), by name, and whether it's started.
     menu_track: Option<(String, bool)>,
@@ -2054,6 +2056,7 @@ impl<'a> App<'a> {
             lines_to_say: Vec::new(),
             cutscene: false,
             shop_skater: None,
+            shop_staged: false,
             menu_track: None,
             screen_movie_name: None,
             script_cutscene: false,
@@ -4855,10 +4858,24 @@ impl<'a> App<'a> {
         let Some(level) = &self.level else { return };
         if !level.id.eq_ignore_ascii_case("SkateShop") {
             self.shop_skater = None;
+            self.shop_staged = false;
             // (And its song stops: the menus' are the shop's.)
             self.menu_track = None;
             return;
         }
+        // Arrived: the stage's camera, as the game's `init_stage` has it
+        // (the main menu and the skater select both over the stage).
+        if !self.shop_staged {
+            let index = level
+                .camera_paths
+                .iter()
+                .position(|(name, _)| name.eq_ignore_ascii_case("Camera_stage"));
+            if let Some(index) = index {
+                self.model.camera_paths.playing = Some(index);
+                self.model.camera_paths.time = 0.0;
+            }
+        }
+        self.shop_staged = true;
         let program = level.behaviour.program();
         let c = qb::checksum;
         let Some(qb::Value::Array(skaters)) = program.value(c("skater_select_array")).cloned()
@@ -4881,13 +4898,9 @@ impl<'a> App<'a> {
             .value(c("disney_skater"))
             .and_then(qb::Value::as_int)
             .unwrap_or(-1);
-        // On the stage while the skater select's up (where the game's
-        // stage characters stand, `TRG_Ped_Jessie` and the rest), else
-        // where the shop has the character.
-        let selecting = self
-            .screen
-            .as_ref()
-            .is_some_and(|s| s.screen.exists("select_skater_anchor"));
+        // On the stage (where the game's stage characters stand,
+        // `TRG_Ped_Jessie` and the rest, as its `init_stage` has the
+        // skater), else where the shop has the character.
         let stage = skaters
             .get(usize::try_from(now).unwrap_or(0))
             .and_then(|s| s.get(c("id")))
@@ -4902,10 +4915,7 @@ impl<'a> App<'a> {
                 let turn = Quat::from_rotation_y(n.heading);
                 Some(Mat4::from_rotation_translation(turn, n.position?))
             });
-        let placement = match (selecting, stage) {
-            (true, Some(stage)) => stage,
-            _ => level.home,
-        };
+        let placement = stage.unwrap_or(level.home);
         if self.skating.is_none() {
             self.placement = placement;
         }
