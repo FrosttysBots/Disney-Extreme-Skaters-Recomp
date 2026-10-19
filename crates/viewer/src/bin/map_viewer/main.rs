@@ -1854,8 +1854,10 @@ struct App<'a> {
     /// The song the game's menus play (the skater select's theme for the
     /// character), by name, and whether it's started.
     menu_track: Option<(String, bool)>,
-    /// The movie last asked for on the level's screen, to loop it.
+    /// The movie last asked for on the level's screen, to loop it, and
+    /// one a teleporter asked for (or stopped) for it.
     screen_movie_name: Option<String>,
+    teleport_movie: Option<Option<(String, bool)>>,
     /// Whether the camera path playing is one the level's scripts asked
     /// for (theirs to stop).
     script_cutscene: bool,
@@ -2063,6 +2065,7 @@ impl<'a> App<'a> {
             stage_turn: 0.0,
             menu_track: None,
             screen_movie_name: None,
+            teleport_movie: None,
             script_cutscene: false,
             cutscene_request: None,
             goal_won: None,
@@ -4807,7 +4810,7 @@ impl<'a> App<'a> {
                 .and_then(|s| s.screen.screen_movie.take());
             let level = self.level.as_mut();
             let from_level = level.and_then(|l| l.behaviour.screen_movie.take());
-            from_screen.or(from_level)
+            from_screen.or(from_level).or(self.teleport_movie.take())
         };
         let Some(level) = &mut self.level else { return };
         if level.movie_screen.is_none() {
@@ -5418,6 +5421,10 @@ impl<'a> App<'a> {
                 skater.message = Some((message, 1.5));
             }
             self.pending_creates.extend(effect.creates.iter().cloned());
+            // (And the movie it puts on, or stops: the Hub's drive-in.)
+            if let Some(movie) = effect.movie.clone() {
+                self.teleport_movie = Some(movie);
+            }
             if water {
                 self.sparks.splash(before);
                 // The camera stays a moment to see it, then cuts to the skater.
@@ -6894,6 +6901,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.play_replay(at);
             }
             camera = app.camera;
+            if let Some(name) = &app.screen_movie_name {
+                println!("screen movie: {name}");
+            }
             if let Some((skater, _, chase)) = &app.skating {
                 println!(
                     "camera: {:.0} from the target, {:.0} above it",

@@ -57,6 +57,10 @@ pub struct TeleportEffect {
     /// restocks the Hub's grocery store): a name or a name's start, and
     /// whether it's created.
     pub creates: Vec<(CreateTarget, bool)>,
+    /// The movie it puts on the level's screen (the Hub's drive-in, its
+    /// `playmovie ... mesh = moviescreen`), or that it stops it
+    /// (`Stopmovie`, on the way out).
+    pub movie: Option<Option<(String, bool)>>,
 }
 
 /// What a `create` or `kill` names.
@@ -82,6 +86,12 @@ impl Host for Catch<'_> {
                 });
                 self.effect.sound = self.effect.sound.or(sound);
             }
+        } else if name == checksum("PlayMovie") && args.get(checksum("mesh")).is_some() {
+            if let Some(movie) = crate::behaviour::screen_movie(args) {
+                self.effect.movie = Some(Some(movie));
+            }
+        } else if name == checksum("StopMovie") {
+            self.effect.movie = Some(None);
         } else if name == checksum("create") || name == checksum("kill") {
             let created = name == checksum("create");
             let target = match (args.get(checksum("Name")), args.get(checksum("prefix"))) {
