@@ -104,6 +104,10 @@ struct State {
     /// Moving to a spot without turning to face the way (`Obj_MoveToPos`:
     /// a door sliding open).
     slide: bool,
+    /// Carried along by another (`Obj_LockToObject ObjectName = skater
+    /// (0, 36, 0)`): the skater (`None`) or an object, and where, in its
+    /// frame.
+    locked: Option<(Option<usize>, Vec3)>,
     /// Kept on the ground below as it moves (`Obj_StickToGround distAbove
     /// distBelow [pitch]`): how far up and down to look (units), and
     /// whether to tip with the slope.
@@ -266,6 +270,7 @@ impl Behaviour {
                 spin: 0.0,
                 spin_axis: Vec3::Y,
                 scale: 1.0,
+                locked: None,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -292,6 +297,7 @@ impl Behaviour {
                 spin: 0.0,
                 spin_axis: Vec3::Y,
                 scale: 1.0,
+                locked: None,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -319,6 +325,7 @@ impl Behaviour {
                 spin: 0.0,
                 spin_axis: Vec3::Y,
                 scale: 1.0,
+                locked: None,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -344,6 +351,7 @@ impl Behaviour {
             spin: 0.0,
             spin_axis: Vec3::Y,
             scale: 1.0,
+            locked: None,
             hover: None,
             stick: None,
             flags: Vec::new(),
@@ -860,6 +868,7 @@ impl Behaviour {
         self.program = program;
 
         for i in 0..self.states.len() {
+            self.follow_locked(i);
             self.follow_path(i, dt);
             self.move_straight(i, dt);
             if let Some(world) = ground {
@@ -901,6 +910,25 @@ impl Behaviour {
             }
         }
         moved
+    }
+
+    /// Where something carried is: with what carries it, at its offset
+    /// turned with it.
+    fn follow_locked(&mut self, i: usize) {
+        let Some((to, offset)) = self.states[i].locked else {
+            return;
+        };
+        let (at, turn) = match to {
+            None => match self.skater {
+                Some(p) => (p, Quat::from_rotation_y(self.skater_state.heading)),
+                None => return,
+            },
+            Some(o) => (self.states[o].position, self.states[o].rotation),
+        };
+        let state = &mut self.states[i];
+        state.position = at + turn * offset;
+        state.rotation = turn;
+        state.dirty = true;
     }
 
     fn follow_path(&mut self, i: usize, dt: f32) {
@@ -1215,6 +1243,8 @@ pub struct SkaterState {
     pub doing_trick: bool,
     /// Its speed (in the game's units, inches a second).
     pub speed: f32,
+    /// Which way it faces (radians about Y, as the skater's heading).
+    pub heading: f32,
 }
 
 impl SkaterState {
@@ -1600,6 +1630,27 @@ impl Host for Commands<'_> {
             };
         } else if name == c("GetSkaterId") {
             return Outcome::Params(vec![(Some(c("objId")), Value::Name(c("skater")))]);
+        } else if name == c("Obj_LockToObject") {
+            // Carried along by the skater or another object, at an offset
+            // (or let go: `off`).
+            let state_off = args.has_flag(c("off"));
+            let to = match named("ObjectName") {
+                Some(n) if n == c("skater") => Some(None),
+                Some(n) => b.object_named(n).map(Some),
+                None => None,
+            };
+            let offset = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Vector([x, y, z])) => Some(Vec3::new(*x, *y, *z)),
+                    _ => None,
+                }),
+                _ => None,
+            }
+            .unwrap_or(Vec3::ZERO);
+            b.states[object].locked = match (state_off, to) {
+                (false, Some(to)) => Some((to, offset)),
+                _ => None,
+            };
         } else if name == c("obj_applyscaling") {
             if let Some(k) = args.get(c("scale")).and_then(Value::as_f32) {
                 b.states[object].scale = k;

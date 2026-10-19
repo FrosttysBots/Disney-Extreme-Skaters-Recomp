@@ -6732,5 +6732,6 @@ fn skater_state(s: &Skater) -> desa_viewer::behaviour::SkaterState {
         skitching: s.skitch.is_some(),
         doing_trick: s.trick.is_some() || on_rail || s.manual || s.lip.is_some(),
         speed: s.velocity.length(),
+        heading: s.heading,
     }
 }
