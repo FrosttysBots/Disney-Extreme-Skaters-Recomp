@@ -91,6 +91,9 @@ struct State {
     /// The axis it spins about, in its own frame (Y unless `Obj_RotX`,
     /// `Obj_RotZ`).
     spin_axis: Vec3,
+    /// Its size, times its model's (`obj_applyscaling scale = 0.25`:
+    /// Beach's gulls).
+    scale: f32,
     /// Bobbing up and down (`Obj_Hover Amp = units Freq = hertz`), shown
     /// only: where it is stays put.
     hover: Option<(f32, f32)>,
@@ -254,6 +257,7 @@ impl Behaviour {
                 exceptions: Vec::new(),
                 spin: 0.0,
                 spin_axis: Vec3::Y,
+                scale: 1.0,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -279,6 +283,7 @@ impl Behaviour {
                 exceptions: Vec::new(),
                 spin: 0.0,
                 spin_axis: Vec3::Y,
+                scale: 1.0,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -305,6 +310,7 @@ impl Behaviour {
                 exceptions: Vec::new(),
                 spin: 0.0,
                 spin_axis: Vec3::Y,
+                scale: 1.0,
                 hover: None,
                 stick: None,
                 flags: Vec::new(),
@@ -329,6 +335,7 @@ impl Behaviour {
             exceptions: Vec::new(),
             spin: 0.0,
             spin_axis: Vec3::Y,
+            scale: 1.0,
             hover: None,
             stick: None,
             flags: Vec::new(),
@@ -848,7 +855,11 @@ impl Behaviour {
                 amplitude * (now * frequency * std::f32::consts::TAU).sin()
             });
             let placement = if shown {
-                Mat4::from_rotation_translation(state.rotation, state.position + Vec3::Y * bob)
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(state.scale),
+                    state.rotation,
+                    state.position + Vec3::Y * bob,
+                )
             } else {
                 // Gone: shrink it to nothing.
                 Mat4::from_scale(Vec3::ZERO)
@@ -1538,6 +1549,11 @@ impl Host for Commands<'_> {
                     .and_then(Value::as_f32)
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
+            }
+        } else if name == c("obj_applyscaling") {
+            if let Some(k) = args.get(c("scale")).and_then(Value::as_f32) {
+                b.states[object].scale = k;
+                b.states[object].dirty = true;
             }
         } else if name == c("Obj_RotY") || name == c("Obj_RotX") || name == c("Obj_RotZ") {
             // `Obj_RotY speed = 250`: spinning (degrees a second); with
