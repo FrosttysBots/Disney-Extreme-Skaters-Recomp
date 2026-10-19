@@ -344,7 +344,9 @@ fn load_level(
         Vec::new()
     });
     scripts.extend(files.scripts.iter().cloned());
-    let behaviour = Behaviour::new(&nodes, &scripts);
+    let mut behaviour = Behaviour::new(&nodes, &scripts);
+    // (Its goal manager names goals as the level's scripts do.)
+    behaviour.goal_prefix = desa_viewer::goals::goal_prefix(&info.id);
     // Breakables (what touching a trigger shatters): those that are sectors
     // there at the start get layers of their own, to take away.
     let breakables = desa_viewer::triggers::breakables(&nodes, behaviour.program());
@@ -3641,6 +3643,7 @@ impl<'a> App<'a> {
         b.goal_collects = desa_viewer::goals::counts_collected(&kind);
         b.goal_needed = goal.needed;
         b.goal_won = false;
+        b.goal_lost = false;
         let mut params: qb::vm::Params = goal
             .params
             .iter()
@@ -3748,7 +3751,8 @@ impl<'a> App<'a> {
             tetris_lost = t.lost;
         }
         let won = level.behaviour.goal_won || (needed > 0 && got >= needed);
-        if won || run.left == Some(0.0) || tetris_lost {
+        let lost = tetris_lost || level.behaviour.goal_lost;
+        if won || run.left == Some(0.0) || lost {
             run.over = true;
             model.goal_result = Some((run.goal.name.clone(), won));
             if won {

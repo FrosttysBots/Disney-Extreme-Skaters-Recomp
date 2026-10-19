@@ -47,6 +47,7 @@ fn real_goal_scripts() {
             let g =
                 desa_viewer::goals::generic_goal(first.program(), &level.id, &goal.kind).unwrap();
             let mut b = Behaviour::new(&nodes, &scripts);
+            b.goal_prefix = desa_viewer::goals::goal_prefix(&level.id);
             let mut run = |b: &mut Behaviour, frames: usize| {
                 for step in 0..frames {
                     b.update(&mut objects, step as f32 / 30.0, 1.0 / 30.0, false, None);

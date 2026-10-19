@@ -89,6 +89,12 @@ fn flatten(params: &Value, program: &Program, out: &mut Vec<(u32, Value)>) {
     }
 }
 
+/// The prefix a level's goal ids start with (`zurg` in `zurg_goal_gaps`:
+/// `GoalManager_CreateGoalName`'s).
+pub fn goal_prefix(level: &str) -> String {
+    level_names(level)[1].to_string()
+}
+
 /// The names a level's goal scripts go by: its archive name, or the
 /// short one its scripts use.
 fn level_names(level: &str) -> Vec<&str> {

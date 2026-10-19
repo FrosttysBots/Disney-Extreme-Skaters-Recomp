@@ -207,6 +207,18 @@ pub struct Behaviour {
     /// The goal on's parameters, as `GoalManager_GetGoalParams` gives
     /// them (and `GoalManager_EditGoal` changes them).
     pub goal_params: Params,
+    /// Lost by its scripts (`GoalManager_LoseGoal`, or deactivated).
+    pub goal_lost: bool,
+    /// Every goal the level's set-up added (`GoalManager_AddGoal`): its
+    /// parameters, by its id; the ids made with the level's prefix
+    /// (`GoalManager_CreateGoalName`).
+    goal_defs: HashMap<u32, Params>,
+    pub goal_prefix: String,
+    /// Goals the scripts have started alongside the one on (Hub's
+    /// lighthouse minigame, Zurg's height one), and the best each
+    /// minigame's had (`GoalManager_CheckMinigameRecord`).
+    side_goals: HashMap<u32, SideGoal>,
+    records: HashMap<u32, i32>,
     /// Scripts to run alongside what objects are running
     /// (`RunScriptOnObject`, `SpawnScript`).
     spawning: Vec<(usize, Thread)>,
@@ -384,6 +396,11 @@ impl Behaviour {
             goal_needed: 0,
             goal_won: false,
             goal_params: Vec::new(),
+            goal_lost: false,
+            goal_defs: HashMap::new(),
+            goal_prefix: String::new(),
+            side_goals: HashMap::new(),
+            records: HashMap::new(),
             spawning: Vec::new(),
             random: 0x2545_F491,
             unknown: HashMap::new(),
@@ -915,6 +932,237 @@ impl Behaviour {
     }
 }
 
+/// A goal going alongside the one played (a minigame): its parameters,
+/// the flags its scripts have set and the things it's got.
+#[derive(Clone, Debug, Default)]
+struct SideGoal {
+    params: Params,
+    flags: std::collections::HashSet<u32>,
+    count: usize,
+}
+
+/// `GoalManager_SetGoalFlag Name = goal Got_1 1`'s flag and value (or
+/// `GoalFlagSet`'s `flag = Got_1`).
+fn goal_flag_args(args: &Value) -> (Option<u32>, i32) {
+    let c = checksum;
+    let (mut flag, mut value) = (None, 1);
+    if let Value::Struct(items) = args {
+        for (k, v) in items {
+            match (k, v) {
+                (None, Value::Name(n)) => flag = flag.or(Some(*n)),
+                (None, Value::Integer(i)) => value = *i,
+                (Some(k), Value::Name(n)) if *k == c("flag") => flag = Some(*n),
+                _ => {}
+            }
+        }
+    }
+    (flag, value)
+}
+
+impl Behaviour {
+    /// The goal manager's commands that aren't about the goal being
+    /// played: making goal ids and adding goals (the level's set-up),
+    /// goals started alongside it and their flags, records, and other
+    /// goals' settings. `None` leaves the command to the goal played.
+    fn goal_command(&mut self, program: &Program, name: u32, args: &Value) -> Option<Outcome> {
+        let c = checksum;
+        let named = |key: &str| args.get(c(key)).and_then(Value::as_name);
+        let goal = named("Name");
+        let side = goal.filter(|g| self.side_goals.contains_key(g) && Some(*g) != self.active_goal);
+        if name == c("GoalManager_CreateGoalName") {
+            // `goal_type = "Collect"`: `<level>_goal_Collect`.
+            let kind = match args.get(c("goal_type")) {
+                Some(Value::String(s) | Value::LocalString(s)) => s.clone(),
+                _ => return None,
+            };
+            if self.goal_prefix.is_empty() {
+                return None;
+            }
+            let id = c(&format!("{}_goal_{kind}", self.goal_prefix));
+            return Some(Outcome::Params(vec![(Some(c("goal_ID")), Value::Name(id))]));
+        }
+        if name == c("GoalManager_AddGoal") {
+            // Its parameters: the generic ones its type gives (a global
+            // struct), then those it's added with.
+            let id = goal?;
+            let mut params: Params = Vec::new();
+            if let Some(Value::Struct(items)) = args.get(c("params")) {
+                for (k, v) in items {
+                    match (k, v) {
+                        (None, Value::Name(n)) => {
+                            if let Some(Value::Struct(base)) = program.value(*n) {
+                                for (bk, bv) in base {
+                                    params.retain(|(k, _)| bk.is_none() || k != bk);
+                                    params.push((*bk, bv.clone()));
+                                }
+                            } else {
+                                params.push((None, v.clone()));
+                            }
+                        }
+                        (Some(_), _) => {
+                            params.retain(|(pk, _)| pk != k);
+                            params.push((*k, v.clone()));
+                        }
+                        (None, _) => params.push((None, v.clone())),
+                    }
+                }
+            }
+            params.push((Some(c("goal_ID")), Value::Name(id)));
+            self.goal_defs.insert(id, params);
+            return Some(Outcome::Done(true));
+        }
+        if name == c("GoalManager_ActivateGoal") {
+            let id = goal?;
+            if Some(id) == self.active_goal || self.side_goals.contains_key(&id) {
+                return Some(Outcome::Done(true));
+            }
+            let params = self
+                .goal_defs
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| vec![(Some(c("goal_ID")), Value::Name(id))]);
+            // Its activate script, as the game's goal manager runs it.
+            let activate = params
+                .iter()
+                .find(|(k, _)| *k == Some(c("activate")))
+                .and_then(|(_, v)| v.as_name());
+            if let Some(script) = activate.filter(|s| program.has_script(*s)) {
+                self.starting
+                    .push((self.level_runner, Thread::new(script, params.clone())));
+            }
+            self.side_goals.insert(
+                id,
+                SideGoal {
+                    params,
+                    ..SideGoal::default()
+                },
+            );
+            return Some(Outcome::Done(true));
+        }
+        if name == c("GoalManager_DeactivateGoal") || name == c("GoalManager_LoseGoal") {
+            let id = goal?;
+            if Some(id) == self.active_goal {
+                // The goal played: lost.
+                self.goal_lost = true;
+                return Some(Outcome::Done(true));
+            }
+            let gone = self.side_goals.remove(&id)?;
+            let deactivate = gone
+                .params
+                .iter()
+                .find(|(k, _)| *k == Some(c("deactivate")))
+                .and_then(|(_, v)| v.as_name());
+            if let Some(script) = deactivate.filter(|s| program.has_script(*s)) {
+                self.starting
+                    .push((self.level_runner, Thread::new(script, gone.params)));
+            }
+            return Some(Outcome::Done(true));
+        }
+        if name == c("GoalManager_HasActiveGoals") {
+            return Some(Outcome::Done(
+                self.active_goal.is_some() || !self.side_goals.is_empty(),
+            ));
+        }
+        if name == c("GoalManager_CheckMinigameRecord") {
+            // A new best (`... Name = goal <number_collected>`)?
+            let id = goal?;
+            let value = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(i)) => Some(*i),
+                    _ => None,
+                }),
+                _ => None,
+            }?;
+            let best = self.records.entry(id).or_insert(0);
+            let new = value > *best;
+            if new {
+                *best = value;
+            }
+            return Some(Outcome::Done(new));
+        }
+        // A goal alongside's own flags, things and settings.
+        if let Some(id) = side {
+            let sg = self.side_goals.get_mut(&id)?;
+            if name == c("GoalManager_GoalIsActive") {
+                return Some(Outcome::Done(true));
+            }
+            if name == c("GoalManager_SetGoalFlag") || name == c("GoalManager_GoalFlagSet") {
+                let (flag, value) = goal_flag_args(args);
+                let flag = flag?;
+                if name == c("GoalManager_GoalFlagSet") {
+                    return Some(Outcome::Done(sg.flags.contains(&flag)));
+                }
+                if value != 0 {
+                    sg.flags.insert(flag);
+                } else {
+                    sg.flags.remove(&flag);
+                }
+                return Some(Outcome::Done(true));
+            }
+            if name == c("GoalManager_GotCounterObject") {
+                sg.count += 1;
+                return Some(Outcome::Done(true));
+            }
+            if name == c("GoalManager_GetGoalParams") || name == c("GoalManager_GetNumberCollected")
+            {
+                let mut params = sg.params.clone();
+                params.retain(|(k, _)| {
+                    *k != Some(c("num_flags_set")) && *k != Some(c("number_collected"))
+                });
+                let collected = sg
+                    .params
+                    .iter()
+                    .find(|(k, _)| *k == Some(c("number_collected")))
+                    .and_then(|(_, v)| v.as_int())
+                    .unwrap_or(0)
+                    .max(sg.count as i32);
+                params.push((
+                    Some(c("num_flags_set")),
+                    Value::Integer(sg.flags.len() as i32),
+                ));
+                params.push((Some(c("number_collected")), Value::Integer(collected)));
+                return Some(Outcome::Params(params));
+            }
+            if name == c("GoalManager_EditGoal") {
+                if let Some(Value::Struct(items)) = args.get(c("params")) {
+                    for (k, v) in items.iter().filter(|(k, _)| k.is_some()) {
+                        sg.params.retain(|(o, _)| o != k);
+                        sg.params.push((*k, v.clone()));
+                    }
+                }
+                return Some(Outcome::Done(true));
+            }
+            if name == c("GoalManager_WinGoal") {
+                // Done: its success script, and it's over.
+                let gone = self.side_goals.remove(&id)?;
+                let success = gone
+                    .params
+                    .iter()
+                    .find(|(k, _)| *k == Some(c("success")))
+                    .and_then(|(_, v)| v.as_name());
+                if let Some(script) = success.filter(|s| program.has_script(*s)) {
+                    self.starting
+                        .push((self.level_runner, Thread::new(script, gone.params)));
+                }
+                return Some(Outcome::Done(true));
+            }
+            return None;
+        }
+        // Another goal's settings (not on), as the level added it.
+        if (name == c("GoalManager_GetGoalParams") || name == c("GoalManager_GetNumberCollected"))
+            && goal.is_some()
+            && goal != self.active_goal
+            && goal != self.ended_goal
+        {
+            let mut params = self.goal_defs.get(&goal?)?.clone();
+            params.push((Some(c("num_flags_set")), Value::Integer(0)));
+            params.push((Some(c("number_collected")), Value::Integer(0)));
+            return Some(Outcome::Params(params));
+        }
+        None
+    }
+}
+
 /// What the skater's doing, as the level's scripts ask it
 /// (`skater:OnGround`, `skater:IsInBail`, `skater:SpeedLessThan 900`...).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1075,7 +1323,13 @@ impl Host for Commands<'_> {
         };
         let named = |key: &str| args.get(checksum(key)).and_then(Value::as_name);
         let c = |s: &str| checksum(s);
+        let program = self.program;
         let b = &mut *self.behaviour;
+        if target.is_none() {
+            if let Some(outcome) = b.goal_command(program, name, args) {
+                return outcome;
+            }
+        }
 
         // `object:script args`: the script run as that object, alongside
         // what it's doing (the wildebeest's `HerdWildebeast_Waiting`).
