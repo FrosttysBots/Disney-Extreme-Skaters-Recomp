@@ -216,6 +216,9 @@ pub struct Behaviour {
     /// (`KillSpawnedScript Name = x`), and every one of an object's
     /// (`TerminateObjectsScripts id = obj`).
     killing: Vec<u32>,
+    /// What the scripts have shattered (`Shatter Name = x`,
+    /// `ShatterAndDie`), for the viewer to break.
+    pub shatters: Vec<u32>,
     terminating: Vec<usize>,
     /// Every goal the level's set-up added (`GoalManager_AddGoal`): its
     /// parameters, by its id; the ids made with the level's prefix
@@ -414,6 +417,7 @@ impl Behaviour {
             goal_params: Vec::new(),
             goal_lost: false,
             killing: Vec::new(),
+            shatters: Vec::new(),
             terminating: Vec::new(),
             goal_defs: HashMap::new(),
             goal_prefix: String::new(),
@@ -1568,6 +1572,12 @@ impl Host for Commands<'_> {
                     .and_then(Value::as_f32)
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
+            }
+        } else if name == c("Shatter") || name == c("ShatterAndDie") {
+            if let Some(n) = named("Name") {
+                if b.shatters.len() < 64 {
+                    b.shatters.push(n);
+                }
             }
         } else if name == c("KillSpawnedScript") {
             if let Some(script) = named("Name") {

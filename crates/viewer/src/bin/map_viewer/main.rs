@@ -3453,6 +3453,27 @@ impl<'a> App<'a> {
                 }
             }
         }
+        // What the scripts shattered (a door, a pane): gone, in pieces.
+        for name in std::mem::take(&mut level.behaviour.shatters) {
+            let at = if let Some(object) = level.behaviour.object(name) {
+                level.behaviour.set_alive(object, false);
+                Some(level.behaviour.position(object))
+            } else if let Some(layer) = level.sector_layers.get(&name) {
+                level.renderer.show_layer(*layer, false);
+                level.sector_centres.get(&name).copied()
+            } else {
+                if level.nodes.hidden_sectors.contains(&name) {
+                    level.show_sector(name, false);
+                }
+                level.sector_centres.get(&name).copied()
+            };
+            if let Some(world) = &mut level.world {
+                world.disable(name);
+            }
+            if let Some(at) = at {
+                self.sparks.shatter(at);
+            }
+        }
         for trigger in &skater.touched {
             let Some((_, names, sound)) = level.breakables.get(trigger) else {
                 continue;
