@@ -1153,6 +1153,7 @@ impl ScreenUi {
             "end_current_goal_run",
             "view_goals_menu_start_goal",
             "really_change_level",
+            "skip_track",
         ]);
         Some(ScreenUi {
             screen,
@@ -4213,6 +4214,16 @@ impl<'a> App<'a> {
         // The goal on, for the UI's scripts that ask after it (and
         // whether there's one to retry).
         s.can_retry = self.goal_run.is_some();
+        // The volumes: the sound options' changes taken, else the panel's
+        // shown.
+        let model = &mut self.model.character;
+        if std::mem::take(&mut s.volumes_changed) {
+            model.music_volume = s.music_level as f32 / 10.0;
+            model.effects_volume = s.sound_level as f32 / 10.0;
+        } else {
+            s.music_level = (model.music_volume * 10.0).round() as i32;
+            s.sound_level = (model.effects_volume * 10.0).round() as i32;
+        }
         // The goals for View Goals.
         s.goal_list = self
             .model
@@ -4598,6 +4609,13 @@ impl<'a> App<'a> {
         }
         let c = qb::checksum;
         for (name, args) in requests {
+            if name == c("skip_track") {
+                // The sound options' Skip Track: the next song.
+                if let Some(audio) = &mut self.audio {
+                    audio.stop_music();
+                }
+                continue;
+            }
             if name == c("really_change_level") {
                 // The level select: that level, skating there.
                 let wanted = args.get(c("level")).and_then(qb::Value::as_name);

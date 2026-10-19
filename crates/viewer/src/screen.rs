@@ -237,6 +237,12 @@ pub struct Screen {
     /// The level's goals for View Goals (`GoalManager_AddViewGoalsList`):
     /// id, what the list calls it, and whether it's won.
     pub goal_list: Vec<(u32, String, bool)>,
+    /// The music and effects volumes as the sound options show them, 0
+    /// to 10 (`GetValueFromVolume cdvol`, `sfxvol`), and whether the
+    /// menu's changed them (`SetMusicVolume`, `SetSfxVolume`).
+    pub music_level: i32,
+    pub sound_level: i32,
+    pub volumes_changed: bool,
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
@@ -277,6 +283,9 @@ impl Screen {
             character: None,
             gaps: Vec::new(),
             goal_list: Vec::new(),
+            music_level: 10,
+            sound_level: 10,
+            volumes_changed: false,
             stopping: Vec::new(),
         }
     }
@@ -1711,6 +1720,38 @@ impl Host for Ui<'_> {
                     ),
                     then: None,
                 });
+            }
+        } else if name == c("GetValueFromVolume") {
+            let which = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let value = if which == Some(c("sfxvol")) {
+                s.sound_level
+            } else {
+                s.music_level
+            };
+            return Outcome::Params(vec![(Some(c("value")), Value::Integer(value))]);
+        } else if name == c("SetMusicVolume") || name == c("SetSfxVolume") {
+            // `SetMusicVolume 70`: out of 100.
+            let level = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, v) => v.as_f32(),
+                    _ => None,
+                }),
+                v => v.as_f32(),
+            };
+            if let Some(level) = level {
+                let level = (level / 10.0).round().clamp(0.0, 10.0) as i32;
+                if name == c("SetMusicVolume") {
+                    s.music_level = level;
+                } else {
+                    s.sound_level = level;
+                }
+                s.volumes_changed = true;
             }
         } else if name == c("GoalManager_NumGoalsBeatenInLevel") {
             // The level select's count: the level on's goals won (the
