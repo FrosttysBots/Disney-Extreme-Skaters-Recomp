@@ -16,7 +16,9 @@ character. This page is for anyone trying it out.
 Or go the game's way: its main menu in the Skate Shop (Play Game or Free
 Skate), then its skater select on the shop's stage (left and right
 change the character, with their stats, theme and clip on the TV; L and
-R, or Q and E, turn them round; Enter picks), then its level select.
+R, or Q and E, turn them round; Enter picks), then its level select
+(as in the game, only the character's own world: the Toy Story three
+for Jessie; the panel's level list goes anywhere).
 
 ## Controls
 

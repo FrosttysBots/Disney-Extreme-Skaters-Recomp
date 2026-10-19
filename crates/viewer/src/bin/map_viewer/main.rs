@@ -4446,6 +4446,14 @@ impl<'a> App<'a> {
         };
         let program = level.behaviour.program();
         let s = &mut screen.screen;
+        // The character, for the menus' profile questions too (the skater
+        // select, the level select's worlds), skating or not.
+        s.character = self
+            .model
+            .character
+            .current
+            .and_then(|i| self.model.character.characters.get(i))
+            .map(|c| c.id.clone());
         let Some((skater, ..)) = &self.skating else {
             if self.hud.up {
                 self.hud = GameHud::default();
@@ -4516,12 +4524,6 @@ impl<'a> App<'a> {
                 )
             })
             .collect();
-        s.character = self
-            .model
-            .character
-            .current
-            .and_then(|i| self.model.character.characters.get(i))
-            .map(|c| c.id.clone());
         let b = &level.behaviour;
         s.goal = b
             .active_goal
@@ -6725,6 +6727,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     .run(qb::checksum("launch_main_menu"), Vec::new());
             }
             for _ in 0..60 {
+                app.update_game_hud();
                 app.update_screen(1.0 / 60.0);
             }
             for key in args.menu_keys.chars() {
@@ -6743,7 +6746,14 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     screen.screen.pad(pad);
                 }
                 for _ in 0..30 {
+                    app.update_game_hud();
                     app.update_screen(1.0 / 60.0);
+                }
+            }
+            // (DESA_SCREEN_DUMP: the game's screen elements, for a look.)
+            if std::env::var_os("DESA_SCREEN_DUMP").is_some() {
+                if let Some(screen) = &app.screen {
+                    eprintln!("{}", screen.screen.describe());
                 }
             }
             // A second of the screen's movie (it keeps its own time).

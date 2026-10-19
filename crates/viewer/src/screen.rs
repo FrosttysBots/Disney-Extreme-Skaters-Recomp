@@ -2105,6 +2105,9 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             return Outcome::Done(set.is_some_and(|v| v != 0));
+        } else if name == c("English") {
+            // The USA disc's language (the menus lay out wider for others).
+            return Outcome::Done(true);
         } else if name == c("isngc") || name == c("CD") {
             // The GameCube disc's.
             return Outcome::Done(true);

@@ -2125,6 +2125,9 @@ impl Host for Commands<'_> {
             return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
         } else if name == c("GoalManager_HasSeenGoal") {
             return Outcome::Done(true);
+        } else if name == c("English") {
+            // The USA disc's language.
+            return Outcome::Done(true);
         } else if name == c("isngc") || name == c("CD") {
             // The GameCube disc's.
             return Outcome::Done(true);
