@@ -164,6 +164,9 @@ pub struct Behaviour {
     /// text and counters), for the viewer to pass to the game's screen:
     /// (command, its arguments).
     pub screen_calls: Vec<(u32, Value)>,
+    /// The screen elements the level's scripts have made and not
+    /// destroyed (their ids), for `ScreenElementExists`.
+    screen_ids: std::collections::HashSet<u32>,
     /// The game's UI scripts the level's called (`create_speech_box`,
     /// `create_panel_block`...), for the viewer to run on the game's
     /// screen, where they can see what they've made.
@@ -403,6 +406,7 @@ impl Behaviour {
             voice_lines: Vec::new(),
             messages: Vec::new(),
             screen_calls: Vec::new(),
+            screen_ids: Default::default(),
             screen_scripts: Vec::new(),
             next_screen_id: 0,
             cameras: Vec::new(),
@@ -527,6 +531,17 @@ impl Behaviour {
             .into_iter()
             .map(|i| self.states[i].position)
             .collect()
+    }
+
+    /// The script object `object` runs when the skater comes near (its
+    /// `SkaterInRadius` exception), if any.
+    pub fn radius_script(&self, object: usize) -> Option<u32> {
+        let key = checksum("SkaterInRadius");
+        self.states[object]
+            .exceptions
+            .iter()
+            .find(|(e, ..)| *e == key)
+            .map(|(_, script, _)| *script)
     }
 
     /// The objects that do something when the skater comes near.
@@ -695,6 +710,26 @@ impl Behaviour {
     }
 
     /// Whether an object exists now (created and not killed).
+    /// Creates the object named `name` (as `create Name = name`), if it
+    /// isn't there: a goal's pro, there to talk to and take things back.
+    pub fn create_object(&mut self, name: u32) {
+        let Some(o) = self.object_named(name) else {
+            self.other_creates.push((name, true));
+            return;
+        };
+        if self.states[o].alive {
+            return;
+        }
+        if let Some(script) = self.scripts[o] {
+            self.starting.push((o, Thread::new(script, Vec::new())));
+        }
+        self.states[o].alive = true;
+        self.states[o].dirty = true;
+        if self.bouncies.contains(&o) {
+            self.other_creates.push((name, true));
+        }
+    }
+
     /// Whether the object named `name` is there (created, not killed).
     pub fn is_alive(&self, name: u32) -> bool {
         self.object_named(name)
@@ -1410,6 +1445,19 @@ impl Host for Commands<'_> {
         } else if name == c("SkaterCamAnimFinished") {
             // (The viewer plays them as cutscenes; scripts needn't wait.)
             return Outcome::Done(true);
+        } else if name == c("ScreenElementExists") || name == c("ObjectExists") {
+            // One the scripts made (a 3D arrow, a panel message), or an
+            // object that's there.
+            let id = named("id");
+            return Outcome::Done(id.is_some_and(|i| {
+                b.screen_ids.contains(&i) || b.object_named(i).is_some_and(|o| b.states[o].alive)
+            }));
+        } else if name == c("Create3dArrowPointer") {
+            // (A 3D model on the HUD: not drawn, but there to ask about:
+            // Tarzan's fruit go back by theirs.)
+            if let Some(id) = named("id") {
+                b.screen_ids.insert(id);
+            }
         } else if [
             "SetScreenElementProps",
             "DoScreenElementMorph",
@@ -1421,6 +1469,11 @@ impl Host for Commands<'_> {
         .any(|n| name == c(n))
         {
             // For the game's screen.
+            if name == c("DestroyScreenElement") {
+                if let Some(id) = named("id") {
+                    b.screen_ids.remove(&id);
+                }
+            }
             if b.screen_calls.len() < 256 {
                 b.screen_calls.push((name, args.clone()));
             }
@@ -1452,6 +1505,7 @@ impl Host for Commands<'_> {
             if b.screen_calls.len() < 256 {
                 b.screen_calls.push((name, forwarded));
             }
+            b.screen_ids.insert(id);
             let made = id;
             // Text put on screen (a panel message): its words, the goal's
             // own text block aside (the viewer shows that already). (Its

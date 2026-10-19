@@ -64,6 +64,9 @@ fn real_goal_scripts() {
             params.push((Some(qb::checksum("goal_ID")), qb::Value::Name(g.id)));
             params.push((Some(qb::checksum("talked_to_pro")), qb::Value::Integer(0)));
             b.goal_params = params.clone();
+            if let Some(pro) = g.pro {
+                b.create_object(pro);
+            }
             for script in [g.activate, g.start_script].into_iter().flatten() {
                 b.run_level_script(script, params.clone());
             }
@@ -123,19 +126,26 @@ fn real_goal_scripts() {
             }
             // (Something that moves off, herded, is followed till it
             // stops: a skater keeping up with it.)
-            let mut visited: Vec<Vec3> = Vec::new();
+            // (Each place once for each thing it does: a pro taking back
+            // the fruit just found is a visit again.)
+            let mut visited: Vec<(Vec3, Option<u32>)> = Vec::new();
             for _ in 0..12 {
                 let new: Vec<(usize, Vec3)> = b
                     .radius_trigger_objects()
                     .into_iter()
                     .map(|o| (o, b.position(o)))
-                    .filter(|(_, p)| !visited.iter().any(|v| v.distance(*p) < 1.0))
+                    .filter(|(o, p)| {
+                        let script = b.radius_script(*o);
+                        !visited
+                            .iter()
+                            .any(|(v, s)| v.distance(*p) < 1.0 && *s == script)
+                    })
                     .collect();
                 if new.is_empty() {
                     break;
                 }
                 for (object, at) in new {
-                    visited.push(at);
+                    visited.push((at, b.radius_script(object)));
                     let mut was = at;
                     let mut still = 0;
                     for step in 0..900 {
@@ -198,7 +208,7 @@ fn real_goal_scripts() {
     if std::env::var("GOAL").is_ok() {
         return;
     }
-    assert!(done.len() + gapped.len() >= 38);
+    assert!(done.len() + gapped.len() >= 39);
     println!("then by landing every gap: {gapped:?}");
     for goal in [
         "camp Gaps3",

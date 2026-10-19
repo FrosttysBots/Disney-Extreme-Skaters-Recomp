@@ -3479,6 +3479,11 @@ impl<'a> App<'a> {
             params.push((Some(qb::checksum("talked_to_pro")), qb::Value::Integer(0)));
         }
         b.goal_params = params.clone();
+        // Its pro, there (the game's goal init makes it once the goal's
+        // open): it takes things back (Tarzan's fruit).
+        if let Some(pro) = goal.pro {
+            b.create_object(pro);
+        }
         for script in [goal.activate, goal.start_script].into_iter().flatten() {
             b.run_level_script(script, params.clone());
         }
