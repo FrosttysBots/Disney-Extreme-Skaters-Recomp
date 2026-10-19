@@ -615,8 +615,14 @@ impl Thread {
             let Value::Struct(items) = &args else {
                 return false;
             };
+            // The pattern: a string, or a global holding one (Zurg's
+            // `zw_panel_message_collect_4_string`, "Got_%i_Battery").
             let pattern = items.iter().find_map(|(k, v)| match (k, v) {
                 (None, Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                (None, Value::Name(n)) => match program.value(*n) {
+                    Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                    _ => None,
+                },
                 _ => None,
             });
             let (Some(pattern), Some((into, as_name))) = (

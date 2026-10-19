@@ -208,7 +208,7 @@ fn real_goal_scripts() {
     if std::env::var("GOAL").is_ok() {
         return;
     }
-    assert!(done.len() + gapped.len() >= 40);
+    assert!(done.len() + gapped.len() >= 41);
     println!("then by landing every gap: {gapped:?}");
     for goal in [
         "camp Gaps3",
