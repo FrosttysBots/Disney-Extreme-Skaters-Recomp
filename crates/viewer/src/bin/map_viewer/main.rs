@@ -3769,6 +3769,10 @@ impl<'a> App<'a> {
                 level.behaviour.run_level_script(script, Vec::new());
             }
         }
+        // Knocked down by the scripts (a heckler, a missile).
+        if std::mem::take(&mut level.behaviour.knock_down) {
+            skater.knock_down();
+        }
         let Some(run) = &mut self.goal_run else {
             return;
         };

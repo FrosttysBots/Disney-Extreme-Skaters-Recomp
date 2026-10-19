@@ -104,6 +104,12 @@ struct State {
     /// Moving to a spot without turning to face the way (`Obj_MoveToPos`:
     /// a door sliding open).
     slide: bool,
+    /// Hidden by its scripts (`Obj_Invisible`, till `Obj_Visible`), there
+    /// all the same: a race's pro waiting, Zurg's missile in his hand.
+    invisible: bool,
+    /// A spot it's remembered (`Obj_StorePos`), to look at and go to
+    /// (`Obj_LookAtPosStored`, `Obj_MoveToPosStored`).
+    stored: Option<Vec3>,
     /// Carried along by another (`Obj_LockToObject ObjectName = skater
     /// (0, 36, 0)`): the skater (`None`) or an object, and where, in its
     /// frame.
@@ -227,6 +233,9 @@ pub struct Behaviour {
     /// What the scripts have shattered (`Shatter Name = x`,
     /// `ShatterAndDie`), for the viewer to break.
     pub shatters: Vec<u32>,
+    /// The skater knocked down (`MakeSkaterGoto PedKnockDown`: a
+    /// heckler's swipe, Zurg's missile), for the viewer to bail.
+    pub knock_down: bool,
     /// Sectors whose vertex colors the scripts have stopped, started or
     /// started over (`wibbleVC Name = x On`, `off`, `reset`): each one's
     /// own time in its colors and whether that's running. The others
@@ -286,6 +295,8 @@ impl Behaviour {
                 flags: Vec::new(),
                 turn: None,
                 slide: false,
+                invisible: false,
+                stored: None,
             })
             .collect();
         // Then the level's pieces that move (`LevelObject`s), objects too.
@@ -313,6 +324,8 @@ impl Behaviour {
                 flags: Vec::new(),
                 turn: None,
                 slide: false,
+                invisible: false,
+                stored: None,
             });
         }
         // And the bouncy things knocked about (their `CollideScript`s set
@@ -341,6 +354,8 @@ impl Behaviour {
                 flags: Vec::new(),
                 turn: None,
                 slide: false,
+                invisible: false,
+                stored: None,
             });
         }
         // One more, the level's own: what runs scripts that are nobody's
@@ -367,6 +382,8 @@ impl Behaviour {
             flags: Vec::new(),
             turn: None,
             slide: false,
+            invisible: false,
+            stored: None,
         });
         let threads = nodes
             .objects
@@ -438,6 +455,7 @@ impl Behaviour {
             paused_for: 0.0,
             killing: Vec::new(),
             shatters: Vec::new(),
+            knock_down: false,
             color_clocks: HashMap::new(),
             now: 0.0,
             terminating: Vec::new(),
@@ -911,7 +929,7 @@ impl Behaviour {
             if !std::mem::take(&mut state.dirty) {
                 continue;
             }
-            let shown = state.alive || (self.goal[i] && show_goal);
+            let shown = (state.alive || (self.goal[i] && show_goal)) && !state.invisible;
             let bob = state.hover.map_or(0.0, |(amplitude, frequency)| {
                 amplitude * (now * frequency * std::f32::consts::TAU).sin()
             });
@@ -1600,6 +1618,44 @@ impl Host for Commands<'_> {
                     state.dirty = true;
                 }
             }
+        } else if name == c("Obj_Invisible") || name == c("Obj_Visible") {
+            let state = &mut b.states[object];
+            state.invisible = name == c("Obj_Invisible");
+            state.dirty = true;
+        } else if name == c("Obj_StorePos") {
+            let state = &mut b.states[object];
+            state.stored = Some(state.position);
+        } else if name == c("Obj_LookAtPosStored") {
+            // Turned to face the spot (all the way: a missile aims up or
+            // down at it too), over `time` seconds.
+            let state = &mut b.states[object];
+            if let Some(at) = state.stored {
+                let along = (at - state.position).normalize_or_zero();
+                if along != Vec3::ZERO {
+                    let to = Quat::from_rotation_arc(Vec3::Z, along);
+                    let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
+                    if time > 0.0 {
+                        state.turn = Some((state.rotation, to, 0.0, time));
+                    } else {
+                        state.rotation = to;
+                        state.dirty = true;
+                    }
+                }
+            }
+        } else if name == c("Obj_MoveToPosStored") {
+            // Off to the spot at `speed` (mph), facing as it is.
+            let speed = args.get(c("speed")).and_then(Value::as_f32).unwrap_or(0.0);
+            let state = &mut b.states[object];
+            if let Some(to) = state.stored {
+                if speed > 0.0 {
+                    state.moving = Some((to, speed * MPH, false));
+                    state.slide = true;
+                } else {
+                    state.position = to;
+                    state.moving = None;
+                    state.dirty = true;
+                }
+            }
         } else if name == c("Obj_LookAtNode") {
             let node = named("Name").and_then(|n| b.node_by_name.get(&n).copied());
             if let Some(p) = node.and_then(|n| b.nodes[n].position) {
@@ -1680,6 +1736,21 @@ impl Host for Commands<'_> {
                     .and_then(Value::as_f32)
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
+            }
+        } else if name == c("MakeSkaterGoto") {
+            // The skater's own scripts aren't run; a knock down is a bail.
+            let to = match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if to == Some(c("PedKnockDown")) {
+                b.knock_down = true;
+            } else {
+                *b.unknown.entry(name).or_default() += 1;
+                return Outcome::Done(false);
             }
         } else if name == c("Obj_StopSound") {
             // (Objects' sounds play once here, loops too: nothing to stop.)

@@ -921,6 +921,28 @@ impl Skater {
         self.set_action(action);
     }
 
+    /// Knocked down (`PedKnockDown`: a heckler's swipe, a missile): off
+    /// any rail, lip or manual and into a bail (`DoingTrickBail`), the
+    /// combo lost; in the air, a bail on landing.
+    pub fn knock_down(&mut self) {
+        if matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        ) {
+            return;
+        }
+        self.grind = None;
+        self.lip = None;
+        self.manual = false;
+        self.trick = None;
+        self.end_combo(false);
+        if self.on_ground {
+            self.start_bail(Action::Bail, false);
+        } else {
+            self.bail_on_landing = true;
+        }
+    }
+
     /// The steering held (-1 left to 1 right).
     pub fn turn_input(&self) -> f32 {
         self.last_input.turn
