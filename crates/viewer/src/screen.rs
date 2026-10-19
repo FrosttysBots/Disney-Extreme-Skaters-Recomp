@@ -1705,6 +1705,28 @@ impl Host for Ui<'_> {
                 thread: Thread::new(script, params),
                 then,
             });
+        } else if name == c("SpawnScript") {
+            // Another script run alongside, on the same element
+            // (`spawnscript control_menu_vibrate_controller params = ...`).
+            let script = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(script) = script.filter(|n| self.program.has_script(*n)) else {
+                return Outcome::Done(false);
+            };
+            let params = match props.get(c("params")) {
+                Some(Value::Struct(p)) => p.clone(),
+                _ => Vec::new(),
+            };
+            s.starting.push(Running {
+                element: self.element,
+                thread: Thread::new(script, params),
+                then: None,
+            });
         } else if name == c("TerminateObjectsScripts") {
             // An element's scripts stopped (those of one name, if named).
             if let Some(i) = target_of(s) {
