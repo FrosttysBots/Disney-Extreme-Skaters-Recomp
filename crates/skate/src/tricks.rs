@@ -209,6 +209,11 @@ impl TrickBook {
         for (d, t) in self.lips.iter().filter(|(d, _)| straight(*d)) {
             lines.push(format!("  Grind{}: {} ({})", dir(*d), t.name, t.score));
         }
+        lines.push("Wallrides (jump at a wall alongside, holding Grind):".to_string());
+        lines.push(
+            "  FS / BS Wallride (200); let go of crouch: Wallie (250), with Up: Wallplant (500)"
+                .to_string(),
+        );
         lines.push("Specials (special meter full):".to_string());
         if let Some((a, b, i)) = self.special_air {
             let t = &self.tricks[i];
