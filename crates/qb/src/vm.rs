@@ -1008,6 +1008,15 @@ fn skip_branch(body: &[Token], mut at: usize, stop_at_else: bool) -> usize {
 /// parameter holding one or naming a global that is. The item, if it's
 /// all the tokens are.
 fn indexed(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
+    // `(array [ i ]).field`: what's in the brackets, then its fields.
+    if tokens.first() == Some(&Token::OpenParen) {
+        let close = matching_paren(tokens, 0);
+        let inner = &tokens[1..close.min(tokens.len())];
+        let mut value = indexed(inner, params, program)?;
+        let mut i = close + 1;
+        member_chain(&mut value, tokens, &mut i, params, program)?;
+        return (i == tokens.len() && i > close + 1).then_some(value);
+    }
     let (array, mut i) = match tokens {
         [Token::Arg, Token::Name(n), ..] => {
             let v = params
@@ -1368,6 +1377,21 @@ fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<
                     .and_then(Num::of)
                     .unwrap_or(Num::Scalar(f64::from(*n))),
             ),
+            // `(array [ i ]).num_goals`: a field of what's in brackets.
+            Token::OpenParen
+                if matches!(tokens.get(matching_paren(tokens, i) + 1), Some(Token::Dot))
+                    && matches!(
+                        tokens.get(matching_paren(tokens, i) + 2),
+                        Some(Token::Name(_) | Token::Arg)
+                    ) =>
+            {
+                let close = matching_paren(tokens, i);
+                let mut value = indexed(&tokens[i + 1..close], params, program)?;
+                let mut at = close + 1;
+                member_chain(&mut value, tokens, &mut at, params, program)?;
+                i = at - 1;
+                Num::of(&value)
+            }
             Token::OpenParen => {
                 let close = matching_paren(tokens, i);
                 let v = evaluate_num(&tokens[i + 1..close], params, program);

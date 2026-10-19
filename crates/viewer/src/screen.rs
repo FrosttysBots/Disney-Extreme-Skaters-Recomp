@@ -735,6 +735,20 @@ impl Screen {
     }
 
     fn draw_element(&self, i: usize, origin: Vec2, scale: Vec2, alpha: f32, out: &mut Vec<Draw>) {
+        self.draw_element_except(i, origin, scale, alpha, out, &[]);
+    }
+
+    /// As `draw_element`, its children in `except` left out (a scrolling
+    /// menu's rows out of its box).
+    fn draw_element_except(
+        &self,
+        i: usize,
+        origin: Vec2,
+        scale: Vec2,
+        alpha: f32,
+        out: &mut Vec<Draw>,
+        except: &[usize],
+    ) {
         let Some(e) = self.el(i) else { return };
         if e.hidden {
             return;
@@ -750,7 +764,12 @@ impl Screen {
             e.look.rgba[2],
             e.look.rgba[3] * alpha,
         ];
-        let mut children: Vec<usize> = e.children.clone();
+        let mut children: Vec<usize> = e
+            .children
+            .iter()
+            .copied()
+            .filter(|c| !except.contains(c))
+            .collect();
         children.sort_by(|a, b| {
             let z = |c: &usize| self.el(*c).map_or(0.0, |c| c.z);
             z(a).total_cmp(&z(b))
@@ -870,30 +889,34 @@ impl Screen {
                 scroll = start + length - room;
             }
         }
-        e.scroll.set(scroll.max(0.0));
+        let scroll = scroll.max(0.0);
+        e.scroll.set(scroll);
         let shift = if across {
             Vec2::new(-scroll.max(0.0) * scale.x, 0.0)
         } else {
             Vec2::new(0.0, -scroll.max(0.0) * scale.y)
         };
-        let mut inside = Vec::new();
+        // Each menu's rows inside the box, whole.
+        let slack = 2.0;
         for &c in children {
-            self.draw_element(c, at + shift, scale, alpha, &mut inside);
+            let menu_at = self.local_rect(c).0;
+            let outside: Vec<usize> = self.el(c).map_or(Vec::new(), |m| {
+                m.children
+                    .iter()
+                    .copied()
+                    .filter(|&row| {
+                        let (top_left, size) = self.local_rect(row);
+                        let (start, length) = if across {
+                            (menu_at.x + top_left.x, size.x)
+                        } else {
+                            (menu_at.y + top_left.y, size.y)
+                        };
+                        start - scroll < -slack || start + length - scroll > room + slack
+                    })
+                    .collect()
+            });
+            self.draw_element_except(c, at + shift, scale, alpha, out, &outside);
         }
-        let (lo, hi) = (at, at + span * scale);
-        // (A little slack: letters overhang their rows.)
-        let slack = 4.0;
-        out.extend(inside.into_iter().filter(|d| {
-            let r = match d {
-                Draw::Sprite { rect, .. } | Draw::Glyph { rect, .. } => rect,
-            };
-            let (mid_x, mid_y) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-            if across {
-                mid_x >= lo.x - slack && mid_x <= hi.x + slack
-            } else {
-                mid_y >= lo.y - slack && mid_y <= hi.y + slack
-            }
-        }));
     }
 
     /// The buttons font, for a controller button's character.
@@ -1753,12 +1776,13 @@ impl Host for Ui<'_> {
                 }
                 s.volumes_changed = true;
             }
-        } else if name == c("GoalManager_NumGoalsBeatenInLevel") {
-            // The level select's count: the level on's goals won (the
-            // others' aren't known here).
+        } else if name == c("GoalManager_NumGoalsBeatenInLevel") || name == c("GetLevelGapTotals") {
+            // The level select's and game progress' counts: the level on's
+            // goals won and gaps landed (the others' aren't known here).
             let level_num = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
                     (None, Value::Integer(n)) => Some(*n),
+                    (Some(k), Value::Integer(n)) if *k == c("level") => Some(*n),
                     _ => None,
                 }),
                 _ => None,
@@ -1772,6 +1796,17 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             let here = level.is_some() && level == s.level;
+            if name == c("GetLevelGapTotals") {
+                let landed = if here {
+                    s.gaps.iter().filter(|(_, _, times)| *times > 0).count() as i32
+                } else {
+                    0
+                };
+                return Outcome::Params(vec![(
+                    Some(c("num_collected_gaps")),
+                    Value::Integer(landed),
+                )]);
+            }
             let beaten = if here {
                 s.goal_list.iter().filter(|(_, _, won)| *won).count() as i32
             } else {
