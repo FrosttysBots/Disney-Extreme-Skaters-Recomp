@@ -31,6 +31,10 @@ pub struct RailHit {
 #[derive(Clone, Debug, Default)]
 pub struct Rails {
     pub segments: Vec<Segment>,
+    /// Each segment's node, the one whose link made it (its name, 0 for
+    /// none): grinding onto the segment reaches it, running its
+    /// `TriggerScript` (a rail gap's start or end, a goal's grind).
+    pub nodes: Vec<u32>,
 }
 
 /// Ends closer than this are the same node.
@@ -38,19 +42,45 @@ const JOIN: f32 = 0.01;
 
 impl Rails {
     pub fn new(segments: Vec<Segment>) -> Self {
+        Self::named(segments.into_iter().map(|s| (s, 0)).collect())
+    }
+
+    /// Rails from segments and their nodes' names (see [`Rails::nodes`]).
+    pub fn named(segments: Vec<(Segment, u32)>) -> Self {
         // Nodes linked both ways round make the same segment twice: once
-        // is enough (twice, the second is a join back the way it came).
+        // is enough (twice, the second is a join back the way it came),
+        // keeping a node's name if either has one.
         let mut kept: Vec<Segment> = Vec::with_capacity(segments.len());
-        for s in segments {
+        let mut nodes: Vec<u32> = Vec::with_capacity(segments.len());
+        for (s, node) in segments {
             let same = |k: &Segment| {
                 (k.start.distance(s.start) < JOIN && k.end.distance(s.end) < JOIN)
                     || (k.start.distance(s.end) < JOIN && k.end.distance(s.start) < JOIN)
             };
-            if s.length() > JOIN && !kept.iter().any(same) {
-                kept.push(s);
+            if s.length() <= JOIN {
+                continue;
+            }
+            match kept.iter().position(same) {
+                Some(i) => {
+                    if nodes[i] == 0 {
+                        nodes[i] = node;
+                    }
+                }
+                None => {
+                    kept.push(s);
+                    nodes.push(node);
+                }
             }
         }
-        Rails { segments: kept }
+        Rails {
+            segments: kept,
+            nodes,
+        }
+    }
+
+    /// Segment `i`'s node's name, if it has one.
+    pub fn node(&self, i: usize) -> Option<u32> {
+        self.nodes.get(i).copied().filter(|&n| n != 0)
     }
 
     /// The rail to grind on moving from `from` to `to` (main.dol
@@ -247,5 +277,25 @@ mod tests {
         assert_eq!(r.segments.len(), 3);
         assert_eq!(r.next(0, true), Some((2, false)));
         assert_eq!(r.joins(0, true).count(), 2);
+        // A name from whichever way round had one.
+        let named = Rails::named(vec![
+            (
+                Segment {
+                    start: p(0.0, 0.0),
+                    end: p(100.0, 0.0),
+                },
+                0,
+            ),
+            (
+                Segment {
+                    start: p(100.0, 0.0),
+                    end: p(0.0, 0.0),
+                },
+                7,
+            ),
+        ]);
+        assert_eq!(named.segments.len(), 1);
+        assert_eq!(named.node(0), Some(7));
+        assert_eq!(Rails::new(named.segments.clone()).node(0), None);
     }
 }

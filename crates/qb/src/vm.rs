@@ -499,6 +499,55 @@ impl Thread {
             }
             return true;
         }
+        // Built in: `GoTo script args` (or `params = { ... }`): the
+        // thread carries on as that script, the one it was in (and those
+        // that called it) over.
+        if target.is_none() && name == checksum("GoTo") {
+            let Value::Struct(items) = &args else {
+                return false;
+            };
+            let Some(script) = items.iter().find_map(|(k, v)| match (k, v) {
+                (None, Value::Name(n)) if program.has_script(*n) => Some(*n),
+                _ => None,
+            }) else {
+                return false;
+            };
+            let mut params = Vec::new();
+            let given: Vec<(Option<u32>, Value)> = match args.get(checksum("params")) {
+                Some(Value::Struct(p)) => p.clone(),
+                _ => items
+                    .iter()
+                    .filter(|(k, v)| !(k.is_none() && *v == Value::Name(script)))
+                    .cloned()
+                    .collect(),
+            };
+            for (k, v) in given {
+                match (k, v) {
+                    (None, Value::Struct(fields)) => {
+                        for (fk, fv) in fields {
+                            match fk {
+                                Some(fk) => set_param(&mut params, fk, fv),
+                                None => params.push((None, fv)),
+                            }
+                        }
+                    }
+                    (Some(k), v) => set_param(&mut params, k, v),
+                    (None, v) => params.push((None, v)),
+                }
+            }
+            if trace_calls() {
+                eprintln!("qb: call {script:#010x} (depth 0, GoTo)");
+            }
+            self.frames.clear();
+            self.frames.push(Frame {
+                script,
+                pc: 0,
+                params,
+                loops: Vec::new(),
+                started: false,
+            });
+            return true;
+        }
         if target.is_none() && name == checksum("wait") {
             self.wait += wait_seconds(&args);
             return true;
@@ -1351,6 +1400,53 @@ mod tests {
 
     fn names(log: &Log) -> Vec<u32> {
         log.calls.iter().map(|c| c.1).collect()
+    }
+
+    #[test]
+    fn goto_carries_on_as_another_script() {
+        let mut program = Program::new();
+        // script Outer: Inner / Never
+        program.add_script(
+            checksum("Outer"),
+            vec![n("Inner"), Token::EndOfLine, n("Never"), Token::EndOfLine],
+        );
+        // script Inner: Before / GoTo Next x = 2 / AfterGoTo
+        program.add_script(
+            checksum("Inner"),
+            vec![
+                n("Before"),
+                Token::EndOfLine,
+                n("GoTo"),
+                n("Next"),
+                n("x"),
+                Token::Equals,
+                Token::Integer(2),
+                Token::EndOfLine,
+                n("AfterGoTo"),
+                Token::EndOfLine,
+            ],
+        );
+        // script Next: Report value = <x>
+        program.add_script(
+            checksum("Next"),
+            vec![
+                n("Report"),
+                n("value"),
+                Token::Equals,
+                Token::Arg,
+                n("x"),
+                Token::EndOfLine,
+            ],
+        );
+        let mut log = Log::default();
+        let mut thread = Thread::new(checksum("Outer"), Vec::new());
+        thread.run(&program, &mut log, 0.0);
+        assert_eq!(names(&log), vec![checksum("Before"), checksum("Report")]);
+        assert_eq!(
+            log.calls[1].2.get(checksum("value")),
+            Some(&Value::Integer(2))
+        );
+        assert!(thread.is_finished());
     }
 
     #[test]

@@ -149,6 +149,9 @@ pub struct Behaviour {
     /// Names scripts created or killed that aren't objects (particle
     /// emitters, sectors), for the viewer: (name, created?).
     pub other_creates: Vec<(u32, bool)>,
+    /// What the skater's doing, for the scripts' `skater:OnGround` and
+    /// the like (set by whoever skates it).
+    pub skater_state: SkaterState,
     /// Voice lines scripts asked for (`midgoalvoiceover stream = name`).
     pub voice_lines: Vec<u32>,
     /// Text scripts put on screen (`Create_Panel_Message`,
@@ -385,6 +388,7 @@ impl Behaviour {
             starting: Vec::new(),
             sounds: Vec::new(),
             other_creates: Vec::new(),
+            skater_state: SkaterState::default(),
             voice_lines: Vec::new(),
             messages: Vec::new(),
             screen_calls: Vec::new(),
@@ -847,6 +851,55 @@ impl Behaviour {
     }
 }
 
+/// What the skater's doing, as the level's scripts ask it
+/// (`skater:OnGround`, `skater:IsInBail`, `skater:SpeedLessThan 900`...).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SkaterState {
+    pub on_ground: bool,
+    pub in_air: bool,
+    pub on_rail: bool,
+    pub bailing: bool,
+    pub skitching: bool,
+    /// In the middle of a trick (an air trick, a grind, a manual...).
+    pub doing_trick: bool,
+    /// Its speed (in the game's units, inches a second).
+    pub speed: f32,
+}
+
+impl SkaterState {
+    /// The answer to `skater:<name> <args>`, if it's a question about the
+    /// skater.
+    fn answer(&self, name: u32, args: &Value) -> Option<bool> {
+        let c = checksum;
+        let number = || match args {
+            Value::Struct(items) => items.iter().find_map(|(k, v)| match k {
+                None => v.as_f32(),
+                _ => None,
+            }),
+            v => v.as_f32(),
+        };
+        Some(if name == c("OnGround") {
+            self.on_ground
+        } else if name == c("InAir") {
+            self.in_air
+        } else if name == c("OnRail") {
+            self.on_rail
+        } else if name == c("IsInBail") {
+            self.bailing
+        } else if name == c("Skitching") {
+            self.skitching
+        } else if name == c("doingtrick") {
+            self.doing_trick
+        } else if name == c("SpeedLessThan") {
+            self.speed < number()?
+        } else if name == c("SpeedGreaterThan") {
+            self.speed > number()?
+        } else {
+            return None;
+        })
+    }
+}
+
 /// The host commands for one object's script.
 /// The game's UI scripts, run on its screen rather than by the level's
 /// scripts (they look at what they've made: `GetScreenElementDims`).
@@ -939,6 +992,11 @@ impl Host for Commands<'_> {
     }
 
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if target == Some(checksum("skater")) {
+            if let Some(answer) = self.behaviour.skater_state.answer(name, args) {
+                return Outcome::Done(answer);
+            }
+        }
         let object = match target {
             Some(t) => match self.behaviour.object_named(t) {
                 Some(o) => o,
@@ -1260,6 +1318,15 @@ impl Host for Commands<'_> {
                     }
                 }
             }
+        } else if name == c("GoalManager_GetProsetNotPrefix") {
+            // The other pro sets' pieces, hidden while a goal's are shown
+            // (`goal_start`: `kill prefix = <proset_not_prefix>`, and
+            // "TRG_" + it). The levels have none: a prefix nothing has.
+            // (Unanswered, "TRG_" + nothing killed every trigger.)
+            return Outcome::Params(vec![(
+                Some(c("proset_not_prefix")),
+                Value::String("proset_not_none_".into()),
+            )]);
         } else if name == c("GoalManager_GoalIsActive") {
             return Outcome::Done(named("Name").is_some() && named("Name") == b.active_goal);
         } else if name == c("GoalManager_HasSeenGoal") {

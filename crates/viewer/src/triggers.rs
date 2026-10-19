@@ -198,12 +198,14 @@ pub fn breakables(
         .collect()
 }
 
-/// For each collision object whose trigger script starts or ends a gap:
-/// what it does. (`EndGap`s without a name and score belong to goals.)
+/// For each collision object, or rail node, whose trigger script starts
+/// or ends a gap: what it does. (`EndGap`s without a name and score belong
+/// to goals.)
 pub fn gaps(nodes: &LevelNodes, program: &Program) -> HashMap<u32, GapTrigger> {
     nodes
         .geometry_scripts
         .iter()
+        .chain(&nodes.rail_scripts)
         .filter_map(|&(object, script)| Some((object, gap_in(program, script, DEPTH)?)))
         .collect()
 }

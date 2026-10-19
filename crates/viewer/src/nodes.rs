@@ -36,6 +36,8 @@ pub struct RailSegment {
     pub kind: String,
     /// Its `TerrainType` (`TERRAIN_METALSMOOTH`...), as a name's checksum.
     pub terrain: Option<u32>,
+    /// The node it starts at, whose link it is (its `Name`, 0 for none).
+    pub node: u32,
 }
 
 pub struct Spawn {
@@ -159,6 +161,10 @@ pub struct LevelNodes {
     /// trigger faces: the node's name (its collision object's checksum)
     /// and the `TriggerScript`.
     pub geometry_scripts: Vec<(u32, u32)>,
+    /// Rail nodes that run a script when the skater grinds (or lip
+    /// tricks) the rail from them: the node's name and its
+    /// `TriggerScript` (rail gaps, a goal's grind).
+    pub rail_scripts: Vec<(u32, u32)>,
     /// Particle emitters (`ParticleEmitter`): where, their `TriggerScript`
     /// (which makes the particle system), whether there at the start, and
     /// how far off they're drawn (`CutOff`).
@@ -290,6 +296,12 @@ impl LevelNodes {
             };
             match class_of(node) {
                 Some(c) if c == key("RailNode") => {
+                    if let (Some(name), Some(script)) = (
+                        node.get(key("Name")).and_then(Value::as_name),
+                        node.get(key("TriggerScript")).and_then(Value::as_name),
+                    ) {
+                        out.rail_scripts.push((name, script));
+                    }
                     let kind = name_of(node, "Type").unwrap_or_default();
                     let links = node
                         .get(key("Links"))
@@ -308,6 +320,7 @@ impl LevelNodes {
                                 end: end.into(),
                                 kind: kind.clone(),
                                 terrain: node.get(key("TerrainType")).and_then(Value::as_name),
+                                node: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
                             });
                         }
                     }

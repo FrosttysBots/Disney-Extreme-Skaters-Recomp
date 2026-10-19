@@ -359,6 +359,13 @@ fn load_level(
             .filter(|(o, _)| {
                 !teleports.contains_key(o) && !gaps.contains_key(o) && !breakables.contains_key(o)
             })
+            // And the rail nodes' (grinding Tarzan's bowsprit).
+            .chain(
+                nodes
+                    .rail_scripts
+                    .iter()
+                    .filter(|(o, _)| !gaps.contains_key(o)),
+            )
             .copied()
             .collect()
     };
@@ -402,13 +409,16 @@ fn load_level(
         .as_deref()
         .and_then(|c| ngc_collision::Collision::parse(c).ok())
         .map(|c| {
-            World::new(c).with_rails(Rails::new(
+            World::new(c).with_rails(Rails::named(
                 nodes
                     .rails
                     .iter()
-                    .map(|r| Segment {
-                        start: r.start,
-                        end: r.end,
+                    .map(|r| {
+                        let segment = Segment {
+                            start: r.start,
+                            end: r.end,
+                        };
+                        (segment, r.node)
                     })
                     .collect(),
             ))
@@ -5228,6 +5238,11 @@ impl<'a> App<'a> {
             // The scripts see the skater (birds fly off as it comes near).
             let skater = self.skating.as_ref().map(|(s, ..)| s.position);
             level.behaviour.set_skater(skater);
+            level.behaviour.skater_state = self
+                .skating
+                .as_ref()
+                .map(|(s, ..)| skater_state(s))
+                .unwrap_or_default();
             level.update_objects(
                 self.model.show_objects,
                 self.model.show_goal_objects,
@@ -6006,8 +6021,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_map();
                 // The level's scripts see the skater too.
                 let skater = app.skating.as_ref().map(|(s, ..)| s.position);
+                let state = app.skating.as_ref().map(|(s, ..)| skater_state(s));
                 if let Some(level) = &mut app.level {
                     level.behaviour.set_skater(skater);
+                    level.behaviour.skater_state = state.unwrap_or_default();
                     level.update_objects(true, args.goal_objects, args.time + now, 1.0 / 60.0);
                     level.apply_creates();
                     level.behaviour.sounds.clear();
@@ -6269,4 +6286,25 @@ fn parse_skate_keys(spec: &str) -> Result<Vec<(f32, KeyCode, bool)>> {
             Ok((at, key, down))
         })
         .collect()
+}
+
+/// What the skater's doing, as the level's scripts ask it.
+fn skater_state(s: &Skater) -> desa_viewer::behaviour::SkaterState {
+    let bailing = matches!(
+        s.action,
+        SkateAction::Bail
+            | SkateAction::BailGrind
+            | SkateAction::BailManual
+            | SkateAction::BailFall { .. }
+    );
+    let on_rail = s.grind.is_some();
+    desa_viewer::behaviour::SkaterState {
+        on_ground: s.on_ground,
+        in_air: !s.on_ground && !on_rail && s.lip.is_none() && s.wall.is_none(),
+        on_rail,
+        bailing,
+        skitching: s.skitch.is_some(),
+        doing_trick: s.trick.is_some() || on_rail || s.manual || s.lip.is_some(),
+        speed: s.velocity.length(),
+    }
 }

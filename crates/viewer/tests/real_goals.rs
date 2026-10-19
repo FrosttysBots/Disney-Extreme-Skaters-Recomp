@@ -107,7 +107,7 @@ fn real_goal_scripts() {
             shown.extend(b.other_creates.drain(..));
             let teleports = desa_viewer::triggers::teleports(&nodes, first.program());
             let gaps = desa_viewer::triggers::gaps(&nodes, first.program());
-            for &(object, script) in &nodes.geometry_scripts {
+            for &(object, script) in nodes.geometry_scripts.iter().chain(&nodes.rail_scripts) {
                 let other = !teleports.contains_key(&object)
                     && !gaps.contains_key(&object)
                     && !breakables.iter().any(|(o, _)| *o == object);
@@ -168,6 +168,8 @@ fn real_goal_scripts() {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            // (Landed: on the ground, not bailing.)
+            b.skater_state.on_ground = true;
             for script in gap_scripts {
                 b.run_level_script(script, Vec::new());
                 run(&mut b, 120);
@@ -195,7 +197,7 @@ fn real_goal_scripts() {
     if std::env::var("GOAL").is_ok() {
         return;
     }
-    assert!(done.len() + gapped.len() >= 33);
+    assert!(done.len() + gapped.len() >= 38);
     println!("then by landing every gap: {gapped:?}");
     for goal in [
         "camp Gaps3",

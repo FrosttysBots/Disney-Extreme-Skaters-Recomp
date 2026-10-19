@@ -356,6 +356,8 @@ pub struct Skater {
     /// How long the skater has been crouched (tensing for an ollie).
     crouch_time: f32,
     pub grind: Option<Grind>,
+    /// The rail node last reached on this rail (see [`Rails::nodes`]).
+    rail_node: Option<u32>,
     /// Riding a wall, and how long since the last wallride began.
     pub wall: Option<WallRide>,
     since_wallride: f32,
@@ -526,6 +528,7 @@ impl Skater {
             turn_time: 0.0,
             crouch_time: 0.0,
             grind: None,
+            rail_node: None,
             wall: None,
             since_wallride: f32::MAX,
             wallride_anywhere: true,
@@ -842,7 +845,13 @@ impl Skater {
         // Ends first: where a gap's end and the way-back gap's start lie
         // together, crossing them ends the one before starting the other.
         crossed.sort_by_key(|t| matches!(t, GapTrigger::Start { .. }));
-        for trigger in &crossed {
+        self.cross_gaps(&crossed, surface);
+    }
+
+    /// Gap triggers met (a trigger face crossed, a rail node reached):
+    /// gaps started, and ended into the combo.
+    fn cross_gaps(&mut self, crossed: &[GapTrigger], surface: Surface) {
+        for trigger in crossed {
             if self.trace {
                 eprintln!("crossed {trigger:?} on {surface:?} at {:?}", self.position);
             }
@@ -1124,7 +1133,11 @@ impl Skater {
                     let level = world.rails.segments[hit.segment].direction().y.abs() < 0.3;
                     match self.vert {
                         Some(vert) if self.velocity.y > 0.0 && level => {
-                            self.start_lip(hit.point, vert.out, p)
+                            self.start_lip(hit.point, vert.out, p);
+                            if self.lip.is_some() {
+                                self.rail_node = None;
+                                self.reach_rail(hit.segment, world);
+                            }
                         }
                         _ => self.start_grind(hit, input, p, world),
                     }
@@ -1530,6 +1543,24 @@ impl Skater {
         p.jump_speed_min + (p.jump_speed - p.jump_speed_min) * tense
     }
 
+    /// On rail segment `segment` (grinding onto it, along to it, or lip
+    /// tricking on it): its node reached, once, as a trigger touched (its
+    /// `TriggerScript` runs) and any gap it starts or ends.
+    fn reach_rail(&mut self, segment: usize, world: &World) {
+        let Some(name) = world.rails.node(segment) else {
+            return;
+        };
+        if self.rail_node == Some(name) {
+            return;
+        }
+        self.rail_node = Some(name);
+        self.touches.push(name);
+        if let Some(trigger) = self.gap_triggers.get(&name).cloned() {
+            let surface = self.surface();
+            self.cross_gaps(&[trigger], surface);
+        }
+    }
+
     /// Onto a rail (main.dol 0x80108470): at the point found, unless
     /// something's in the way more than 6 short of it; the speed made
     /// horizontal, then along the rail, plus `rail_speed_boost`.
@@ -1590,6 +1621,8 @@ impl Skater {
         }
         self.heading = travel.x.atan2(travel.z);
         self.set_action(Action::Grinding);
+        self.rail_node = None;
+        self.reach_rail(hit.segment, world);
     }
 
     /// Along the rail (main.dol 0x80100A70): rail gravity along it, on
@@ -1719,6 +1752,7 @@ impl Skater {
             };
             grind.segment = n;
             grind.forwards = same;
+            self.reach_rail(n, world);
             rail = rails.segments[n];
             travel = rail.direction() * if same { 1.0 } else { -1.0 };
             position = joint + travel * past;
