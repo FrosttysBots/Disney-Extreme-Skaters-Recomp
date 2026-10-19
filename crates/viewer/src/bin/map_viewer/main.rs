@@ -4102,8 +4102,45 @@ impl<'a> App<'a> {
             self.settings.best.insert(key, won);
             self.settings.save();
         }
-        // Every level's, for the game's screens.
+        // Every level's, for the game's screens (and the character's
+        // records there).
+        let character = self
+            .model
+            .character
+            .current
+            .and_then(|i| self.model.character.characters.get(i))
+            .map_or(String::new(), |c| c.id.clone());
         if let Some(screen) = &mut self.screen {
+            screen.screen.records = self
+                .model
+                .levels
+                .iter()
+                .map(|l| {
+                    let get = |kind: &str| {
+                        self.settings
+                            .best
+                            .get(&format!("record.{kind}.{}.{character}", l.id))
+                            .copied()
+                            .unwrap_or(0) as i32
+                    };
+                    (
+                        qb::checksum(&format!("load_{}", l.id)),
+                        [
+                            // (A two-minute run's best, as the run keeps it.)
+                            self.settings
+                                .best
+                                .get(&format!("{}.{character}", l.id))
+                                .copied()
+                                .unwrap_or(0) as i32,
+                            get("combo"),
+                            get("grind"),
+                            get("manual"),
+                            get("lip"),
+                            get("tricks"),
+                        ],
+                    )
+                })
+                .collect();
             screen.screen.progress = self
                 .model
                 .levels

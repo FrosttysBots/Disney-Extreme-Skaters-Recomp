@@ -243,6 +243,10 @@ pub struct Screen {
     /// Every level's goals won and gaps landed so far (by its
     /// `load_<level>` checksum), for the level select and Game Progress.
     pub progress: HashMap<u32, (i32, i32)>,
+    /// Every level's records for the character (by its `load_<level>`
+    /// checksum): best session score, best combo, longest grind, manual
+    /// and lip (hundredths of a second), most tricks in a combo.
+    pub records: HashMap<u32, [i32; 6]>,
     pub music_level: i32,
     pub sound_level: i32,
     pub volumes_changed: bool,
@@ -287,6 +291,7 @@ impl Screen {
             gaps: Vec::new(),
             goal_list: Vec::new(),
             progress: HashMap::new(),
+            records: HashMap::new(),
             music_level: 10,
             sound_level: 10,
             volumes_changed: false,
@@ -1748,6 +1753,45 @@ impl Host for Ui<'_> {
                     then: None,
                 });
             }
+        } else if name == c("GetLevelRecords") {
+            // `GetLevelRecords level = 3`: the level's records, as the
+            // records screen reads them (tables of one, and values).
+            let level_num = props.get(c("level")).and_then(Value::as_int);
+            let level = match self.program.value(c("level_select_menu_level_info")) {
+                Some(Value::Array(levels)) => levels.iter().find_map(|l| {
+                    (l.get(c("level_num")).and_then(Value::as_int) == level_num)
+                        .then(|| l.get(c("level")).and_then(Value::as_name))
+                        .flatten()
+                }),
+                _ => None,
+            };
+            let r = level
+                .and_then(|l| s.records.get(&l))
+                .copied()
+                .unwrap_or([0; 6]);
+            let table = |v: i32| {
+                Value::Struct(vec![(
+                    Some(c("RecordTable")),
+                    Value::Array(vec![Value::Struct(vec![(
+                        Some(c("value")),
+                        Value::Integer(v),
+                    )])]),
+                )])
+            };
+            let single = |v: i32| {
+                Value::Struct(vec![
+                    (Some(c("value")), Value::Integer(v)),
+                    (Some(c("initials")), Value::String(String::new())),
+                ])
+            };
+            return Outcome::Params(vec![
+                (Some(c("highscores")), table(r[0])),
+                (Some(c("bestcombos")), table(r[1])),
+                (Some(c("longestgrind")), single(r[2])),
+                (Some(c("longestmanual")), single(r[3])),
+                (Some(c("longestliptrick")), single(r[4])),
+                (Some(c("longestcombo")), single(r[5])),
+            ]);
         } else if name == c("GetValueFromVolume") {
             let which = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
