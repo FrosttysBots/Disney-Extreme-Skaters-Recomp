@@ -866,14 +866,28 @@ impl LoadedLevel {
         let l = &self.layers;
         let r = &mut self.renderer;
         let [world, sky, goal] = &self.colors;
+        let clocks: HashMap<u32, f32> = self
+            .behaviour
+            .color_clocks
+            .iter()
+            .map(|(s, (t, _))| (*s, *t))
+            .collect();
         if !world.is_empty() {
-            r.update_world(false, world.first_vertex, &world.at(seconds));
+            r.update_world(
+                false,
+                world.first_vertex,
+                &world.at_clocks(seconds, &clocks),
+            );
         }
         if !sky.is_empty() {
             r.update_world(true, sky.first_vertex, &sky.at(seconds));
         }
         if goal_objects && !goal.is_empty() {
-            r.update_layer(l.goal_geometry, goal.first_vertex, &goal.at(seconds));
+            r.update_layer(
+                l.goal_geometry,
+                goal.first_vertex,
+                &goal.at_clocks(seconds, &clocks),
+            );
         }
         for (id, shown) in [
             (l.props, objects),

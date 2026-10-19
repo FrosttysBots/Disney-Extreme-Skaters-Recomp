@@ -227,6 +227,12 @@ pub struct Behaviour {
     /// What the scripts have shattered (`Shatter Name = x`,
     /// `ShatterAndDie`), for the viewer to break.
     pub shatters: Vec<u32>,
+    /// Sectors whose vertex colors the scripts have stopped, started or
+    /// started over (`wibbleVC Name = x On`, `off`, `reset`): each one's
+    /// own time in its colors and whether that's running. The others
+    /// play on the level's clock.
+    pub color_clocks: HashMap<u32, (f32, bool)>,
+    now: f32,
     terminating: Vec<usize>,
     /// Every goal the level's set-up added (`GoalManager_AddGoal`): its
     /// parameters, by its id; the ids made with the level's prefix
@@ -432,6 +438,8 @@ impl Behaviour {
             paused_for: 0.0,
             killing: Vec::new(),
             shatters: Vec::new(),
+            color_clocks: HashMap::new(),
+            now: 0.0,
             terminating: Vec::new(),
             goal_defs: HashMap::new(),
             goal_prefix: String::new(),
@@ -836,6 +844,12 @@ impl Behaviour {
             }
         }
         self.check_radii();
+        self.now = now;
+        for (time, running) in self.color_clocks.values_mut() {
+            if *running {
+                *time += dt;
+            }
+        }
         // (A pause its scripts never lifted, stopped midway, lapses.)
         self.paused_for = if self.goal_paused {
             self.paused_for + dt
@@ -1667,10 +1681,25 @@ impl Host for Commands<'_> {
                     .map_or(1.0, |v| v / 100.0);
                 b.sounds.push((sound, b.states[object].position, volume));
             }
+        } else if name == c("Obj_StopSound") {
+            // (Objects' sounds play once here, loops too: nothing to stop.)
         } else if name == c("Shatter") || name == c("ShatterAndDie") {
             if let Some(n) = named("Name") {
                 if b.shatters.len() < 64 {
                     b.shatters.push(n);
+                }
+            }
+        } else if name == c("wibbleVC") {
+            if let Some(sector) = named("Name") {
+                let now = b.now;
+                let clock = b.color_clocks.entry(sector).or_insert((now, true));
+                if args.has_flag(c("reset")) {
+                    clock.0 = 0.0;
+                }
+                if args.has_flag(c("On")) {
+                    clock.1 = true;
+                } else if args.has_flag(c("off")) {
+                    clock.1 = false;
                 }
             }
         } else if name == c("KillSpawnedScript") {
