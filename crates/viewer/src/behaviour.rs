@@ -1744,7 +1744,10 @@ impl Host for Commands<'_> {
                 let set = flags.contains(&flag);
                 return Outcome::Done(if name == c("Obj_FlagSet") { set } else { !set });
             }
-        } else if name == c("midgoalvoiceover") || name == c("obj_playstream") {
+        } else if name == c("midgoalvoiceover")
+            || name == c("obj_playstream")
+            || name == c("PlayStream")
+        {
             // `midgoalvoiceover stream = name`, `obj_playstream name`.
             let stream = named("stream").or_else(|| match args {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
