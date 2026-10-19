@@ -1848,6 +1848,9 @@ struct App<'a> {
     /// whether the shop's stage camera has been put up since arriving.
     shop_skater: Option<i32>,
     shop_staged: bool,
+    /// How far the skater select's turned the character on the stage
+    /// (its L and R: radians).
+    stage_turn: f32,
     /// The song the game's menus play (the skater select's theme for the
     /// character), by name, and whether it's started.
     menu_track: Option<(String, bool)>,
@@ -2057,6 +2060,7 @@ impl<'a> App<'a> {
             cutscene: false,
             shop_skater: None,
             shop_staged: false,
+            stage_turn: 0.0,
             menu_track: None,
             screen_movie_name: None,
             script_cutscene: false,
@@ -4850,6 +4854,20 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Whether L and R are held (a pad's shoulder buttons, or Q and E).
+    fn stage_turn_held(&self) -> (bool, bool) {
+        use gilrs::Button;
+        let pad = |b| {
+            self.gamepads
+                .as_ref()
+                .is_some_and(|g| g.gamepads().any(|(_, p)| p.is_pressed(b)))
+        };
+        (
+            pad(Button::LeftTrigger) || self.keys.contains(&KeyCode::KeyQ),
+            pad(Button::RightTrigger) || self.keys.contains(&KeyCode::KeyE),
+        )
+    }
+
     /// The game's skater select (in the Skate Shop) and the character
     /// shown: it starts on the one the viewer has (`disney_skater`, the
     /// `skater_select_array` index, which the game keeps), and the one it
@@ -4915,7 +4933,23 @@ impl<'a> App<'a> {
                 let turn = Quat::from_rotation_y(n.heading);
                 Some(Mat4::from_rotation_translation(turn, n.position?))
             });
-        let placement = stage.unwrap_or(level.home);
+        // Turned with L and R (Q and E) while the skater select's up, as
+        // its `skateshop_rotate_skater` does (3 degrees a frame).
+        let selecting = self
+            .screen
+            .as_ref()
+            .is_some_and(|s| s.screen.exists("select_skater_anchor"));
+        if selecting {
+            let (left, right) = self.stage_turn_held();
+            if left != right {
+                let step = 3f32.to_radians() * if left { -1.0 } else { 1.0 };
+                self.stage_turn = (self.stage_turn + step) % std::f32::consts::TAU;
+            }
+        }
+        let placement = match stage {
+            Some(stage) => stage * Mat4::from_rotation_y(self.stage_turn),
+            None => level.home,
+        };
         if self.skating.is_none() {
             self.placement = placement;
         }
@@ -5881,7 +5915,14 @@ impl<'a> App<'a> {
         if typing {
             return;
         }
-        let pressed = |k| self.keys.contains(&k);
+        // (Q and E turn the character in the game's skater select.)
+        let selecting = self
+            .screen
+            .as_ref()
+            .is_some_and(|s| s.screen.exists("select_skater_anchor"));
+        let pressed = |k| {
+            self.keys.contains(&k) && !(selecting && matches!(k, KeyCode::KeyQ | KeyCode::KeyE))
+        };
         let (forward, right) = (self.camera.forward(), self.camera.right());
         let mut direction = Vec3::ZERO;
         for (key, dir) in [

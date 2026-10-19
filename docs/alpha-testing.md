@@ -14,9 +14,9 @@ character. This page is for anyone trying it out.
    it to push with W yourself).
 
 Or go the game's way: its main menu in the Skate Shop (Play Game or Free
-Skate), then its skater select (left and right change the character
-standing in the shop, with their stats; Enter picks), then its level
-select.
+Skate), then its skater select on the shop's stage (left and right
+change the character, with their stats, theme and clip on the TV; L and
+R, or Q and E, turn them round; Enter picks), then its level select.
 
 ## Controls
 
