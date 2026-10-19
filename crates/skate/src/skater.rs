@@ -401,7 +401,7 @@ pub struct Skater {
     pub touches: Vec<u32>,
     /// Trigger faces that start or end gaps, by collision object, and the
     /// gaps under way.
-    pub gap_triggers: HashMap<u32, GapTrigger>,
+    pub gap_triggers: HashMap<u32, Vec<GapTrigger>>,
     gaps: Gaps,
     /// The last gap scored, its name and points (for whoever shows it).
     pub last_gap: Option<(String, u32)>,
@@ -840,18 +840,23 @@ impl Skater {
         let mut crossed: Vec<GapTrigger> = world
             .triggers(before + feet, self.position + feet)
             .iter()
-            .filter_map(|o| self.gap_triggers.get(o).cloned())
+            .filter_map(|o| self.gap_triggers.get(o))
+            .flatten()
+            .cloned()
             .collect();
-        // Ends first: where a gap's end and the way-back gap's start lie
-        // together, crossing them ends the one before starting the other.
-        crossed.sort_by_key(|t| matches!(t, GapTrigger::Start { .. }));
+        crossed.dedup();
         self.cross_gaps(&crossed, surface);
     }
 
     /// Gap triggers met (a trigger face crossed, a rail node reached):
-    /// gaps started, and ended into the combo.
+    /// gaps started, and ended into the combo. Ends first: where a gap's
+    /// end and the way-back gap's start lie together (or one trigger does
+    /// both: Zurg's spine), crossing them ends the one before starting the
+    /// other.
     fn cross_gaps(&mut self, crossed: &[GapTrigger], surface: Surface) {
-        for trigger in crossed {
+        let mut crossed = crossed.to_vec();
+        crossed.sort_by_key(|t| matches!(t, GapTrigger::Start { .. }));
+        for trigger in &crossed {
             if self.trace {
                 eprintln!("crossed {trigger:?} on {surface:?} at {:?}", self.position);
             }
@@ -1555,9 +1560,9 @@ impl Skater {
         }
         self.rail_node = Some(name);
         self.touches.push(name);
-        if let Some(trigger) = self.gap_triggers.get(&name).cloned() {
+        if let Some(triggers) = self.gap_triggers.get(&name).cloned() {
             let surface = self.surface();
-            self.cross_gaps(&[trigger], surface);
+            self.cross_gaps(&triggers, surface);
         }
     }
 

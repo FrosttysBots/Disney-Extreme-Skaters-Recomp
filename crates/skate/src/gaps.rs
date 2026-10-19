@@ -36,6 +36,10 @@ pub enum TrickNeed {
     Lip,
     /// A trick by this name (`TrickText = "kickflip"`).
     Named(String),
+    /// The trick in this slot (`KeyCombo = Air_CircleL`), whatever it is
+    /// for the character skating: [`TrickNeed::Named`] once that's known
+    /// (see [`name_slots`]).
+    Slot(u32),
     /// Just going on (a rail's: `flags = [PURE_RAIL]`).
     Any,
 }
@@ -56,6 +60,28 @@ pub enum GapTrigger {
         score: u32,
         script: Option<u32>,
     },
+}
+
+/// Trick spots asking for a slot's trick ask for it by name: the trick
+/// `trick_of` puts in that slot for the character skating (none, and
+/// they ask for nothing that can be done).
+pub fn name_slots(
+    triggers: &mut std::collections::HashMap<u32, Vec<GapTrigger>>,
+    trick_of: impl Fn(u32) -> Option<String>,
+) {
+    for trigger in triggers.values_mut().flatten() {
+        if let GapTrigger::Start {
+            trick: Some(GapTrick { needs, .. }),
+            ..
+        } = trigger
+        {
+            if let TrickNeed::Slot(slot) = needs {
+                if let Some(name) = trick_of(*slot) {
+                    *needs = TrickNeed::Named(name);
+                }
+            }
+        }
+    }
 }
 
 /// Where the skater is, for a gap's flags.
@@ -139,7 +165,7 @@ impl Gaps {
                         let now = match &t.needs {
                             TrickNeed::Lip => surface == Surface::Lip,
                             TrickNeed::Any => surface == Surface::Rail || !flags.pure_rail(),
-                            TrickNeed::Named(_) => false,
+                            TrickNeed::Named(_) | TrickNeed::Slot(_) => false,
                         };
                         if now {
                             return Some((String::new(), 0, Some(t.script)));
@@ -188,6 +214,7 @@ impl Gaps {
                 TrickNeed::Lip => surface == Surface::Lip,
                 TrickNeed::Named(text) => name.contains(&text.to_ascii_lowercase()),
                 TrickNeed::Any => surface == Surface::Rail,
+                TrickNeed::Slot(_) => false,
             };
             if done {
                 scripts.push(t.script);

@@ -2647,10 +2647,15 @@ impl<'a> App<'a> {
             })
             .collect();
         skater.gap_triggers = desa_viewer::triggers::gaps(&level.nodes, program);
+        // Trick spots asking for a slot's trick ask for this character's.
+        let book = &skater.tricks;
+        skate::name_slots(&mut skater.gap_triggers, |slot| {
+            book.slot_trick(slot).map(|i| book.tricks[i].name.clone())
+        });
         // The level's gaps, as a checklist of those landed before.
         let landed = self.settings.gaps.get(&level.id);
         let mut gap_list: Vec<(String, u32, bool)> = Vec::new();
-        for trigger in skater.gap_triggers.values() {
+        for trigger in skater.gap_triggers.values().flatten() {
             if let skate::gaps::GapTrigger::End { text, score, .. } = trigger {
                 // (A goal's own gaps have no name.)
                 if text.is_empty() {
@@ -3144,7 +3149,11 @@ impl<'a> App<'a> {
             ));
         }
         // The gaps' ends (where each scores), landed or not.
-        for (object, trigger) in &skater.gap_triggers {
+        let ends = skater
+            .gap_triggers
+            .iter()
+            .flat_map(|(object, triggers)| triggers.iter().map(move |t| (object, t)));
+        for (object, trigger) in ends {
             let skate::gaps::GapTrigger::End { text, .. } = trigger else {
                 continue;
             };

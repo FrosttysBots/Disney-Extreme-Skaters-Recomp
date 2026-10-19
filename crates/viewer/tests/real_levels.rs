@@ -332,6 +332,7 @@ fn real_gap_goal() {
     let gaps = desa_viewer::triggers::gaps(&nodes, behaviour.program());
     let scripted: Vec<u32> = gaps
         .values()
+        .flatten()
         .filter_map(|g| match g {
             skate::gaps::GapTrigger::End { script, .. } => *script,
             _ => None,
@@ -393,6 +394,7 @@ fn real_generic_goals() {
         let program = behaviour.program();
         let spots = desa_viewer::triggers::gaps(&nodes, program)
             .values()
+            .flatten()
             .filter(|g| matches!(g, skate::GapTrigger::Start { trick: Some(_), .. }))
             .count();
         println!("{}: {spots} trick spots", level.id);

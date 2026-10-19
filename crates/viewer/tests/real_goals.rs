@@ -172,6 +172,7 @@ fn real_goal_scripts() {
             // Then every gap landed and trick spot done: their scripts.
             let gap_scripts: Vec<u32> = desa_viewer::triggers::gaps(&nodes, first.program())
                 .values()
+                .flatten()
                 .filter_map(|g| match g {
                     skate::GapTrigger::End { script, .. } => *script,
                     skate::GapTrigger::Start { trick, .. } => trick.as_ref().map(|t| t.script),
@@ -181,8 +182,10 @@ fn real_goal_scripts() {
                 .collect();
             // (Landed: on the ground, not bailing.)
             b.skater_state.on_ground = true;
-            for script in gap_scripts {
-                b.run_level_script(script, Vec::new());
+            // (Twice: those asked in order, Zurg's spine's three tricks,
+            // get done in order the second time round.)
+            for script in gap_scripts.iter().chain(&gap_scripts) {
+                b.run_level_script(*script, Vec::new());
                 run(&mut b, 120);
             }
             run(&mut b, 300);
@@ -208,7 +211,7 @@ fn real_goal_scripts() {
     if std::env::var("GOAL").is_ok() {
         return;
     }
-    assert!(done.len() + gapped.len() >= 41);
+    assert!(done.len() + gapped.len() >= 42);
     println!("then by landing every gap: {gapped:?}");
     for goal in [
         "camp Gaps3",

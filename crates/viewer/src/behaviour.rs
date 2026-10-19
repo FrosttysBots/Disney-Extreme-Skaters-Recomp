@@ -1586,10 +1586,22 @@ impl Host for Commands<'_> {
             return Outcome::Params(vec![(Some(c("id")), Value::Name(made))]);
         } else if name == c("SendFlag") || name == c("QueryFlag") || name == c("ClearFlag") {
             // An object's flags, by `Name = object`: `SendFlag Name = obj
-            // flag` sets one, `QueryFlag flag Name = obj` asks.
-            let on = named("Name")
-                .and_then(|n| b.object_named(n))
-                .unwrap_or(object);
+            // flag` sets one, `QueryFlag flag Name = obj` asks. (Or every
+            // object whose name starts so: `prefix = "TRG_Zurg_SpineChecker"`.)
+            let mut on = vec![
+                named("Name")
+                    .and_then(|n| b.object_named(n))
+                    .unwrap_or(object),
+            ];
+            if let Some(Value::String(p) | Value::LocalString(p)) = args.get(c("prefix")) {
+                let p = p.to_ascii_lowercase();
+                on = b
+                    .labels
+                    .iter()
+                    .filter(|(_, l)| l.starts_with(&p))
+                    .filter_map(|(n, _)| b.object_named(*n))
+                    .collect();
+            }
             let flag = match args {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
                     (None, Value::Name(f)) => Some(*f),
@@ -1600,15 +1612,18 @@ impl Host for Commands<'_> {
             let Some(flag) = flag else {
                 return Outcome::Done(false);
             };
-            let flags = &mut b.states[on].flags;
             if name == c("QueryFlag") {
-                return Outcome::Done(flags.contains(&flag));
-            } else if name == c("SendFlag") {
-                if !flags.contains(&flag) {
-                    flags.push(flag);
+                return Outcome::Done(on.iter().any(|&o| b.states[o].flags.contains(&flag)));
+            }
+            for o in on {
+                let flags = &mut b.states[o].flags;
+                if name == c("SendFlag") {
+                    if !flags.contains(&flag) {
+                        flags.push(flag);
+                    }
+                } else {
+                    flags.retain(|f| *f != flag);
                 }
-            } else {
-                flags.retain(|f| *f != flag);
             }
         } else if name == c("GoalManager_CanStartGoal") {
             // The goal on starts (`goal_start` then makes its things); with
