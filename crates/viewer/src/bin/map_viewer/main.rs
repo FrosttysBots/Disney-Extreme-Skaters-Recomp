@@ -2298,7 +2298,9 @@ impl<'a> App<'a> {
     /// Says the voice lines asked for: the goal pedestrians' own
     /// (`streams/goalpeds`), read off the disc as they're wanted.
     fn say_lines(&mut self) {
+        let heard = self.audio.is_some() && self.model.character.sound;
         if let Some(level) = &mut self.level {
+            level.behaviour.voices_heard = heard;
             self.lines_to_say
                 .extend(std::mem::take(&mut level.behaviour.voice_lines));
         }
@@ -2321,7 +2323,11 @@ impl<'a> App<'a> {
         // The last asked for (a newer line cuts an older one off).
         if let Some(range) = lines.iter().rev().find_map(|l| streams.get(l)) {
             if let Ok(Some(sound)) = data.stream(*range) {
-                audio.say_line(&sound);
+                let seconds = audio.say_line(&sound);
+                // (For the scripts that wait on it: `Obj_WaitStreamFinished`.)
+                if let Some(level) = &mut self.level {
+                    level.behaviour.voice_for(seconds);
+                }
             }
         }
     }

@@ -66,6 +66,9 @@ const MPH: f32 = 17.6;
 const FPS: f32 = 12.0;
 /// Units per foot (radii are in feet).
 const FOOT: f32 = 12.0;
+/// How long a voice line's taken to last till it's started and its length
+/// known (seconds).
+const VOICE_GUESS: f32 = 2.5;
 
 /// One object's state.
 struct State {
@@ -239,6 +242,12 @@ pub struct Behaviour {
     /// The skater knocked down (`MakeSkaterGoto PedKnockDown`: a
     /// heckler's swipe, Zurg's missile), for the viewer to bail.
     pub knock_down: bool,
+    /// When the line being said ends (`now`'s clock), for
+    /// `Obj_WaitStreamFinished`.
+    voice_until: f32,
+    /// Whether voice lines are being said (the viewer with sound): only
+    /// then do scripts wait on them.
+    pub voices_heard: bool,
     /// A movie asked for on the level's screen (Hub's `playmovie ... mesh
     /// = moviescreen`), or none (`StopMovie`), as the screen's.
     pub screen_movie: Option<Option<(String, bool)>>,
@@ -467,6 +476,8 @@ impl Behaviour {
             shatters: Vec::new(),
             camera_stop: false,
             knock_down: false,
+            voice_until: 0.0,
+            voices_heard: false,
             screen_movie: None,
             skater_restart: None,
             skater_hidden: false,
@@ -549,6 +560,12 @@ impl Behaviour {
         let state = &mut self.states[object];
         state.exceptions.clear();
         state.path.top_speed = speed * MPH;
+    }
+
+    /// A voice line started, lasting `seconds`: what waits on the
+    /// object's stream (`Obj_WaitStreamFinished`) waits that long.
+    pub fn voice_for(&mut self, seconds: f32) {
+        self.voice_until = self.now + seconds;
     }
 
     /// Lets the vehicle go back to what its own script has it do.
@@ -1817,6 +1834,13 @@ impl Host for Commands<'_> {
                 *b.unknown.entry(name).or_default() += 1;
                 return Outcome::Done(false);
             }
+        } else if name == c("Obj_WaitStreamFinished") {
+            // Till the line being said is over (the one line at a time
+            // the viewer says).
+            let left = b.voice_until - b.now;
+            if left > 0.0 {
+                return Outcome::Wait(left);
+            }
         } else if name == c("Obj_StopSound") {
             // (Objects' sounds play once here, loops too: nothing to stop.)
         } else if name == c("Shatter") || name == c("ShatterAndDie") {
@@ -1987,6 +2011,11 @@ impl Host for Commands<'_> {
             });
             if let Some(stream) = stream {
                 b.voice_lines.push(stream);
+                // (Said this frame, its length known once it's started: a
+                // guess at it meanwhile, for a wait on it straight after.)
+                if b.voices_heard {
+                    b.voice_until = b.voice_until.max(b.now + VOICE_GUESS);
+                }
             }
         } else if name == c("LocalSkaterExists") {
             return Outcome::Done(b.skater.is_some());

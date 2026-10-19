@@ -255,11 +255,12 @@ impl Audio {
     }
 
     /// A goal pedestrian's line (a `.dsp` sound), over whatever the
-    /// character was saying.
-    pub fn say_line(&mut self, data: &[u8]) {
+    /// character was saying; how long it lasts (seconds).
+    pub fn say_line(&mut self, data: &[u8]) -> f32 {
         let Ok(sound) = Sound::parse(data) else {
-            return;
+            return 0.0;
         };
+        let seconds = sound.samples.len() as f32 / sound.sample_rate.max(1) as f32;
         let clip = Clip {
             rate: sound.sample_rate,
             samples: sound.floats(),
@@ -268,6 +269,7 @@ impl Audio {
         player.set_volume(MASTER * 1.3 * self.effects);
         player.append(clip.buffer());
         self.voice = Some(player);
+        seconds
     }
 
     /// The panel's volumes, 0 to 1: the effects and the music (playing
