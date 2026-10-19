@@ -1614,7 +1614,7 @@ fn value_tokens(value: &Value) -> Vec<Token> {
 }
 
 /// Whether to print the scripts' `printf` lines (`DESA_PRINTF` set).
-fn trace_printf() -> bool {
+pub fn trace_printf() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("DESA_PRINTF").is_some())
 }

@@ -2607,6 +2607,8 @@ impl<'a> App<'a> {
         let position = self.placement.transform_point3(Vec3::ZERO);
         let forward = self.placement.transform_vector3(Vec3::Z);
         let mut skater = Skater::new(position, forward.x.atan2(forward.z));
+        // (`DESA_SKATE_TRACE` set: why it leaves rails, and the like.)
+        skater.trace = std::env::var_os("DESA_SKATE_TRACE").is_some();
         // The character's tricks, timed by its animations.
         let mut tricks = TrickBook::new(program, id, &stats);
         if let Some(character) = &self.character {
@@ -3739,6 +3741,16 @@ impl<'a> App<'a> {
         }
         // And touched trigger geometry's.
         for object in std::mem::take(&mut skater.touches) {
+            if qb::vm::trace_printf() {
+                let p = skater.position;
+                eprintln!(
+                    "touch: {} at {:.0} {:.0} {:.0}",
+                    level.nodes.labels.get(&object).map_or("?", String::as_str),
+                    p.x,
+                    p.y,
+                    p.z
+                );
+            }
             if let Some(&script) = level.touch_scripts.get(&object) {
                 level.behaviour.run_level_script(script, Vec::new());
             }

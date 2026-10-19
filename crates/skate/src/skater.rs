@@ -1700,6 +1700,9 @@ impl Skater {
         // Each grinding frame adds the grind's tweak (0x801033B0).
         self.combo_tricks.tweak(GRIND_TWEAK);
         if lean != Lean::Balanced {
+            if self.trace {
+                eprintln!("off balance ({lean:?}) at {:?}", self.position);
+            }
             let right = Vec3::new(-travel.z, 0.0, travel.x);
             let (side, turn) = if lean == Lean::OffTop {
                 (-right, 30f32.to_radians())
@@ -1749,6 +1752,9 @@ impl Skater {
                 });
             let Some((n, same)) = next else {
                 // Off the end, or a corner too sharp to follow.
+                if self.trace {
+                    eprintln!("off the rail's end at {joint:?}");
+                }
                 if !self.grind_blocked(position, travel * grind.speed, p, world) {
                     self.position = position;
                     self.leave_rail(travel * grind.speed, p, world);
