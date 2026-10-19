@@ -1746,6 +1746,43 @@ fn path_camera(path: &CameraPath, seconds: f32) -> ScriptedCamera {
     }
 }
 
+/// The HUD's arrows (the game's `HUD_arrow` model, at the top of its
+/// 640x480 screen): drawn flat, turned by each angle (0 straight up,
+/// positive to the right), gold with a dark edge.
+fn paint_hud_arrows(ctx: &egui::Context, angles: &[f32]) {
+    use desa_viewer::screen::{HEIGHT, WIDTH};
+    if angles.is_empty() {
+        return;
+    }
+    let area = ctx.available_rect();
+    let k = (area.width() / WIDTH).min(area.height() / HEIGHT);
+    let origin = area.center() - egui::vec2(WIDTH, HEIGHT) * k / 2.0;
+    let centre = origin + egui::vec2(320.0, 70.0) * k;
+    let size = 22.0 * k;
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_arrows"),
+    ));
+    let gold = egui::Color32::from_rgb(250, 196, 40);
+    let edge = egui::Stroke::new(2.0 * k.max(0.5), egui::Color32::from_rgb(70, 40, 10));
+    for &angle in angles {
+        let (sin, cos) = angle.sin_cos();
+        let at = |x: f32, y: f32| centre + egui::vec2(x * cos - y * sin, x * sin + y * cos) * size;
+        let (tip, left, notch, right) = (at(0.0, -1.0), at(-0.7, 0.6), at(0.0, 0.2), at(0.7, 0.6));
+        for half in [[tip, left, notch], [tip, notch, right]] {
+            painter.add(egui::Shape::convex_polygon(
+                half.to_vec(),
+                gold,
+                egui::Stroke::NONE,
+            ));
+        }
+        painter.add(egui::Shape::closed_line(
+            vec![tip, left, notch, right],
+            edge,
+        ));
+    }
+}
+
 /// A camera in front of a character placed by `placement`, looking at it.
 fn camera_facing(placement: Mat4) -> FlyCamera {
     camera_around(placement, 0.0, 170.0, 75.0)
@@ -4883,6 +4920,34 @@ impl<'a> App<'a> {
         )
     }
 
+    /// Which way the HUD's arrows point (`Create3dArrowPointer`, while a
+    /// goal's on): each target's angle off straight ahead, as seen from
+    /// the skater by the camera (radians, positive to the right).
+    fn hud_arrow_angles(&self) -> Vec<f32> {
+        let Some(level) = &self.level else {
+            return Vec::new();
+        };
+        if self.goal_run.is_none() && level.behaviour.active_goal.is_none() {
+            return Vec::new();
+        }
+        let (from, forward) = match &self.skating {
+            Some((skater, _, chase)) => (skater.position, chase.target - chase.eye),
+            None => (self.camera.position, self.camera.forward()),
+        };
+        let forward = forward.with_y(0.0).normalize_or_zero();
+        let right = Vec3::new(-forward.z, 0.0, forward.x);
+        level
+            .behaviour
+            .arrow_targets()
+            .into_iter()
+            .filter_map(|at| {
+                let to = (at - from).with_y(0.0).normalize_or_zero();
+                (to != Vec3::ZERO && forward != Vec3::ZERO)
+                    .then(|| to.dot(right).atan2(to.dot(forward)))
+            })
+            .collect()
+    }
+
     /// The game's skater select (in the Skate Shop) and the character
     /// shown: it starts on the one the viewer has (`disney_skater`, the
     /// `skater_select_array` index, which the game keeps), and the one it
@@ -6059,6 +6124,7 @@ impl<'a> App<'a> {
         self.update_game_hud();
         self.update_screen(dt);
         self.update_screen_movie();
+        let arrows = self.hud_arrow_angles();
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
@@ -6070,6 +6136,7 @@ impl<'a> App<'a> {
             if let Some(screen) = screen {
                 screen.paint(ctx);
             }
+            paint_hud_arrows(ctx, &arrows);
             if let Some(playing) = movie {
                 if playing.draw(ctx) {
                     actions.push(ui::Action::SkipMovie);
@@ -6555,6 +6622,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     let (_adapter, device, queue) = pollster::block_on(request_device(&instance, None))?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (mut loaded, stats) = load_level(&mut data, &levels[index], &device, &queue, format)?;
+    let mut hud_arrows = Vec::new();
     // A spawn marker would stand right where the character does.
     loaded.renderer.set_markers(
         &loaded
@@ -6941,6 +7009,8 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         }
         // The blink clock follows --time too, so blinks can be captured.
         app.animate(0.0, args.time);
+        // (The HUD's arrows, while the level's still the app's.)
+        hud_arrows = app.hud_arrow_angles();
         loaded = app.level.take().unwrap();
     }
     // The level's particle effects, run for the time asked (two seconds at
@@ -6982,6 +7052,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     // the first pass's texture uploads: they include the font atlas, which
     // every egui shape is drawn with.
     let clean = args.clean;
+    let arrows = hud_arrows;
+    if !arrows.is_empty() {
+        println!("HUD arrows pointing {arrows:.2?}");
+    }
     let first = egui_ctx.run(input(), |ctx| {
         if !clean {
             ui::draw(ctx, &mut app.model);
@@ -6989,6 +7063,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         if let Some(screen) = &mut app.screen {
             screen.paint(ctx);
         }
+        paint_hud_arrows(ctx, &arrows);
     });
     let mut output = egui_ctx.run(input(), |ctx| {
         if !clean {
@@ -6997,6 +7072,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         if let Some(screen) = &mut app.screen {
             screen.paint(ctx);
         }
+        paint_hud_arrows(ctx, &arrows);
     });
     let mut textures = first.textures_delta;
     textures.append(output.textures_delta);

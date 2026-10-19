@@ -250,6 +250,9 @@ pub struct Behaviour {
     pub voices_heard: bool,
     /// The line being said cut off (`Obj_StopStream`, `StopStream`).
     pub stop_voice: bool,
+    /// The HUD's arrows (`Create3dArrowPointer ... node = x`): by their
+    /// id, what each points at.
+    hud_arrows: HashMap<u32, u32>,
     /// A movie asked for on the level's screen (Hub's `playmovie ... mesh
     /// = moviescreen`), or none (`StopMovie`), as the screen's.
     pub screen_movie: Option<Option<(String, bool)>>,
@@ -481,6 +484,7 @@ impl Behaviour {
             voice_until: 0.0,
             voices_heard: false,
             stop_voice: false,
+            hud_arrows: HashMap::new(),
             screen_movie: None,
             skater_restart: None,
             skater_hidden: false,
@@ -563,6 +567,21 @@ impl Behaviour {
         let state = &mut self.states[object];
         state.exceptions.clear();
         state.path.top_speed = speed * MPH;
+    }
+
+    /// Where the HUD's arrows point: at each one's object (where it's got
+    /// to), or its node.
+    pub fn arrow_targets(&self) -> Vec<Vec3> {
+        self.hud_arrows
+            .values()
+            .filter_map(|&name| match self.object_named(name) {
+                Some(o) => Some(self.states[o].position),
+                None => self
+                    .node_by_name
+                    .get(&name)
+                    .and_then(|&n| self.nodes[n].position),
+            })
+            .collect()
     }
 
     /// A voice line started, lasting `seconds`: what waits on the
@@ -2186,8 +2205,9 @@ impl Host for Commands<'_> {
                 b.screen_ids.contains(&i) || b.object_named(i).is_some_and(|o| b.states[o].alive)
             }));
         } else if name == c("Create3dArrowPointer") {
-            // (A 3D model on the HUD: not drawn, but there to ask about:
-            // Tarzan's fruit go back by theirs.)
+            // (A 3D model on the HUD: there to ask about, Tarzan's fruit
+            // go back by theirs. The game's own script makes it a screen
+            // element, below, where the scripts are loaded.)
             if let Some(id) = named("id") {
                 b.screen_ids.insert(id);
             }
@@ -2205,6 +2225,7 @@ impl Host for Commands<'_> {
             if name == c("DestroyScreenElement") {
                 if let Some(id) = named("id") {
                     b.screen_ids.remove(&id);
+                    b.hud_arrows.remove(&id);
                 }
             }
             if b.screen_calls.len() < 256 {
@@ -2230,6 +2251,27 @@ impl Host for Commands<'_> {
                 b.next_screen_id += 1;
                 checksum(&format!("level_screen_element_{}", b.next_screen_id))
             });
+            // A 3D arrow on the HUD (`Create3dArrowPointer`'s Element3D,
+            // `NodeToPointTo`): what it points at, for the viewer to draw.
+            // (Its settings may come in a struct of their own.)
+            let field = |key: &str| {
+                args.get(c(key))
+                    .or_else(|| match args {
+                        Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                            (None, inner @ Value::Struct(_)) => inner.get(c(key)),
+                            _ => None,
+                        }),
+                        _ => None,
+                    })
+                    .and_then(Value::as_name)
+                    .filter(|n| *n != 0)
+            };
+            if field("Type") == Some(c("Element3D")) {
+                let at = field("ObjectToPointTo").or(field("NodeToPointTo"));
+                if let Some(at) = at {
+                    b.hud_arrows.insert(id, at);
+                }
+            }
             if given.is_none() {
                 if let Value::Struct(items) = &mut forwarded {
                     items.push((Some(c("id")), Value::Name(id)));
