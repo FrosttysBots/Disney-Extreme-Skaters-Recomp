@@ -219,6 +219,10 @@ pub enum AppearanceEdit {
     Color(u32, Option<[f32; 3]>),
     Keep,
     Restore,
+    /// Made over as the game's new boy or girl (`RememberTemporaryAppearance
+    /// appearance_structure = appearance_reset_girl`: Create New's gender):
+    /// whether a girl.
+    Reset(bool),
 }
 
 pub struct Screen {
@@ -2074,6 +2078,15 @@ impl Host for Ui<'_> {
                 Some(Value::Struct(fields)) => Outcome::Params(fields.clone()),
                 _ => Outcome::Done(false),
             };
+        } else if name == c("RememberTemporaryAppearance")
+            && named("appearance_structure").is_some()
+        {
+            let made = named("appearance_structure").and_then(|v| v.as_name());
+            if made == Some(c("appearance_reset_girl")) {
+                s.appearance_edits.push(AppearanceEdit::Reset(true));
+            } else if made == Some(c("appearance_reset_boy")) {
+                s.appearance_edits.push(AppearanceEdit::Reset(false));
+            }
         } else if name == c("RememberTemporaryProfile") {
             s.appearance_edits.push(AppearanceEdit::Keep);
         } else if name == c("RestoreTemporaryAppearance") {
@@ -2340,6 +2353,11 @@ impl Host for Ui<'_> {
                 (Some(c("trickname")), Value::Name(c("Assigned"))),
             ]);
             let mut params = profile.clone();
+            // (The girl kid's the kid's profile, as a girl.)
+            if s.character.as_deref() == Some("kid_girl") {
+                params.retain(|(k, _)| *k != Some(c("is_male")));
+                params.push((Some(c("is_male")), Value::Integer(0)));
+            }
             params.retain(|(k, _)| *k != Some(c("specials")));
             params.push((
                 Some(c("specials")),

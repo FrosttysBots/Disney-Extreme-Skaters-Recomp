@@ -5286,6 +5286,30 @@ impl<'a> App<'a> {
         let (Some(screen), Some(girl)) = (&mut self.screen, self.kid_shown) else {
             return;
         };
+        let edits = std::mem::take(&mut screen.screen.appearance_edits);
+        // Made over as a new boy or girl: that kid, in the game's outfit.
+        if let Some(made_girl) = edits.iter().rev().find_map(|e| match e {
+            AppearanceEdit::Reset(girl) => Some(*girl),
+            _ => None,
+        }) {
+            let sex = if made_girl { "f" } else { "m" };
+            self.wardrobes.remove(&made_girl);
+            self.kid_kept.remove(&made_girl);
+            self.settings
+                .best
+                .retain(|k, _| !k.starts_with(&format!("outfit.{sex}.")));
+            let id = if made_girl { "kid_girl" } else { "kid" };
+            let index = self
+                .model
+                .character
+                .characters
+                .iter()
+                .position(|c| c.id.eq_ignore_ascii_case(id));
+            // (Not taking the old one's picks over.)
+            self.kid_shown = None;
+            self.load_character(index);
+            return;
+        }
         let Some(slots) = self.wardrobes.get_mut(&girl) else {
             return;
         };
@@ -5293,7 +5317,6 @@ impl<'a> App<'a> {
             .iter()
             .map(|s| (s.list, s.choices[s.picked].desc_id, s.color))
             .collect();
-        let edits = std::mem::take(&mut screen.screen.appearance_edits);
         if edits.is_empty() {
             return;
         }
@@ -5326,6 +5349,7 @@ impl<'a> App<'a> {
                     }
                 }
                 AppearanceEdit::Keep => *kept = worn(slots),
+                AppearanceEdit::Reset(_) => {}
                 AppearanceEdit::Restore => {
                     for (slot, &(picked, color)) in slots.iter_mut().zip(kept.iter()) {
                         slot.picked = picked;
