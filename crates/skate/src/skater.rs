@@ -3207,6 +3207,19 @@ fn limit_speed(v: Vec3, p: &Physics) -> Vec3 {
     Vec3::new(flat.x, v.y, flat.z)
 }
 
+/// Where the skater rides a wall it touched at knee height (`hit`, `lift`
+/// above the feet): a unit off it, the feet too on a wall that leans back
+/// (a bank's slope would otherwise have them inside it).
+fn off_wall(hit: Vec3, normal: Vec3, lift: f32) -> Vec3 {
+    let at = hit + normal - Vec3::Y * lift;
+    let off = (at - hit).dot(normal);
+    if off < 1.0 {
+        at + normal * (1.0 - off)
+    } else {
+        at
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3529,18 +3542,5 @@ mod tests {
                 .iter()
                 .any(|t| t.name == "Wallie")
         );
-    }
-}
-
-/// Where the skater rides a wall it touched at knee height (`hit`, `lift`
-/// above the feet): a unit off it, the feet too on a wall that leans back
-/// (a bank's slope would otherwise have them inside it).
-fn off_wall(hit: Vec3, normal: Vec3, lift: f32) -> Vec3 {
-    let at = hit + normal - Vec3::Y * lift;
-    let off = (at - hit).dot(normal);
-    if off < 1.0 {
-        at + normal * (1.0 - off)
-    } else {
-        at
     }
 }
