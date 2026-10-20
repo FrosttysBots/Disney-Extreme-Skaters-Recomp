@@ -153,7 +153,7 @@ struct Args {
     #[arg(long, requires = "skate")]
     pause: bool,
     /// For --skate: presses to the game's screen at the end, in order (u up,
-    /// d down, c choose, b back, w wait): its pause menu with --pause, else
+    /// d down, l left, r right, c choose, b back, w wait): its pause menu with --pause, else
     /// whatever it shows (a goal's speech box)
     #[arg(long, requires = "skate", default_value = "")]
     pause_keys: String,
@@ -7175,6 +7175,8 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     let pad = match key {
                         'u' => Some(Pad::Up),
                         'd' => Some(Pad::Down),
+                        'l' => Some(Pad::Left),
+                        'r' => Some(Pad::Right),
                         'c' => Some(Pad::Choose),
                         'b' => Some(Pad::Back),
                         // (A third of a second more, for what animates in.)

@@ -112,7 +112,7 @@ pub struct CharacterModel {
     pub music_volume: f32,
     /// The gamepad rumbles where the game's does.
     pub rumble: bool,
-    /// The game's simplified controls (its Hawk Controls option off).
+    /// The game's simplified controls (its Pro Controls option off).
     pub simplified: bool,
     /// The created kid's parts (shown when the kid is): each one's label,
     /// its choices' names and the one picked.
@@ -1323,7 +1323,7 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             "The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.",
         );
         ui.checkbox(&mut model.simplified, "Simplified controls").on_hover_text(
-            "The game's simplified controls (its Hawk Controls off): any trick button does the              trick for the direction held, grinds and lips too, and landing in a trick loses              the combo instead of bailing.",
+            "The game's simplified controls (its Pro Controls off): any trick button does the trick for the direction held, grinds and lips too, and landing in a trick loses the combo instead of bailing.",
         );
     });
     if !model.cameras.is_empty() {

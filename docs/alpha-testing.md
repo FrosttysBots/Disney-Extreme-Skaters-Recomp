@@ -57,7 +57,7 @@ the Skate Shop's own parts (skin, hair, shirt, legs, shoes, socks, hat,
 glasses, face paint, accessory, pads and backpack), starting in the
 game's outfit; what's picked is kept.
 
-The Simplified controls box (or the game's own Hawk Controls option, off)
+The Simplified controls box (or the game's own Pro Controls, off, in Options > Controls)
 plays the game's simplified controls: any trick button does the trick
 for the direction held, grinds and lips included, a trick button twice
 starts a manual, and landing in a trick loses the combo instead of
