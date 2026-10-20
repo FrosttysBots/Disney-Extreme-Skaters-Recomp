@@ -392,6 +392,8 @@ pub struct Skater {
     /// way held (or the last spin's); `tap_spin` is what's left to turn.
     pub spin_taps: bool,
     tap_spin: f32,
+    /// The ground's up the step before last (see `ground_step`).
+    up_before: Vec3,
     /// The speed limits overridden for a while (the scripts'
     /// `OverrideLimits`, see [`Limits`]): skitching sets them every frame.
     limits: Option<Limits>,
@@ -553,6 +555,7 @@ impl Skater {
             simplified: false,
             spin_taps: false,
             tap_spin: 0.0,
+            up_before: Vec3::Y,
             limits: None,
             sounds: Vec::new(),
             terrain: 0,
@@ -2580,7 +2583,17 @@ impl Skater {
                 self.last_ground = hit.point;
                 self.ground_flags = hit.flags;
                 self.terrain = hit.terrain;
-                self.up = hit.normal;
+                // Rocking between two faces in a gutter (this step's the
+                // one before last's, the last the other): along the crease
+                // between them, not tipped from one to the other each step.
+                let rocking =
+                    hit.normal.dot(self.up_before) > 0.999 && hit.normal.dot(self.up) < 0.95;
+                self.up_before = self.up;
+                self.up = if rocking {
+                    (hit.normal + self.up).normalize_or(hit.normal)
+                } else {
+                    hit.normal
+                };
                 self.velocity = forward * speed;
                 self.follow_slope(input.crouch);
             }
