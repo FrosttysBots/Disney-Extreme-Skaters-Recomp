@@ -144,6 +144,9 @@ impl KidSlot {
     }
 }
 
+/// Bones scaled, by their names (a body shape: `head = (0.9, 0.9, 0.9)`).
+pub type BodyShape = Vec<(u32, [f32; 3])>;
+
 pub struct CharacterFiles {
     pub skin: Vec<u8>,
     pub textures: Option<Vec<u8>>,
@@ -833,10 +836,7 @@ impl GameData {
     /// [`GameData::kid_wardrobe`], and the kid's body shape as the Skate
     /// Shop makes it (`body_shape = cak_scale_info`: its bones scaled by
     /// name, `head = (0.9, 0.9, 0.9)`; the overall `scale` left out).
-    pub fn kid_wardrobe_and_shape(
-        &mut self,
-        girl: bool,
-    ) -> Result<(Vec<KidSlot>, Vec<(u32, [f32; 3])>)> {
+    pub fn kid_wardrobe_and_shape(&mut self, girl: bool) -> Result<(Vec<KidSlot>, BodyShape)> {
         use qb::{Value, checksum};
         let mut program = qb::vm::Program::new();
         for file in self.global_scripts()? {
