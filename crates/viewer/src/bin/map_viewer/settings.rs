@@ -18,6 +18,8 @@ pub struct Settings {
     pub speed: Option<f32>,
     /// The best two-minute run scores, by `level.character`.
     pub best: BTreeMap<String, u32>,
+    /// Text kept by name (a saved created skater's name: `cak.0`).
+    pub names: BTreeMap<String, String>,
     /// The gaps landed on each level, by name.
     pub gaps: BTreeMap<String, BTreeSet<String>>,
     /// Never saved (screenshots).
@@ -61,6 +63,11 @@ impl Settings {
                             .map(str::to_string)
                             .collect(),
                     );
+                }
+                key if key.starts_with("name.") => {
+                    settings
+                        .names
+                        .insert(key["name.".len()..].to_string(), value.to_string());
                 }
                 key if key.starts_with("best.") => {
                     if let Ok(score) = value.parse() {
@@ -109,6 +116,9 @@ impl Settings {
         }
         for (key, score) in &self.best {
             text += &format!("best.{key}={score}\n");
+        }
+        for (key, name) in &self.names {
+            text += &format!("name.{key}={}\n", name.replace('\n', " "));
         }
         let _ = fs::write(file, text);
     }

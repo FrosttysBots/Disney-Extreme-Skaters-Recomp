@@ -405,7 +405,7 @@ pub struct Screen {
     /// created skaters' slots saved (each its index and whether a girl).
     temp_profiles: HashMap<u32, Params>,
     profile_overrides: Params,
-    pub saved_kids: Vec<(usize, bool)>,
+    pub saved_kids: Vec<(usize, bool, Option<String>)>,
     /// A movie asked for on the level's screen (`playmovie "movies\x"
     /// mesh = moviescreen loop`: the skater select's character clip), by
     /// its file's name and whether it loops; or none (`StopMovie`).
@@ -1867,12 +1867,11 @@ impl Ui<'_> {
             if c(&format!("cak_profile{i}")) != profile {
                 continue;
             }
-            if let Some(&(_, girl)) = self.screen.saved_kids.iter().find(|(s, _)| *s == i) {
+            if let Some((_, girl, name)) = self.screen.saved_kids.iter().find(|(s, ..)| *s == i) {
+                let girl = *girl;
+                let name = name.clone().unwrap_or_else(|| format!("Kid {}", i + 1));
                 return Some(vec![
-                    (
-                        Some(c("display_name")),
-                        Value::String(format!("Kid {}", i + 1)),
-                    ),
+                    (Some(c("display_name")), Value::String(name)),
                     (Some(c("is_male")), Value::Integer(i32::from(!girl))),
                     (Some(c("is_locked")), Value::Integer(-(i as i32))),
                 ]);
@@ -1883,6 +1882,22 @@ impl Ui<'_> {
             };
         }
         self.current_profile()
+    }
+}
+
+impl Screen {
+    /// The name a temporary profile was remembered with (a created
+    /// skater's, as typed on Edit Kid's Name keyboard).
+    pub fn profile_name(&self, profile: u32) -> Option<String> {
+        match self
+            .temp_profiles
+            .get(&profile)?
+            .iter()
+            .find(|(k, _)| *k == Some(checksum("display_name")))?
+        {
+            (_, Value::String(name) | Value::LocalString(name)) => Some(name.clone()),
+            _ => None,
+        }
     }
 }
 

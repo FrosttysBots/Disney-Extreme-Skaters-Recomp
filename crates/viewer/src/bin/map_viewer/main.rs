@@ -5363,10 +5363,10 @@ impl<'a> App<'a> {
         // The created skaters' slots saved, for the menus to list.
         screen.screen.saved_kids = (0..6)
             .filter_map(|i| {
-                self.settings
-                    .best
-                    .get(&format!("cak.{i}.girl"))
-                    .map(|&g| (i, g == 1))
+                self.settings.best.get(&format!("cak.{i}.girl")).map(|&g| {
+                    let name = self.settings.names.get(&format!("cak.{i}")).cloned();
+                    (i, g == 1, name)
+                })
             })
             .collect();
         // (A slot waited for while its kid was put on.)
@@ -5475,6 +5475,10 @@ impl<'a> App<'a> {
                 AppearanceEdit::Keep(Some(name)) if cak_slot(name).is_some() => {
                     // Saved to a created skater's slot.
                     let i = cak_slot(name).unwrap_or(0);
+                    // (With its name, as remembered with it.)
+                    if let Some(display) = screen.screen.profile_name(name) {
+                        self.settings.names.insert(format!("cak.{i}"), display);
+                    }
                     let best = &mut self.settings.best;
                     best.retain(|k, _| !k.starts_with(&format!("cak.{i}.")));
                     best.insert(format!("cak.{i}.girl"), u32::from(girl));
