@@ -1959,8 +1959,15 @@ struct App<'a> {
     kid_kept: HashMap<bool, Vec<KidWorn>>,
     /// Dressed by the menus just now (not the panel: not kept).
     kid_from_menus: bool,
-    /// The kid's body shape (bones scaled by name), as the shop makes it.
+    /// The kid's body shape (bones scaled by name), as the shop makes it,
+    /// and its overall scale if not its appearance's (a crew kid's); and
+    /// those as last kept by the menus.
     kid_shape: Vec<(u32, Vec3)>,
+    kid_scale: Option<f32>,
+    kid_shape_kept: Option<(Vec<(u32, Vec3)>, Option<f32>)>,
+    /// An appearance for the other kid (boy or girl), put on once it's
+    /// shown.
+    kid_pending: Option<desa_viewer::screen::Appearance>,
     pad_back: bool,
     /// What a teleporter created or killed on the way, to apply.
     pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
@@ -2225,6 +2232,9 @@ impl<'a> App<'a> {
             kid_kept: HashMap::new(),
             kid_from_menus: false,
             kid_shape: Vec::new(),
+            kid_scale: None,
+            kid_shape_kept: None,
+            kid_pending: None,
             pad_back: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
@@ -4585,9 +4595,14 @@ impl<'a> App<'a> {
             "kid_girl" => "girl".to_string(),
             id => id.to_string(),
         };
-        // (And the kid's body shape, its head smaller.)
+        // (And the kid's body shape, its head smaller; a crew kid's own
+        // size.)
         if name == "kid" || name == "girl" {
             character.set_body_shape(&self.kid_shape);
+            if let Some(scale) = self.kid_scale {
+                character.scale = scale;
+                return;
+            }
         }
         character.scale = level
             .behaviour
@@ -5293,7 +5308,31 @@ impl<'a> App<'a> {
         let (Some(screen), Some(girl)) = (&mut self.screen, self.kid_shown) else {
             return;
         };
-        let edits = std::mem::take(&mut screen.screen.appearance_edits);
+        let mut edits = std::mem::take(&mut screen.screen.appearance_edits);
+        // (An appearance for this kid, waited for while it was put on.)
+        if let Some(app) = self.kid_pending.take() {
+            if app.girl == girl {
+                edits.insert(0, AppearanceEdit::Apply(app));
+            } else {
+                self.kid_pending = Some(app);
+            }
+        }
+        // An appearance for the other kid: that kid, then it.
+        if let Some(app) = edits.iter().rev().find_map(|e| match e {
+            AppearanceEdit::Apply(app) if app.girl != girl => Some(app.clone()),
+            _ => None,
+        }) {
+            let id = if app.girl { "kid_girl" } else { "kid" };
+            let index = self
+                .model
+                .character
+                .characters
+                .iter()
+                .position(|c| c.id.eq_ignore_ascii_case(id));
+            self.kid_pending = Some(app);
+            self.load_character(index);
+            return;
+        }
         // Made over as a new boy or girl: that kid, in the game's outfit.
         if let Some(made_girl) = edits.iter().rev().find_map(|e| match e {
             AppearanceEdit::Reset(girl) => Some(*girl),
@@ -5302,6 +5341,9 @@ impl<'a> App<'a> {
             let sex = if made_girl { "f" } else { "m" };
             self.wardrobes.remove(&made_girl);
             self.kid_kept.remove(&made_girl);
+            // (Its own shape and size again.)
+            self.kid_scale = None;
+            self.kid_shape_kept = None;
             self.settings
                 .best
                 .retain(|k, _| !k.starts_with(&format!("outfit.{sex}.")));
@@ -5332,6 +5374,7 @@ impl<'a> App<'a> {
         };
         let before = worn(slots);
         let kept = self.kid_kept.entry(girl).or_insert_with(|| worn(slots));
+        let mut reshaped = false;
         for edit in edits {
             match edit {
                 AppearanceEdit::Part(list, desc) => {
@@ -5355,17 +5398,62 @@ impl<'a> App<'a> {
                         slot.color = color;
                     }
                 }
-                AppearanceEdit::Keep => *kept = worn(slots),
+                AppearanceEdit::Keep => {
+                    *kept = worn(slots);
+                    self.kid_shape_kept = Some((self.kid_shape.clone(), self.kid_scale));
+                }
                 AppearanceEdit::Reset(_) => {}
                 AppearanceEdit::Restore => {
                     for (slot, &(picked, color)) in slots.iter_mut().zip(kept.iter()) {
                         slot.picked = picked;
                         slot.color = color;
                     }
+                    if let Some((shape, scale)) = &self.kid_shape_kept {
+                        reshaped |= *shape != self.kid_shape || *scale != self.kid_scale;
+                        self.kid_shape = shape.clone();
+                        self.kid_scale = *scale;
+                    }
+                }
+                AppearanceEdit::Apply(app) => {
+                    // Each part as it says; those it doesn't name off (the
+                    // skin as its body says, if it doesn't name one).
+                    let body = app
+                        .parts
+                        .iter()
+                        .find(|(list, ..)| *list == qb::checksum("body"))
+                        .map(|&(_, desc, _)| desc);
+                    for slot in slots.iter_mut() {
+                        let entry = app.parts.iter().find(|(list, ..)| *list == slot.list);
+                        let choice = match (entry, body) {
+                            (Some(&(_, desc, _)), _) => slot
+                                .choices
+                                .iter()
+                                .position(|c| c.desc_id == desc || c.alias == desc),
+                            (None, Some(body)) if slot.label == "Skin" => {
+                                slot.choices.iter().position(|c| c.alias == body)
+                            }
+                            (None, _) if slot.label == "Skin" => None,
+                            (None, _) => slot
+                                .choices
+                                .iter()
+                                .position(|c| c.mesh.is_none() && c.swaps.is_empty()),
+                        };
+                        if let Some(choice) = choice {
+                            slot.picked = choice;
+                        }
+                        slot.color = entry.and_then(|&(.., color)| color);
+                    }
+                    let shape: Vec<(u32, Vec3)> =
+                        app.shape.iter().map(|&(b, s)| (b, Vec3::from(s))).collect();
+                    if !shape.is_empty() || app.scale.is_some() {
+                        reshaped |= shape != self.kid_shape || app.scale != self.kid_scale;
+                        self.kid_shape = shape;
+                        self.kid_scale = app.scale;
+                    }
                 }
             }
         }
-        if worn(slots) == before {
+        if worn(slots) == before && !reshaped {
             return;
         }
         // Worn: kept for next time and shown in the panel too.

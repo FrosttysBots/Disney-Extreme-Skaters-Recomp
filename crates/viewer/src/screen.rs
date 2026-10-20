@@ -101,6 +101,8 @@ struct Element {
     /// A menu's items each this far on from the last, whatever their size
     /// (`regular_space_amount`: the keyboard's rows).
     regular: Option<f32>,
+    /// A scrolling menu's rows shown at once (`num_items_to_show`).
+    show: Option<usize>,
     /// Text's own size within the element (`internal_scale`).
     internal_scale: f32,
     /// A sprite's turn, degrees (`rot_angle`).
@@ -143,6 +145,7 @@ impl Element {
             padding: 1.0,
             spacing: 0.0,
             regular: None,
+            show: None,
             internal_scale: 1.0,
             angle: 0.0,
             handlers: Vec::new(),
@@ -213,7 +216,7 @@ struct Running {
 /// colour (`SetPlayerAppearanceColor`, `None` its own), the appearance
 /// kept as it is (`RememberTemporaryProfile`: a part accepted) or put
 /// back to what was kept (`RestoreTemporaryAppearance`: one tried on).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AppearanceEdit {
     Part(u32, Option<u32>),
     Color(u32, Option<[f32; 3]>),
@@ -223,6 +226,89 @@ pub enum AppearanceEdit {
     /// appearance_structure = appearance_reset_girl`: Create New's gender):
     /// whether a girl.
     Reset(bool),
+    /// A whole appearance put on (`SetPlayerAppearance appearance_structure
+    /// = (info_esc [ i ].appearance)`: the Extreme Skate Crew's kids).
+    Apply(Appearance),
+}
+
+/// An appearance as the game writes one: a boy's or a girl's, each part
+/// by its list (`skater_m_hair = { desc_id = #"Medium 4" h = 0 S = 90 v =
+/// 60 use_default_hsv = 0 }`, `body` for the skin), the body shape's bones
+/// and its overall scale.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Appearance {
+    pub girl: bool,
+    pub parts: Vec<(u32, u32, Option<[f32; 3]>)>,
+    pub shape: Vec<(u32, [f32; 3])>,
+    pub scale: Option<f32>,
+}
+
+impl Appearance {
+    /// Read from the struct the scripts give (or the global it names).
+    pub fn of(value: &Value, program: &Program) -> Option<Appearance> {
+        let c = checksum;
+        let value = match value {
+            Value::Name(n) => program.value(*n)?,
+            v => v,
+        };
+        let Value::Struct(items) = value else {
+            return None;
+        };
+        let mut out = Appearance::default();
+        for (k, v) in items {
+            let Some(k) = *k else { continue };
+            if k == c("body_shape") {
+                let shape = match v {
+                    Value::Name(n) => program.value(*n),
+                    v => Some(v),
+                };
+                if let Some(Value::Struct(bones)) = shape {
+                    for (bone, s) in bones {
+                        match (bone, s) {
+                            (Some(b), s) if *b == c("scale") => out.scale = s.as_f32(),
+                            (Some(b), s) => {
+                                if let Some(s) = s.as_vector() {
+                                    out.shape.push((*b, s));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                continue;
+            }
+            let Some(desc) = v.get(c("desc_id")).and_then(Value::as_name) else {
+                continue;
+            };
+            let n = |key: &str| v.get(c(key)).and_then(Value::as_f32);
+            let own = v.get(c("use_default_hsv")).and_then(Value::as_int) != Some(0);
+            let color = match (n("h"), n("S"), n("v")) {
+                (Some(h), Some(s), Some(val)) if !own => Some([h, s, val]),
+                _ => None,
+            };
+            let girlish = [
+                "skater_f_head",
+                "skater_f_hair",
+                "skater_f_torso",
+                "skater_f_legs",
+            ]
+            .iter()
+            .any(|f| k == c(f));
+            if girlish || (k == c("body") && program_name_starts(desc, "GirlBody")) {
+                out.girl = true;
+            }
+            out.parts.push((k, desc, color));
+        }
+        Some(out)
+    }
+}
+
+/// Whether a `desc_id` is one of the girls' bodies (`GirlBody`,
+/// `GirlBody1`...).
+fn program_name_starts(desc: u32, prefix: &str) -> bool {
+    std::iter::once(prefix.to_string())
+        .chain((1..10).map(|i| format!("{prefix}{i}")))
+        .any(|n| checksum(&n) == desc)
 }
 
 pub struct Screen {
@@ -1001,7 +1087,31 @@ impl Screen {
         let Some(e) = self.el(i) else { return };
         let across = e.kind == Kind::HMenu;
         let span = e.dims.unwrap_or_else(|| self.size(i));
-        let room = if across { span.x } else { span.y };
+        let mut room = if across { span.x } else { span.y };
+        // Where its window starts: its top, or with so many rows shown,
+        // its menu's first row.
+        let mut base = 0.0;
+        // (Or only so many rows of its menu: `num_items_to_show`.)
+        if let Some(n) = e.show {
+            let rows = children
+                .iter()
+                .filter_map(|&m| self.el(m))
+                .map(|m| m.children.as_slice())
+                .next()
+                .unwrap_or_default();
+            if let (Some(&first), Some(&past)) = (rows.first(), rows.get(n)) {
+                let start = |row: usize| {
+                    let top_left = self.local_rect(row).0;
+                    if across { top_left.x } else { top_left.y }
+                };
+                room = room.min(start(past) - start(first));
+                let menu = children.first().map_or(0.0, |&m| {
+                    let at = self.local_rect(m).0;
+                    if across { at.x } else { at.y }
+                });
+                base = menu + start(first);
+            }
+        }
         // The selected item of the menu inside, where it is in that.
         let selected = children.iter().find_map(|&m| {
             let menu = self.el(m)?;
@@ -1022,12 +1132,13 @@ impl Screen {
                 scroll = start + length - room;
             }
         }
-        let scroll = scroll.max(0.0);
+        let scroll = scroll.max(base);
         e.scroll.set(scroll);
+        let by = scroll - base;
         let shift = if across {
-            Vec2::new(-scroll.max(0.0) * scale.x, 0.0)
+            Vec2::new(-by * scale.x, 0.0)
         } else {
-            Vec2::new(0.0, -scroll.max(0.0) * scale.y)
+            Vec2::new(0.0, -by * scale.y)
         };
         // Each menu's rows inside the box, whole.
         let slack = 2.0;
@@ -1048,7 +1159,12 @@ impl Screen {
                     })
                     .collect()
             });
-            self.draw_element_except(c, at + shift, scale, alpha, layer, out, &outside);
+            // (What isn't a menu, its title, stays put.)
+            let menu = self
+                .el(c)
+                .is_some_and(|m| matches!(m.kind, Kind::VMenu | Kind::HMenu));
+            let moved = if menu { at + shift } else { at };
+            self.draw_element_except(c, moved, scale, alpha, layer, out, &outside);
         }
     }
 
@@ -1230,6 +1346,8 @@ impl Screen {
                         e.spacing = v.as_f32().unwrap_or(0.0);
                     } else if k == checksum("regular_space_amount") {
                         e.regular = v.as_f32();
+                    } else if k == checksum("num_items_to_show") {
+                        e.show = v.as_int().and_then(|n| usize::try_from(n).ok());
                     } else if k == checksum("tags") {
                         if let Value::Struct(tags) = v {
                             for (tk, tv) in tags.iter().filter(|(k, _)| k.is_some()) {
@@ -2090,6 +2208,12 @@ impl Host for Ui<'_> {
                 s.appearance_edits.push(AppearanceEdit::Reset(true));
             } else if made == Some(c("appearance_reset_boy")) {
                 s.appearance_edits.push(AppearanceEdit::Reset(false));
+            }
+        } else if name == c("SetPlayerAppearance") {
+            if let Some(app) =
+                named("appearance_structure").and_then(|v| Appearance::of(&v, self.program))
+            {
+                s.appearance_edits.push(AppearanceEdit::Apply(app));
             }
         } else if name == c("RememberTemporaryProfile") {
             s.appearance_edits.push(AppearanceEdit::Keep);

@@ -90,6 +90,9 @@ pub struct KidPart {
     /// Its `desc_id` in its list (`Buzzcut`, `#"Skin 4"`), as the game's
     /// menus name it.
     pub desc_id: u32,
+    /// Another `desc_id` it goes by (a skin's body: `BoyBody2` for `#"Skin
+    /// 3"`), or 0.
+    pub alias: u32,
     pub mesh: Option<String>,
     pub swaps: Vec<(String, String)>,
     /// Whether the shop lets its colour be changed (not `no_color`).
@@ -885,6 +888,7 @@ impl GameData {
             KidPart {
                 name,
                 desc_id: id_of(entry).unwrap_or(0),
+                alias: 0,
                 colorable: field("mesh").is_some() && !entry.has_flag(checksum("no_color")),
                 mesh: field("mesh"),
                 swaps,
@@ -927,6 +931,7 @@ impl GameData {
             skin_choices.push(KidPart {
                 name: part(skin).name,
                 desc_id: id_of(skin).unwrap_or(0),
+                alias: id_of(body).unwrap_or(0),
                 ..part(body)
             });
         }
