@@ -692,6 +692,17 @@ impl Thread {
             }
             return false;
         }
+        // Built in: parameters added to the script's own (`AddParams
+        // not_focusable = not_focusable`, `AddParams (master_editable_list
+        // [ <index> ])`: a struct's fields).
+        if target.is_none() && name == checksum("AddParams") {
+            let Value::Struct(items) = args else {
+                return false;
+            };
+            let frame = self.frames.last_mut().unwrap();
+            merge_params(&mut frame.params, items);
+            return true;
+        }
         // Built in: a parameter taken away (`RemoveComponent Name =
         // ObjectDistance`, `RemoveParameter is_hidden`).
         if target.is_none()
