@@ -155,6 +155,18 @@ where the game's does (ollies, landings, grinds, reverts, flails, bails);
 the panel's Rumble box turns that off, and the `pad_check` example
 checks that a pad can rumble.
 
+The panel's **Simplified controls** box (or the game's Options > Controls >
+Pro Controls, off) plays the game's simplified scheme: the trick tables'
+`Simplified` entries, where any trick button does the direction's trick,
+grinds and lips too, and landing mid-trick loses the combo rather than
+bailing. Characters stand at their appearances' sizes (Jessie 1.12, the
+kids 0.85). The created **Kid**, boy or girl, is dressed from the Skate
+Shop's part lists, under the panel's Kid's clothes or through the game's
+own Edit Skater, Create-A-Skaters (six saved kids) and Extreme Skate
+Crew menus in the shop, with the parts' colours, the board's deck and
+griptape, and the kid's body shape. Zurg's Home's low gravity zones work
+as its scripts set them up (a goal turning on `CHEAT_MOON`).
+
 The panel's **2 minute run** is the game's single session (Trick Attack):
 two minutes from the level's start, the last combo counting once it
 lands, and the best score for each level and character kept in the
