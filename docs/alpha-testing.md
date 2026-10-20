@@ -170,6 +170,8 @@ skater is and what it's doing.
   minding, and falling to the gallery ends it), the Graveyard's Free
   Zazu (jump at the cage: each try puts you back on the ramp, three hits
   free him), Beach's Trap Clayton (drop the cage as he walks under it).
+- Zurg's Home's low gravity zones: fly up out of the craters into one
+  ("Low Gravity Zone") and it's moon gravity till you're down again.
 - Hecklers knock you down if you skate into them (Scar in Pride Rock,
   the hyenas, Clayton), and so do Zurg's missiles once he's on his
   platform.
