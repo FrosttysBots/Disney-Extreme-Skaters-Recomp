@@ -840,7 +840,26 @@ impl GameData {
             _ => None,
         };
         let id_of = |v: &Value| v.get(checksum("desc_id")).and_then(Value::as_name);
+        // An entry with the structs it names filled in (`common_deck_
+        // graphic_params`: the texture a deck replaces).
+        let expand = |entry: &Value| -> Value {
+            let Value::Struct(items) = entry else {
+                return entry.clone();
+            };
+            let mut out = Vec::new();
+            for (k, v) in items {
+                match (k, v) {
+                    (None, Value::Name(n)) => match program.value(*n) {
+                        Some(Value::Struct(base)) => out.extend(base.iter().cloned()),
+                        _ => out.push((None, v.clone())),
+                    },
+                    _ => out.push((*k, v.clone())),
+                }
+            }
+            Value::Struct(out)
+        };
         let part = |entry: &Value| -> KidPart {
+            let entry = &expand(entry);
             let field = |name: &str| entry.get(checksum(name)).and_then(text);
             let name = entry
                 .get(checksum("frontend_desc"))
@@ -930,8 +949,19 @@ impl GameData {
             ("Elbow pads", format!("skater_{sex}_elbowpads")),
             ("Knee pads", format!("skater_{sex}_kneepads")),
             ("Backpack", format!("skater_{sex}_backpack")),
+            ("Deck", "deck_graphic".into()),
+            ("Griptape", "griptape".into()),
         ] {
-            let entries = list(&array);
+            // (The decks the kid can have: its own and the blank, not the
+            // other skaters', `skater = buzz`.)
+            let entries: Vec<Value> = list(&array)
+                .into_iter()
+                .filter(|e| {
+                    e.get(checksum("skater"))
+                        .and_then(Value::as_name)
+                        .is_none_or(|s| s == checksum("kid") || s == checksum("none"))
+                })
+                .collect();
             if entries.is_empty() {
                 continue;
             }

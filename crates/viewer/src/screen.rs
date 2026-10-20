@@ -2454,7 +2454,8 @@ fn globals_in(program: &qb::vm::Program, props: Value) -> Value {
 }
 
 /// The unlock flags of the Skate Shop's parts (`unlock_flag =
-/// CAS_UNLOCK_063` in its lists, as `master_editable_list` names them).
+/// CAS_UNLOCK_063` in its lists, as `master_editable_list` names them,
+/// and the decks' `flag`).
 fn cas_unlock_flags(program: &Program) -> Vec<u32> {
     let c = checksum;
     let mut flags = Vec::new();
@@ -2471,11 +2472,12 @@ fn cas_unlock_flags(program: &Program) -> Vec<u32> {
         else {
             continue;
         };
-        flags.extend(
-            items
-                .iter()
-                .filter_map(|i| i.get(c("unlock_flag")).and_then(Value::as_name)),
-        );
+        // (The decks' are `flag = BOARD_UNLOCKED_CASB01`.)
+        flags.extend(items.iter().flat_map(|i| {
+            ["unlock_flag", "flag"]
+                .into_iter()
+                .filter_map(|k| i.get(c(k)).and_then(Value::as_name))
+        }));
     }
     flags
 }
