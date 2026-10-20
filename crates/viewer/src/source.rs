@@ -964,6 +964,9 @@ impl GameData {
             ("Elbow pads", format!("skater_{sex}_elbowpads")),
             ("Knee pads", format!("skater_{sex}_kneepads")),
             ("Backpack", format!("skater_{sex}_backpack")),
+            ("Hat logo", "hat_logo".into()),
+            ("Front logo", "front_logo".into()),
+            ("Back logo", "back_logo".into()),
             ("Deck", "deck_graphic".into()),
             ("Griptape", "griptape".into()),
         ] {
