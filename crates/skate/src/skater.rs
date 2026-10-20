@@ -3048,7 +3048,11 @@ impl Skater {
             if facing.x != 0.0 || facing.z != 0.0 {
                 self.heading = facing.x.atan2(facing.z);
             }
-            self.position = hit.point + hit.normal * (1.0 + p.min_distance_to_wall);
+            // (Out across: a wall leaning over would push the feet down
+            // under the floor.)
+            let out = Vec3::new(hit.normal.x, 0.0, hit.normal.z).normalize_or(hit.normal);
+            let out = if hit.normal.y < 0.0 { out } else { hit.normal };
+            self.position = hit.point + out * (1.0 + p.min_distance_to_wall);
             return;
         }
         self.position = target;
