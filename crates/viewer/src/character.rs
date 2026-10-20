@@ -44,6 +44,9 @@ pub struct Character {
     /// `None` for characters without blink frames (Tantor, Tarzan, Woody
     /// and Zurg).
     pub blink: Option<Blink>,
+    /// How much bigger or smaller than its model it's shown (its
+    /// appearance's `scale`: Jessie 1.12, the kid 0.85; 1 for most).
+    pub scale: f32,
 }
 
 impl Character {
@@ -120,6 +123,7 @@ impl Character {
             .collect();
         Ok(Self {
             blink: Blink::find(&mesh),
+            scale: 1.0,
             partner,
             mesh,
             influences,
@@ -175,7 +179,8 @@ impl Character {
         } else {
             skin
         };
-        let matrices: Vec<Mat4> = skin.into_iter().map(|m| placement * m).collect();
+        let scaled = placement * Mat4::from_scale(Vec3::splat(self.scale));
+        let matrices: Vec<Mat4> = skin.into_iter().map(|m| scaled * m).collect();
         self.mesh
             .vertices
             .iter()

@@ -2326,6 +2326,7 @@ impl<'a> App<'a> {
                 self.model.message = None;
                 self.next_spawn = 0;
                 self.level = Some(level);
+                self.scale_character();
                 // The goals won here before, for the scripts that ask.
                 if let Some(level) = &mut self.level {
                     for kind in ["HighScore", "ProScore", "SKATE", "Race"] {
@@ -4537,6 +4538,33 @@ impl<'a> App<'a> {
         skater.tricks = tricks;
     }
 
+    /// The character's size, from the scripts (`appearance_jessie`'s
+    /// `scale = 1.12`...), once both it and a level are loaded.
+    fn scale_character(&mut self) {
+        let (Some(character), Some(level), Some(index)) = (
+            &mut self.character,
+            &self.level,
+            self.model.character.current,
+        ) else {
+            return;
+        };
+        let name = match self.model.character.characters[index]
+            .id
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "kid_girl" => "girl".to_string(),
+            id => id.to_string(),
+        };
+        character.scale = level
+            .behaviour
+            .program()
+            .value(qb::checksum(&format!("appearance_{name}")))
+            .and_then(|a| a.get(qb::checksum("scale")))
+            .and_then(qb::Value::as_f32)
+            .unwrap_or(1.0);
+    }
+
     /// Pauses skating, or goes on.
     fn toggle_pause(&mut self) {
         if self.skating.is_some() && self.replay.is_none() {
@@ -6042,6 +6070,7 @@ impl<'a> App<'a> {
                     level.renderer.set_character(Some(&character.mesh));
                 }
                 self.character = Some(character);
+                self.scale_character();
                 self.settings.last_character = Some(info.id);
                 self.settings.save();
                 if was_skating && skateable {
@@ -6965,6 +6994,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             .as_ref()
             .map(|m| egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels));
         app.level = Some(loaded);
+        app.scale_character();
         // The game's main menu, and the presses given it.
         if !args.menu_keys.is_empty() {
             if let (Some(screen), Some(level)) = (&mut app.screen, &app.level) {
