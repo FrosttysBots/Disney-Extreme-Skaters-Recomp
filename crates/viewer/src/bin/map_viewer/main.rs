@@ -5461,6 +5461,17 @@ impl<'a> App<'a> {
         }
         // Worn: kept for next time and shown in the panel too.
         let sex = if girl { "f" } else { "m" };
+        let key = format!("outfit.{sex}.scale");
+        match self.kid_scale {
+            Some(scale) => {
+                self.settings
+                    .best
+                    .insert(key, (scale * 1000.0).round() as u32);
+            }
+            None => {
+                self.settings.best.remove(&key);
+            }
+        }
         for (i, slot) in slots.iter().enumerate() {
             let key = format!("outfit.{sex}.{}", slot.label);
             let best = &mut self.settings.best;
@@ -6222,6 +6233,12 @@ impl<'a> App<'a> {
                             .into_iter()
                             .map(|(bone, s)| (bone, Vec3::from(s)))
                             .collect();
+                        // (Its size, if a crew kid's was kept.)
+                        self.kid_scale = self
+                            .settings
+                            .best
+                            .get(&format!("outfit.{sex}.scale"))
+                            .map(|&s| s as f32 / 1000.0);
                         for slot in &mut slots {
                             let key = format!("outfit.{sex}.{}", slot.label);
                             let saved = |k: &str| self.settings.best.get(&format!("{key}.{k}"));
