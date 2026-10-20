@@ -162,6 +162,10 @@ struct Args {
     /// right, c choose, b back, w wait): its skater select, say.
     #[arg(long, requires = "character", default_value = "")]
     menu_keys: String,
+    /// For --screenshot of the kid: its parts coloured, as
+    /// "Part:hue:saturation:value" separated by commas (`Shirt:0:100:50`)
+    #[arg(long, requires = "character", default_value = "")]
+    kid_color: String,
     /// For --skate: play another of the level's goals from its own
     /// scripts, by its type (`Gaps`, `Gaps2`...)
     #[arg(long, requires = "skate")]
@@ -6865,6 +6869,20 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         read_only: true,
         ..Settings::default()
     };
+    for part in args.kid_color.split(',').filter(|p| !p.is_empty()) {
+        let v: Vec<&str> = part.split(':').collect();
+        anyhow::ensure!(v.len() == 4, "--kid-color is Part:hue:saturation:value");
+        for sex in ["m", "f"] {
+            let key = format!("outfit.{sex}.{}", v[0]);
+            settings.best.insert(format!("{key}.c"), 1);
+            for (k, value) in ["h", "s", "v"].iter().zip(&v[1..]) {
+                settings.best.insert(
+                    format!("{key}.{k}"),
+                    value.parse().context("--kid-color's numbers")?,
+                );
+            }
+        }
+    }
     let mut app = App::new(&mut settings);
     app.model.levels = levels;
     app.model.data_path = Some(data_path.display().to_string());
