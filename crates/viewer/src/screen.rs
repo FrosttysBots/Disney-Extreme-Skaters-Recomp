@@ -1711,14 +1711,19 @@ impl Host for Ui<'_> {
                 return Outcome::Done(false);
             };
             let (top_left, size) = s.local_rect(i);
-            return Outcome::Params(vec![
-                (
+            // (Its place, or its size: not both, as a position's caller
+            // may have a `width` of its own, the keyboard's wide keys.)
+            return Outcome::Params(if name == c("GetScreenElementDims") {
+                vec![
+                    (Some(c("width")), Value::Float(size.x)),
+                    (Some(c("height")), Value::Float(size.y)),
+                ]
+            } else {
+                vec![(
                     Some(c("ScreenElementPos")),
                     Value::Pair(top_left.to_array()),
-                ),
-                (Some(c("width")), Value::Float(size.x)),
-                (Some(c("height")), Value::Float(size.y)),
-            ]);
+                )]
+            });
         } else if name == c("GetStackedScreenElementPos") {
             let Some(i) = target_of(s) else {
                 return Outcome::Done(false);
