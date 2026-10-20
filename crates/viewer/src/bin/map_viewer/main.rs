@@ -1964,7 +1964,7 @@ struct App<'a> {
     /// those as last kept by the menus.
     kid_shape: Vec<(u32, Vec3)>,
     kid_scale: Option<f32>,
-    kid_shape_kept: Option<(Vec<(u32, Vec3)>, Option<f32>)>,
+    kid_shape_kept: Option<(KidShape, Option<f32>)>,
     /// An appearance for the other kid (boy or girl), put on once it's
     /// shown.
     kid_pending: Option<desa_viewer::screen::Appearance>,
@@ -2066,6 +2066,9 @@ struct App<'a> {
 
 /// A part of the created kid as worn: the choice picked and its colour.
 type KidWorn = (usize, Option<[f32; 3]>);
+
+/// The created kid's bones scaled, by name.
+type KidShape = Vec<(u32, Vec3)>;
 
 impl<'a> App<'a> {
     fn new(settings: &'a mut Settings) -> Self {
