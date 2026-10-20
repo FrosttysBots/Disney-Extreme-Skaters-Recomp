@@ -1968,6 +1968,8 @@ struct App<'a> {
     /// An appearance for the other kid (boy or girl), put on once it's
     /// shown.
     kid_pending: Option<desa_viewer::screen::Appearance>,
+    /// A created skater's slot for the other kid, put on once it's shown.
+    kid_pending_slot: Option<usize>,
     pad_back: bool,
     /// What a teleporter created or killed on the way, to apply.
     pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
@@ -2238,6 +2240,7 @@ impl<'a> App<'a> {
             kid_scale: None,
             kid_shape_kept: None,
             kid_pending: None,
+            kid_pending_slot: None,
             pad_back: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
@@ -5312,6 +5315,25 @@ impl<'a> App<'a> {
             return;
         };
         let mut edits = std::mem::take(&mut screen.screen.appearance_edits);
+        // The created skaters' slots saved, for the menus to list.
+        screen.screen.saved_kids = (0..6)
+            .filter_map(|i| {
+                self.settings
+                    .best
+                    .get(&format!("cak.{i}.girl"))
+                    .map(|&g| (i, g == 1))
+            })
+            .collect();
+        // (A slot waited for while its kid was put on.)
+        if let Some(i) = self.kid_pending_slot.take() {
+            let name = qb::checksum(&format!("cak_profile{i}"));
+            let wanted = self.settings.best.get(&format!("cak.{i}.girl")) == Some(&1);
+            if wanted == girl {
+                edits.insert(0, AppearanceEdit::Restore(Some(name)));
+            } else {
+                self.kid_pending_slot = Some(i);
+            }
+        }
         // (An appearance for this kid, waited for while it was put on.)
         if let Some(app) = self.kid_pending.take() {
             if app.girl == girl {
@@ -5378,6 +5400,10 @@ impl<'a> App<'a> {
         let before = worn(slots);
         let kept = self.kid_kept.entry(girl).or_insert_with(|| worn(slots));
         let mut reshaped = false;
+        // (A slot for the other kid: that kid, then the slot.)
+        let mut switch_to = None;
+        let cak_slot =
+            |name: u32| (0..6).find(|i| qb::checksum(&format!("cak_profile{i}")) == name);
         for edit in edits {
             match edit {
                 AppearanceEdit::Part(list, desc) => {
@@ -5401,12 +5427,65 @@ impl<'a> App<'a> {
                         slot.color = color;
                     }
                 }
-                AppearanceEdit::Keep => {
+                AppearanceEdit::Keep(Some(name)) if cak_slot(name).is_some() => {
+                    // Saved to a created skater's slot.
+                    let i = cak_slot(name).unwrap_or(0);
+                    let best = &mut self.settings.best;
+                    best.retain(|k, _| !k.starts_with(&format!("cak.{i}.")));
+                    best.insert(format!("cak.{i}.girl"), u32::from(girl));
+                    if let Some(scale) = self.kid_scale {
+                        best.insert(format!("cak.{i}.scale"), (scale * 1000.0).round() as u32);
+                    }
+                    for slot in slots.iter() {
+                        let key = format!("cak.{i}.{}", slot.label);
+                        best.insert(key.clone(), slot.picked as u32);
+                        if let Some([h, s, v]) = slot.color {
+                            best.insert(format!("{key}.c"), 1);
+                            best.insert(format!("{key}.h"), h.round() as u32);
+                            best.insert(format!("{key}.s"), s.round() as u32);
+                            best.insert(format!("{key}.v"), v.round() as u32);
+                        }
+                    }
+                }
+                AppearanceEdit::Keep(_) => {
                     *kept = worn(slots);
                     self.kid_shape_kept = Some((self.kid_shape.clone(), self.kid_scale));
                 }
+                AppearanceEdit::Restore(Some(name)) if cak_slot(name).is_some() => {
+                    // A created skater's slot put on (the boy's or the girl's
+                    // kid, as it was saved).
+                    let i = cak_slot(name).unwrap_or(0);
+                    let best = &self.settings.best;
+                    let Some(&saved_girl) = best.get(&format!("cak.{i}.girl")) else {
+                        continue;
+                    };
+                    if (saved_girl == 1) != girl {
+                        self.kid_pending_slot = Some(i);
+                        switch_to = Some(saved_girl == 1);
+                        continue;
+                    }
+                    for slot in slots.iter_mut() {
+                        let key = format!("cak.{i}.{}", slot.label);
+                        if let Some(&picked) = best.get(&key) {
+                            if (picked as usize) < slot.choices.len() {
+                                slot.picked = picked as usize;
+                            }
+                        }
+                        slot.color = match best.get(&format!("{key}.c")) {
+                            Some(1) => Some(["h", "s", "v"].map(|k| {
+                                best.get(&format!("{key}.{k}")).map_or(0.0, |&v| v as f32)
+                            })),
+                            _ => None,
+                        };
+                    }
+                    let scale = best
+                        .get(&format!("cak.{i}.scale"))
+                        .map(|&s| s as f32 / 1000.0);
+                    reshaped |= scale != self.kid_scale;
+                    self.kid_scale = scale;
+                }
                 AppearanceEdit::Reset(_) => {}
-                AppearanceEdit::Restore => {
+                AppearanceEdit::Restore(_) => {
                     for (slot, &(picked, color)) in slots.iter_mut().zip(kept.iter()) {
                         slot.picked = picked;
                         slot.color = color;
@@ -5455,6 +5534,17 @@ impl<'a> App<'a> {
                     }
                 }
             }
+        }
+        if let Some(other) = switch_to {
+            let id = if other { "kid_girl" } else { "kid" };
+            let index = self
+                .model
+                .character
+                .characters
+                .iter()
+                .position(|c| c.id.eq_ignore_ascii_case(id));
+            self.load_character(index);
+            return;
         }
         if worn(slots) == before && !reshaped {
             return;

@@ -220,8 +220,10 @@ struct Running {
 pub enum AppearanceEdit {
     Part(u32, Option<u32>),
     Color(u32, Option<[f32; 3]>),
-    Keep,
-    Restore,
+    /// (By the temporary profile's name: `stage_profile0`, `cak_profile2`,
+    /// a created skater's slot.)
+    Keep(Option<u32>),
+    Restore(Option<u32>),
     /// Made over as the game's new boy or girl (`RememberTemporaryAppearance
     /// appearance_structure = appearance_reset_girl`: Create New's gender):
     /// whether a girl.
@@ -388,6 +390,13 @@ pub struct Screen {
     /// stage (`None`).
     pub skater_node: Option<u32>,
     pub appearance_edits: Vec<AppearanceEdit>,
+    /// The game's temporary profiles as remembered (`RememberTemporaryProfile
+    /// Name = cak_profile0`), the created kid's profile as the menus have
+    /// changed it (`SetSkaterProfileInfo params = { is_male = 0 }`), and the
+    /// created skaters' slots saved (each its index and whether a girl).
+    temp_profiles: HashMap<u32, Params>,
+    profile_overrides: Params,
+    pub saved_kids: Vec<(usize, bool)>,
     /// A movie asked for on the level's screen (`playmovie "movies\x"
     /// mesh = moviescreen loop`: the skater select's character clip), by
     /// its file's name and whether it loops; or none (`StopMovie`).
@@ -451,6 +460,9 @@ impl Screen {
             kid_appearance: Vec::new(),
             skater_node: None,
             appearance_edits: Vec::new(),
+            temp_profiles: HashMap::new(),
+            profile_overrides: Vec::new(),
+            saved_kids: Vec::new(),
             screen_movie: None,
             camera: None,
             movies: Vec::new(),
@@ -1776,6 +1788,91 @@ impl Ui<'_> {
     }
 }
 
+impl Ui<'_> {
+    /// The character's profile (its name, stats...), its three special
+    /// tricks assigned as the career gives them (lip, manual, air:
+    /// `goal_get_special_trick_display_text`). (On a kid in the Skate
+    /// Shop's skater select, `disney_skater` up to `LAST_CAK`, the profile
+    /// asked about is the created skater's, as the game has it, with what
+    /// the menus have changed in it.)
+    fn current_profile(&self) -> Option<Params> {
+        let c = checksum;
+        let s = &*self.screen;
+        let int = |name: &str| self.program.value(c(name)).and_then(Value::as_int);
+        let on_kid = matches!(
+            (int("disney_skater"), int("LAST_CAK")),
+            (Some(i), Some(last)) if (0..=last).contains(&i)
+        ) && s.level == Some(c("load_skateshop"));
+        let id = if on_kid {
+            Some("kid")
+        } else {
+            s.character.as_deref()
+        };
+        let Some(Value::Struct(profile)) =
+            id.and_then(|id| skate::constants::profile(self.program, id))
+        else {
+            return None;
+        };
+        let special = Value::Struct(vec![
+            (Some(c("TrickSlot")), Value::Name(c("Assigned"))),
+            (Some(c("trickname")), Value::Name(c("Assigned"))),
+        ]);
+        let mut params = profile.clone();
+        // (The girl kid's the kid's profile, as a girl.)
+        let kid = matches!(s.character.as_deref(), Some("kid" | "kid_girl"));
+        if s.character.as_deref() == Some("kid_girl") {
+            params.retain(|(k, _)| *k != Some(c("is_male")));
+            params.push((Some(c("is_male")), Value::Integer(0)));
+        }
+        if kid {
+            for (k, v) in &s.profile_overrides {
+                params.retain(|(o, _)| o != k);
+                params.push((*k, v.clone()));
+            }
+        }
+        params.retain(|(k, _)| *k != Some(c("specials")));
+        params.push((
+            Some(c("specials")),
+            Value::Struct(vec![(None, Value::Array(vec![special; 3]))]),
+        ));
+        Some(params)
+    }
+
+    /// A temporary profile: as remembered, else a created skater's slot as
+    /// saved (or empty, `info_cak`'s), else the kid on the stage.
+    fn temp_profile(&self, profile: u32) -> Option<Params> {
+        let c = checksum;
+        if let Some(info) = self.screen.temp_profiles.get(&profile) {
+            return Some(info.clone());
+        }
+        let slots = self
+            .program
+            .value(c("info_cak"))
+            .and_then(Value::as_array)
+            .unwrap_or_default();
+        for (i, slot) in slots.iter().enumerate() {
+            if c(&format!("cak_profile{i}")) != profile {
+                continue;
+            }
+            if let Some(&(_, girl)) = self.screen.saved_kids.iter().find(|(s, _)| *s == i) {
+                return Some(vec![
+                    (
+                        Some(c("display_name")),
+                        Value::String(format!("Kid {}", i + 1)),
+                    ),
+                    (Some(c("is_male")), Value::Integer(i32::from(!girl))),
+                    (Some(c("is_locked")), Value::Integer(-(i as i32))),
+                ]);
+            }
+            return match slot.get(c("profile")) {
+                Some(Value::Struct(info)) => Some(info.clone()),
+                _ => None,
+            };
+        }
+        self.current_profile()
+    }
+}
+
 impl Host for Ui<'_> {
     fn is_self(&self, target: u32) -> bool {
         self.screen.find(target) == Some(self.element)
@@ -2215,10 +2312,37 @@ impl Host for Ui<'_> {
             {
                 s.appearance_edits.push(AppearanceEdit::Apply(app));
             }
-        } else if name == c("RememberTemporaryProfile") {
-            s.appearance_edits.push(AppearanceEdit::Keep);
+        } else if name == c("RememberTemporaryProfile") || name == c("RememberTemporaryAppearance")
+        {
+            let profile = named("Name").and_then(|v| v.as_name());
+            if name == c("RememberTemporaryProfile") {
+                if let (Some(profile), Some(info)) = (profile, self.current_profile()) {
+                    self.screen.temp_profiles.insert(profile, info);
+                }
+            }
+            self.screen
+                .appearance_edits
+                .push(AppearanceEdit::Keep(profile));
         } else if name == c("RestoreTemporaryAppearance") {
-            s.appearance_edits.push(AppearanceEdit::Restore);
+            let profile = named("Name").and_then(|v| v.as_name());
+            s.appearance_edits.push(AppearanceEdit::Restore(profile));
+        } else if name == c("GetTemporaryProfileInfo") {
+            let Some(profile) = named("Name").and_then(|v| v.as_name()) else {
+                return Outcome::Done(false);
+            };
+            return match self.temp_profile(profile) {
+                Some(info) => Outcome::Params(info),
+                None => Outcome::Done(false),
+            };
+        } else if name == c("SetSkaterProfileInfo") {
+            if let Some(Value::Struct(items)) = named("params") {
+                for (k, v) in items {
+                    if let Some(k) = k {
+                        s.profile_overrides.retain(|(o, _)| *o != Some(k));
+                        s.profile_overrides.push((Some(k), v));
+                    }
+                }
+            }
         } else if name == c("SetPlayerAppearanceColor") {
             // `part = hat h = 220 S = 90 v = 60 use_default_hsv = 0`.
             let part = named("part").and_then(|v| v.as_name());
@@ -2455,43 +2579,10 @@ impl Host for Ui<'_> {
         } else if name == c("SkaterCamAnimFinished") {
             return Outcome::Done(true);
         } else if name == c("GetSkaterProfileInfo") {
-            // The character's profile (its name, stats...), its three
-            // special tricks assigned as the career gives them (lip,
-            // manual, air: `goal_get_special_trick_display_text`).
-            // (On a kid in the Skate Shop's skater select, `disney_skater`
-            // up to `LAST_CAK`, the profile asked about is the created
-            // skater's, as the game has it.)
-            let int = |name: &str| self.program.value(c(name)).and_then(Value::as_int);
-            let on_kid = matches!(
-                (int("disney_skater"), int("LAST_CAK")),
-                (Some(i), Some(last)) if (0..=last).contains(&i)
-            ) && s.level == Some(c("load_skateshop"));
-            let id = if on_kid {
-                Some("kid")
-            } else {
-                s.character.as_deref()
+            return match self.current_profile() {
+                Some(params) => Outcome::Params(params),
+                None => Outcome::Done(false),
             };
-            let Some(Value::Struct(profile)) =
-                id.and_then(|id| skate::constants::profile(self.program, id))
-            else {
-                return Outcome::Done(false);
-            };
-            let special = Value::Struct(vec![
-                (Some(c("TrickSlot")), Value::Name(c("Assigned"))),
-                (Some(c("trickname")), Value::Name(c("Assigned"))),
-            ]);
-            let mut params = profile.clone();
-            // (The girl kid's the kid's profile, as a girl.)
-            if s.character.as_deref() == Some("kid_girl") {
-                params.retain(|(k, _)| *k != Some(c("is_male")));
-                params.push((Some(c("is_male")), Value::Integer(0)));
-            }
-            params.retain(|(k, _)| *k != Some(c("specials")));
-            params.push((
-                Some(c("specials")),
-                Value::Struct(vec![(None, Value::Array(vec![special; 3]))]),
-            ));
-            return Outcome::Params(params);
         } else if name == c("GoalManager_HasActiveGoals") {
             return Outcome::Done(s.goal.is_some());
         } else if name == c("GoalManager_CanRetryGoal") {

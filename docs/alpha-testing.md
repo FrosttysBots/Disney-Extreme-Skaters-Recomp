@@ -62,7 +62,9 @@ picked is kept. The game's own Edit Skater (Main menu, the kid, Edit
 Skater) dresses it too, in the shop's dressing-up set: parts are tried on
 as you move through a list, and kept when chosen (Back puts them back).
 Create New's Male or Female swaps between the boy and girl kid, and the
-Extreme Skate Crew's kids can be picked whole (outfit, colours and size).
+Extreme Skate Crew's kids can be picked whole (outfit, colours and size). Create-A-Skaters keeps
+up to six kids of your own: pick an empty slot, make one, and Done saves
+it there.
 
 The Simplified controls box (or the game's own Pro Controls, off, in Options > Controls)
 plays the game's simplified controls: any trick button does the trick
