@@ -1856,6 +1856,10 @@ impl Host for Ui<'_> {
                     _ => Vec::new(),
                 },
             };
+            // In place of what the element was running (an element runs a
+            // script at a time: `do_scale_down` stops the focus's
+            // `do_random_effect` flicker).
+            s.stopping.push((i, None));
             let then = props.get(c("callback")).and_then(Value::as_name).map(|cb| {
                 let p = match props.get(c("callback_params")) {
                     Some(Value::Struct(p)) => p.clone(),
