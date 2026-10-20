@@ -75,6 +75,18 @@ pub struct CameraPathModel {
 }
 
 /// The character shown on the current spawn point and its animation.
+/// One of the created kid's parts, as the panel shows it: its choices'
+/// names (and which can be coloured), the one picked, and its colour (the
+/// shop's hue, saturation and value) if not its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KidSlotView {
+    pub label: String,
+    pub choices: Vec<String>,
+    pub colorable: Vec<bool>,
+    pub picked: usize,
+    pub color: Option<[f32; 3]>,
+}
+
 pub struct CharacterModel {
     pub characters: Vec<LevelInfo>,
     pub current: Option<usize>,
@@ -114,9 +126,8 @@ pub struct CharacterModel {
     pub rumble: bool,
     /// The game's simplified controls (its Pro Controls option off).
     pub simplified: bool,
-    /// The created kid's parts (shown when the kid is): each one's label,
-    /// its choices' names and the one picked.
-    pub kid_slots: Vec<(String, Vec<String>, usize)>,
+    /// The created kid's parts (shown when the kid is).
+    pub kid_slots: Vec<KidSlotView>,
     /// In a two-minute run: the seconds left, and once it's over the
     /// score, the best before it, and whether it beat it.
     pub run_clock: Option<f32>,
@@ -1125,19 +1136,51 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             .default_open(false)
             .show(ui, |ui| {
                 egui::Grid::new("kid_slots").num_columns(2).show(ui, |ui| {
-                    for (i, (label, choices, picked)) in model.kid_slots.iter_mut().enumerate() {
-                        ui.label(label.as_str());
-                        let before = *picked;
+                    for (i, slot) in model.kid_slots.iter_mut().enumerate() {
+                        ui.label(slot.label.as_str());
+                        let before = slot.picked;
                         egui::ComboBox::from_id_salt(("kid_slot", i))
-                            .selected_text(choices.get(*picked).map_or("", String::as_str))
+                            .selected_text(slot.choices.get(slot.picked).map_or("", String::as_str))
                             .height(400.0)
                             .show_ui(ui, |ui| {
-                                for (j, name) in choices.iter().enumerate() {
-                                    ui.selectable_value(picked, j, name);
+                                for (j, name) in slot.choices.iter().enumerate() {
+                                    ui.selectable_value(&mut slot.picked, j, name);
                                 }
                             });
-                        changed |= *picked != before;
+                        changed |= slot.picked != before;
                         ui.end_row();
+                        // Its colour, as the shop's colour menu sets it
+                        // (hue round the wheel, saturation 15 to 100,
+                        // value 12 to 65; COLORMENU.q).
+                        if slot.colorable.get(slot.picked).copied().unwrap_or(false) {
+                            ui.label("");
+                            ui.horizontal(|ui| {
+                                let mut own = slot.color.is_none();
+                                if ui.checkbox(&mut own, "own colour").changed() {
+                                    slot.color = if own { None } else { Some([0.0, 50.0, 50.0]) };
+                                    changed = true;
+                                }
+                                if let Some([h, s, v]) = &mut slot.color {
+                                    for (value, range, text) in [
+                                        (h, 0.0..=360.0, "hue"),
+                                        (s, 15.0..=100.0, "sat"),
+                                        (v, 12.0..=65.0, "val"),
+                                    ] {
+                                        let r = ui.add(
+                                            egui::DragValue::new(value)
+                                                .range(range)
+                                                .speed(1.0)
+                                                .prefix(format!("{text} ")),
+                                        );
+                                        // (Loaded again once let go, not
+                                        // at every step of a drag.)
+                                        changed |=
+                                            r.drag_stopped() || (r.changed() && !r.dragged());
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        }
                     }
                 });
             });

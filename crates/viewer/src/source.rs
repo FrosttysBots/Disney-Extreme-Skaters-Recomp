@@ -89,6 +89,32 @@ pub struct KidPart {
     pub name: String,
     pub mesh: Option<String>,
     pub swaps: Vec<(String, String)>,
+    /// Whether the shop lets its colour be changed (not `no_color`).
+    pub colorable: bool,
+    /// The colour picked for it, as the shop's sliders give it: hue in
+    /// degrees, saturation and value out of 100 (`h`, `S`, `v`); `None`
+    /// keeps its own (`use_default_hsv`).
+    pub color: Option<[f32; 3]>,
+}
+
+/// A part's colour (`SetPlayerAppearanceColor h S v`) as the game sets it
+/// on the part's materials (0x8006D4BC): the hue, saturation and value
+/// to RGB, out of 255, where 128 leaves the part as it is.
+pub fn kid_part_tint([h, s, v]: [f32; 3]) -> [u8; 3] {
+    let (s, v) = (s / 100.0, v / 100.0);
+    let h = h.rem_euclid(360.0) / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|c| ((c + m) * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
 }
 
 /// One of the created kid's parts: its choices and the one picked (the
@@ -98,6 +124,18 @@ pub struct KidSlot {
     pub label: &'static str,
     pub choices: Vec<KidPart>,
     pub picked: usize,
+    /// Its colour picked (see [`KidPart::color`]).
+    pub color: Option<[f32; 3]>,
+}
+
+impl KidSlot {
+    /// The choice picked, in the colour picked.
+    pub fn worn(&self) -> KidPart {
+        KidPart {
+            color: self.color.filter(|_| self.choices[self.picked].colorable),
+            ..self.choices[self.picked].clone()
+        }
+    }
 }
 
 pub struct CharacterFiles {
@@ -108,6 +146,8 @@ pub struct CharacterFiles {
     /// More of the model, skinned to the same skeleton: the created
     /// kid's clothes and hair.
     pub parts: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    /// The colour each of those is tinted (see [`kid_part_tint`]).
+    pub part_tints: Vec<Option<[u8; 3]>>,
     /// Textures (`.img.ngc` files) for checksums the model's own texture
     /// file hasn't: the created girl's head.
     pub extra_textures: Vec<(u32, Vec<u8>)>,
@@ -809,8 +849,10 @@ impl GameData {
             }
             KidPart {
                 name,
+                colorable: field("mesh").is_some() && !entry.has_flag(checksum("no_color")),
                 mesh: field("mesh"),
                 swaps,
+                color: None,
             }
         };
         let list = |name: &str| -> Vec<Value> {
@@ -856,8 +898,15 @@ impl GameData {
             .unwrap_or(0);
         slots.push(KidSlot {
             label: "Skin",
-            choices: skin_choices,
+            choices: skin_choices
+                .into_iter()
+                .map(|c| KidPart {
+                    colorable: false,
+                    ..c
+                })
+                .collect(),
             picked: skin_picked,
+            color: None,
         });
         for (label, array) in [
             ("Hair", format!("skater_{sex}_hair")),
@@ -887,10 +936,20 @@ impl GameData {
                         .position(|c| c.mesh.is_none() && c.swaps.is_empty())
                 })
                 .unwrap_or(0);
+            // (Its colour in the game's set-up, if not its own.)
+            let color = reset
+                .as_ref()
+                .and_then(|r| r.get(checksum(&array)))
+                .filter(|p| p.get(checksum("use_default_hsv")).and_then(Value::as_int) == Some(0))
+                .and_then(|p| {
+                    let n = |k: &str| p.get(checksum(k)).and_then(Value::as_f32);
+                    Some([n("h")?, n("S")?, n("v")?])
+                });
             slots.push(KidSlot {
                 label,
                 choices,
                 picked,
+                color,
             });
         }
         Ok(slots)
@@ -917,6 +976,7 @@ impl GameData {
             Archive::parse(&data).with_context(|| format!("could not read anims_{id}.prg"))?;
         let file = |suffix: &str| entry(&archive, &|p| p.ends_with(&format!("/{name}{suffix}")));
         let mut parts = Vec::new();
+        let mut part_tints = Vec::new();
         let mut extra_textures = Vec::new();
         let (skin, textures, board) = if name == "kid" {
             // The kid as the career starts it (`appearance_kid`: the boy's
@@ -990,6 +1050,7 @@ impl GameData {
                     };
                     if let Some(skin) = part(&format!("{mesh}.skin.ngc"))? {
                         parts.push((skin, part(&format!("{mesh}.tex.ngc"))?));
+                        part_tints.push(piece.color.map(kid_part_tint));
                     }
                 }
                 // (The girl's missing head texture as the skin picked has it.)
@@ -1060,6 +1121,7 @@ impl GameData {
             textures,
             board,
             parts,
+            part_tints,
             extra_textures,
             skeleton,
             key_tables,
@@ -1129,5 +1191,19 @@ mod tests {
         assert_eq!(title("PrideRock"), "Pride Rock");
         assert_eq!(title("beach"), "Beach");
         assert_eq!(title("HUB"), "Hub");
+    }
+}
+
+#[cfg(test)]
+mod kid_tests {
+    use super::kid_part_tint;
+
+    #[test]
+    fn tints() {
+        // Grey at half value leaves a part as it is (128).
+        assert_eq!(kid_part_tint([0.0, 0.0, 50.0]), [128, 128, 128]);
+        assert_eq!(kid_part_tint([0.0, 100.0, 50.0]), [128, 0, 0]);
+        assert_eq!(kid_part_tint([120.0, 100.0, 50.0]), [0, 128, 0]);
+        assert_eq!(kid_part_tint([240.0, 50.0, 50.0]), [64, 64, 128]);
     }
 }

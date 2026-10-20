@@ -91,11 +91,18 @@ impl Character {
             );
             influences.extend(self::influences(board)?);
         }
-        for (part, textures) in &files.parts {
-            mesh.append(
-                Level::from_bytes_with_extra(part, textures.as_deref(), &extra)
-                    .context("could not load a part")?,
-            );
+        for (i, (part, textures)) in files.parts.iter().enumerate() {
+            let mut piece = Level::from_bytes_with_extra(part, textures.as_deref(), &extra)
+                .context("could not load a part")?;
+            // In the colour picked for it (128 as it is).
+            if let Some(tint) = files.part_tints.get(i).copied().flatten() {
+                for v in &mut piece.vertices {
+                    for (c, t) in v.color.iter_mut().zip(tint) {
+                        *c = (u32::from(*c) * u32::from(t) / 128).min(255) as u8;
+                    }
+                }
+            }
+            mesh.append(piece);
             influences.extend(self::influences(part)?);
         }
         if influences.len() != mesh.vertices.len() {

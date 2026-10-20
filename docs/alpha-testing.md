@@ -55,7 +55,9 @@ it off).
 The Kid and Kid (Girl) can be dressed under the panel's Kid's clothes:
 the Skate Shop's own parts (skin, hair, shirt, legs, shoes, socks, hat,
 glasses, face paint, accessory, pads and backpack), starting in the
-game's outfit; what's picked is kept.
+game's outfit, and the parts the shop lets you colour can be (untick
+"own colour": hue, saturation and value, as its colour menu); what's
+picked is kept.
 
 The Simplified controls box (or the game's own Pro Controls, off, in Options > Controls)
 plays the game's simplified controls: any trick button does the trick
@@ -176,8 +178,7 @@ skater is and what it's doing.
 
 - Not yet: Zurg's UFO launch, and two players. Every character can be
   picked, and every part of the kid's wardrobe, where the career unlocks
-  some as goals are won; the kid's parts keep their own colours (the
-  shop's hue sliders aren't done).
+  some as goals are won.
 - Wallrides have no animation of their own (the characters on the disc
   have none): the skater leans off the wall instead.
 - Approximations of our own: the camera follows the game's camera

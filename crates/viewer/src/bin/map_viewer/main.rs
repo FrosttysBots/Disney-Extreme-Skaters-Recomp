@@ -5933,10 +5933,22 @@ impl<'a> App<'a> {
                     Ok(mut slots) => {
                         for slot in &mut slots {
                             let key = format!("outfit.{sex}.{}", slot.label);
+                            let saved = |k: &str| self.settings.best.get(&format!("{key}.{k}"));
                             if let Some(&i) = self.settings.best.get(&key) {
                                 if (i as usize) < slot.choices.len() {
                                     slot.picked = i as usize;
                                 }
+                            }
+                            match saved("c") {
+                                Some(1) => {
+                                    if let (Some(&h), Some(&s), Some(&v)) =
+                                        (saved("h"), saved("s"), saved("v"))
+                                    {
+                                        slot.color = Some([h as f32, s as f32, v as f32]);
+                                    }
+                                }
+                                Some(_) => slot.color = None,
+                                None => {}
                             }
                         }
                         self.wardrobes.insert(girl, slots);
@@ -5948,29 +5960,33 @@ impl<'a> App<'a> {
                 // (The panel's picks, when it was showing this kid.)
                 if kid_shown == Some(girl) && shown_kid.len() == slots.len() {
                     for (shown, slot) in shown_kid.iter().zip(slots.iter_mut()) {
-                        if slot.picked != shown.2 {
-                            slot.picked = shown.2;
-                            self.settings
-                                .best
-                                .insert(format!("outfit.{sex}.{}", slot.label), shown.2 as u32);
+                        let key = format!("outfit.{sex}.{}", slot.label);
+                        if slot.picked != shown.picked {
+                            slot.picked = shown.picked;
+                            self.settings.best.insert(key.clone(), shown.picked as u32);
+                        }
+                        if slot.color != shown.color {
+                            slot.color = shown.color;
+                            let best = &mut self.settings.best;
+                            best.insert(format!("{key}.c"), u32::from(shown.color.is_some()));
+                            if let Some([h, s, v]) = shown.color {
+                                best.insert(format!("{key}.h"), h.round() as u32);
+                                best.insert(format!("{key}.s"), s.round() as u32);
+                                best.insert(format!("{key}.v"), v.round() as u32);
+                            }
                         }
                     }
                 }
-                outfit = Some(
-                    slots
-                        .iter()
-                        .map(|s| s.choices[s.picked].clone())
-                        .collect::<Vec<_>>(),
-                );
+                outfit = Some(slots.iter().map(|s| s.worn()).collect::<Vec<_>>());
                 self.kid_shown = Some(girl);
                 self.model.character.kid_slots = slots
                     .iter()
-                    .map(|s| {
-                        (
-                            s.label.to_string(),
-                            s.choices.iter().map(|c| c.name.clone()).collect(),
-                            s.picked,
-                        )
+                    .map(|s| ui::KidSlotView {
+                        label: s.label.to_string(),
+                        choices: s.choices.iter().map(|c| c.name.clone()).collect(),
+                        colorable: s.choices.iter().map(|c| c.colorable).collect(),
+                        picked: s.picked,
+                        color: s.color,
                     })
                     .collect();
             }
@@ -7070,10 +7086,12 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         )
                     })?;
                 let from = app.placement.transform_point3(Vec3::ZERO);
+                let facing = app.placement.transform_vector3(Vec3::Z);
                 app.start_goal(index);
                 // From --skate-from, if given, rather than the goal's start.
                 if let (Some(_), Some((skater, ..))) = (&args.skate_from, &mut app.skating) {
                     skater.position = from;
+                    skater.heading = facing.x.atan2(facing.z);
                     skater.on_ground = false;
                 }
                 // Where the things it counts are (those with a script).

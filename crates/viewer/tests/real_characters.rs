@@ -97,7 +97,14 @@ fn real_kid_wardrobe() {
         assert!(slots.len() >= 10);
         assert!(!picked("Hair").is_empty());
         assert!(slots[0].choices.len() >= 5, "skins");
-        let outfit: Vec<_> = slots.iter().map(|s| s.choices[s.picked].clone()).collect();
+        let outfit: Vec<_> = slots.iter().map(|s| s.worn()).collect();
+        // Coloured: the hair tinted (the shop's hue, saturation, value).
+        let mut red = outfit.clone();
+        red[1].color = Some([0.0, 100.0, 50.0]);
+        let tinted = data.load_kid(girl, &red).unwrap();
+        assert!(red[1].colorable);
+        assert!(tinted.part_tints.contains(&Some([128, 0, 0])));
+        Character::from_files(&tinted).unwrap();
         let files = data.load_kid(girl, &outfit).unwrap();
         Character::from_files(&files).unwrap();
         assert!(
