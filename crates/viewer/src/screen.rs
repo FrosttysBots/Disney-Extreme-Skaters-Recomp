@@ -274,6 +274,21 @@ pub struct Screen {
     /// The music and streams paused or going on again (`PauseMusic 1`,
     /// `PauseStream 0`: the pause menu's), for whoever plays them.
     pub music_paused: Option<bool>,
+    /// The created kid's parts as worn (each list's name and the choice's
+    /// `desc_id`), for the Edit Skater menus to ask after; and the parts
+    /// they change (`EditPlayerAppearance target = SetPart`, `ClearPart`:
+    /// `None`), for whoever dresses the kid.
+    pub kid_appearance: Vec<(u32, u32)>,
+    /// Where the menus have put the skater (`skater:Obj_MoveToNode Name =
+    /// TRG_Start_P1`: the Edit Skater set), till they put it back on the
+    /// stage (`None`).
+    pub skater_node: Option<u32>,
+    pub appearance_edits: Vec<(u32, Option<u32>)>,
+    /// The kid's appearance kept as it is (`RememberTemporaryProfile`: a
+    /// part accepted, `true`) or put back to what was kept
+    /// (`RestoreTemporaryAppearance`: one only tried on, `false`), in order
+    /// with the edits.
+    pub appearance_keeps: Vec<(usize, bool)>,
     /// A movie asked for on the level's screen (`playmovie "movies\x"
     /// mesh = moviescreen loop`: the skater select's character clip), by
     /// its file's name and whether it loops; or none (`StopMovie`).
@@ -334,6 +349,10 @@ impl Screen {
             vibrations: Vec::new(),
             music: None,
             music_paused: None,
+            kid_appearance: Vec::new(),
+            skater_node: None,
+            appearance_edits: Vec::new(),
+            appearance_keeps: Vec::new(),
             screen_movie: None,
             camera: None,
             movies: Vec::new(),
@@ -1649,6 +1668,12 @@ impl Host for Ui<'_> {
     fn command(&mut self, target: Option<u32>, name: u32, args: &Value) -> Outcome {
         let c = checksum;
         let s = &mut *self.screen;
+        // The skater moved for a menu (the Edit Skater set).
+        if target == Some(c("skater")) && name == c("Obj_MoveToNode") {
+            let props = globals_in(self.program, Ui::props(args));
+            s.skater_node = props.get(c("Name")).and_then(Value::as_name);
+            return Outcome::Done(true);
+        }
         // `element:command`: on that element.
         let this = match target {
             Some(t) => match s.find(t) {
@@ -1918,6 +1943,11 @@ impl Host for Ui<'_> {
             // the level list names them): every level's open in the
             // viewer. (Others, cheats and the like, are off.)
             let flag = named("flag").and_then(|v| v.as_name());
+            // (And the Skate Shop's locked parts, `CAS_UNLOCK_063`: open
+            // too, as everything is.)
+            if flag.is_some_and(|f| cas_unlock_flags(self.program).contains(&f)) {
+                return Outcome::Done(true);
+            }
             let unlock = match self.program.value(c("level_select_menu_level_info")) {
                 Some(Value::Array(levels)) => levels
                     .iter()
@@ -1997,6 +2027,56 @@ impl Host for Ui<'_> {
             }
         } else if name == c("StopMovie") {
             s.screen_movie = Some(None);
+        } else if name == c("GetPlayerAppearancePart") {
+            // `if GetPlayerAppearancePart part = skater_m_hair`: its
+            // `desc_id`, if the kid wears one.
+            let part = named("part").and_then(|v| v.as_name());
+            let worn = s.kid_appearance.iter().find(|(p, _)| Some(*p) == part);
+            return match worn {
+                Some(&(_, desc)) => Outcome::Params(vec![(Some(c("desc_id")), Value::Name(desc))]),
+                None => Outcome::Done(false),
+            };
+        } else if name == c("GetActualCASOptionStruct") {
+            // That part's entry in its list (`frontend_desc`, `no_color`...).
+            let part = named("part").and_then(|v| v.as_name());
+            let desc = named("desc_id").and_then(|v| v.as_name());
+            let entry = part
+                .and_then(|p| self.program.value(p))
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|e| e.get(c("desc_id")).and_then(Value::as_name) == desc)
+                });
+            return match entry {
+                Some(Value::Struct(fields)) => Outcome::Params(fields.clone()),
+                _ => Outcome::Done(false),
+            };
+        } else if name == c("RememberTemporaryProfile") || name == c("RestoreTemporaryAppearance") {
+            let at = s.appearance_edits.len();
+            s.appearance_keeps
+                .push((at, name == c("RememberTemporaryProfile")));
+        } else if name == c("EditPlayerAppearance") {
+            // `target = SetPart targetParams = { part = hat desc_id = x }`.
+            let target = named("target").and_then(|v| v.as_name());
+            let params = named("targetParams");
+            let part = params
+                .as_ref()
+                .and_then(|p| p.get(c("part")))
+                .and_then(Value::as_name);
+            let desc = params
+                .as_ref()
+                .and_then(|p| p.get(c("desc_id")))
+                .and_then(Value::as_name);
+            if let Some(part) = part {
+                if target == Some(c("SetPart")) {
+                    if let Some(desc) = desc {
+                        s.appearance_edits.push((part, Some(desc)));
+                    }
+                } else if target == Some(c("ClearPart")) {
+                    s.appearance_edits.push((part, None));
+                }
+            }
         } else if name == c("PauseMusic") || name == c("PauseStream") {
             let on = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
@@ -2327,6 +2407,33 @@ fn globals_in(program: &qb::vm::Program, props: Value) -> Value {
             })
             .collect(),
     )
+}
+
+/// The unlock flags of the Skate Shop's parts (`unlock_flag =
+/// CAS_UNLOCK_063` in its lists, as `master_editable_list` names them).
+fn cas_unlock_flags(program: &Program) -> Vec<u32> {
+    let c = checksum;
+    let mut flags = Vec::new();
+    let lists = program
+        .value(c("master_editable_list"))
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    for list in lists {
+        let Some(items) = list
+            .get(c("part"))
+            .and_then(Value::as_name)
+            .and_then(|p| program.value(p))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        flags.extend(
+            items
+                .iter()
+                .filter_map(|i| i.get(c("unlock_flag")).and_then(Value::as_name)),
+        );
+    }
+    flags
 }
 
 #[cfg(test)]

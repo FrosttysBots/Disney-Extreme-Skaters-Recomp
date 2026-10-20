@@ -57,7 +57,9 @@ the Skate Shop's own parts (skin, hair, shirt, legs, shoes, socks, hat,
 glasses, face paint, accessory, pads and backpack), starting in the
 game's outfit, and the parts the shop lets you colour can be (untick
 "own colour": hue, saturation and value, as its colour menu); what's
-picked is kept.
+picked is kept. The game's own Edit Skater (Main menu, the kid, Edit
+Skater) dresses it too, in the shop's dressing-up set: parts are tried on
+as you move through a list, and kept when chosen (Back puts them back).
 
 The Simplified controls box (or the game's own Pro Controls, off, in Options > Controls)
 plays the game's simplified controls: any trick button does the trick

@@ -87,6 +87,9 @@ pub struct LevelFiles {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KidPart {
     pub name: String,
+    /// Its `desc_id` in its list (`Buzzcut`, `#"Skin 4"`), as the game's
+    /// menus name it.
+    pub desc_id: u32,
     pub mesh: Option<String>,
     pub swaps: Vec<(String, String)>,
     /// Whether the shop lets its colour be changed (not `no_color`).
@@ -122,6 +125,9 @@ pub fn kid_part_tint([h, s, v]: [f32; 3]) -> [u8; 3] {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KidSlot {
     pub label: &'static str,
+    /// The list's name (`skater_m_hair`, `hat`), as the game's menus
+    /// name the part.
+    pub list: u32,
     pub choices: Vec<KidPart>,
     pub picked: usize,
     /// Its colour picked (see [`KidPart::color`]).
@@ -849,6 +855,7 @@ impl GameData {
             }
             KidPart {
                 name,
+                desc_id: id_of(entry).unwrap_or(0),
                 colorable: field("mesh").is_some() && !entry.has_flag(checksum("no_color")),
                 mesh: field("mesh"),
                 swaps,
@@ -890,6 +897,7 @@ impl GameData {
             };
             skin_choices.push(KidPart {
                 name: part(skin).name,
+                desc_id: id_of(skin).unwrap_or(0),
                 ..part(body)
             });
         }
@@ -898,6 +906,7 @@ impl GameData {
             .unwrap_or(0);
         slots.push(KidSlot {
             label: "Skin",
+            list: checksum(&head),
             choices: skin_choices
                 .into_iter()
                 .map(|c| KidPart {
@@ -947,6 +956,7 @@ impl GameData {
                 });
             slots.push(KidSlot {
                 label,
+                list: checksum(&array),
                 choices,
                 picked,
                 color,

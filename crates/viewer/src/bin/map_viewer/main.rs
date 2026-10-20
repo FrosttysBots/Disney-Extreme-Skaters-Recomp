@@ -1954,6 +1954,11 @@ struct App<'a> {
     wardrobes: HashMap<bool, Vec<desa_viewer::source::KidSlot>>,
     /// Which of them the panel's showing.
     kid_shown: Option<bool>,
+    /// The kid's parts as last kept by the Edit Skater menus (a part
+    /// accepted), to put back what was only tried on.
+    kid_kept: HashMap<bool, Vec<usize>>,
+    /// Dressed by the menus just now (not the panel: not kept).
+    kid_from_menus: bool,
     pad_back: bool,
     /// What a teleporter created or killed on the way, to apply.
     pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
@@ -2212,6 +2217,8 @@ impl<'a> App<'a> {
             camera_shown: usize::MAX,
             wardrobes: HashMap::new(),
             kid_shown: None,
+            kid_kept: HashMap::new(),
+            kid_from_menus: false,
             pad_back: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
@@ -5183,10 +5190,11 @@ impl<'a> App<'a> {
         // On the stage (where the game's stage characters stand,
         // `TRG_Ped_Jessie` and the rest, as its `init_stage` has the
         // skater), else where the shop has the character.
-        let stage = skaters
+        let stage_id = skaters
             .get(usize::try_from(now).unwrap_or(0))
             .and_then(|s| s.get(c("id")))
-            .and_then(qb::Value::as_name)
+            .and_then(qb::Value::as_name);
+        let stage = stage_id
             .and_then(|id| level.nodes.nodes.iter().find(|n| n.name == id))
             .and_then(|n| {
                 // Facing the stage's camera (`Camera_stage`, which ends in
@@ -5210,9 +5218,22 @@ impl<'a> App<'a> {
                 self.stage_turn = (self.stage_turn + step) % std::f32::consts::TAU;
             }
         }
-        let placement = match stage {
-            Some(stage) => stage * Mat4::from_rotation_y(self.stage_turn),
-            None => level.home,
+        // (Or where the menus have moved it: the Edit Skater set.)
+        let moved = self
+            .screen
+            .as_ref()
+            .and_then(|s| s.screen.skater_node)
+            // (Back to its place on the stage: as the stage has it.)
+            .filter(|&id| Some(id) != stage_id)
+            .and_then(|id| level.nodes.nodes.iter().find(|n| n.name == id))
+            .and_then(|n| {
+                let turn = Quat::from_rotation_y(n.heading);
+                Some(Mat4::from_rotation_translation(turn, n.position?))
+            });
+        let placement = match (moved, stage) {
+            (Some(moved), _) => moved,
+            (None, Some(stage)) => stage * Mat4::from_rotation_y(self.stage_turn),
+            (None, None) => level.home,
         };
         if self.skating.is_none() {
             self.placement = placement;
@@ -5254,11 +5275,103 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The Skate Shop's Edit Skater menus and the created kid: what it
+    /// wears, for them to ask after, and the parts they put on it (as each
+    /// is picked, as the game shows it), worn and kept.
+    fn dress_kid_from_menus(&mut self) {
+        let (Some(screen), Some(girl)) = (&mut self.screen, self.kid_shown) else {
+            return;
+        };
+        let Some(slots) = self.wardrobes.get_mut(&girl) else {
+            return;
+        };
+        screen.screen.kid_appearance = slots
+            .iter()
+            .map(|s| (s.list, s.choices[s.picked].desc_id))
+            .collect();
+        let edits = std::mem::take(&mut screen.screen.appearance_edits);
+        let mut keeps = std::mem::take(&mut screen.screen.appearance_keeps)
+            .into_iter()
+            .peekable();
+        let sex = if girl { "f" } else { "m" };
+        let mut changed = false;
+        let kept = self
+            .kid_kept
+            .entry(girl)
+            .or_insert_with(|| slots.iter().map(|s| s.picked).collect());
+        // Kept, or put back to what was (before the edit at that point).
+        let mut keep = |slots: &mut Vec<desa_viewer::source::KidSlot>, remember: bool| {
+            if remember {
+                *kept = slots.iter().map(|s| s.picked).collect();
+                false
+            } else {
+                let mut any = false;
+                for (slot, &picked) in slots.iter_mut().zip(kept.iter()) {
+                    any |= slot.picked != picked;
+                    slot.picked = picked;
+                }
+                any
+            }
+        };
+        let mut restored = false;
+        for (at, (list, desc)) in edits.into_iter().enumerate() {
+            while let Some(&(when, remember)) = keeps.peek() {
+                if when > at {
+                    break;
+                }
+                restored |= keep(slots, remember);
+                keeps.next();
+            }
+            let Some((i, slot)) = slots.iter_mut().enumerate().find(|(_, s)| s.list == list) else {
+                continue;
+            };
+            // (Taken off: the choice that's nothing at all.)
+            let choice = match desc {
+                Some(desc) => slot.choices.iter().position(|c| c.desc_id == desc),
+                None => slot
+                    .choices
+                    .iter()
+                    .position(|c| c.mesh.is_none() && c.swaps.is_empty()),
+            };
+            let Some(choice) = choice.filter(|&c| c != slot.picked) else {
+                continue;
+            };
+            slot.picked = choice;
+            self.settings
+                .best
+                .insert(format!("outfit.{sex}.{}", slot.label), choice as u32);
+            if let Some(view) = self.model.character.kid_slots.get_mut(i) {
+                view.picked = choice;
+            }
+            changed = true;
+        }
+        for (_, remember) in keeps {
+            restored |= keep(slots, remember);
+        }
+        if restored {
+            changed = true;
+        }
+        if changed {
+            // (The panel and the saved picks as worn.)
+            for (i, slot) in slots.iter().enumerate() {
+                self.settings
+                    .best
+                    .insert(format!("outfit.{sex}.{}", slot.label), slot.picked as u32);
+                if let Some(view) = self.model.character.kid_slots.get_mut(i) {
+                    view.picked = slot.picked;
+                }
+            }
+            self.kid_from_menus = true;
+            self.load_character(self.model.character.current);
+        }
+    }
+
     /// The game's menus run on: their scripts (with the level's), sounds,
     /// and what they ask of the viewer (`unpausegame`: resume).
     fn update_screen(&mut self, dt: f32) {
         self.menu_pad();
         self.follow_skater_select();
+        self.dress_kid_from_menus();
         let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
             return;
         };
@@ -6036,6 +6149,15 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                }
+                // (Changed from the panel: kept, as the game's menus keep
+                // a part accepted.)
+                if kid_shown == Some(girl)
+                    && shown_kid.len() == slots.len()
+                    && !std::mem::take(&mut self.kid_from_menus)
+                {
+                    self.kid_kept
+                        .insert(girl, slots.iter().map(|s| s.picked).collect());
                 }
                 outfit = Some(slots.iter().map(|s| s.worn()).collect::<Vec<_>>());
                 self.kid_shown = Some(girl);
