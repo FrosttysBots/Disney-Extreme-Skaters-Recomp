@@ -98,6 +98,9 @@ struct Element {
     padding: f32,
     /// A menu's gap between its children.
     spacing: f32,
+    /// A menu's items each this far on from the last, whatever their size
+    /// (`regular_space_amount`: the keyboard's rows).
+    regular: Option<f32>,
     /// Text's own size within the element (`internal_scale`).
     internal_scale: f32,
     /// A sprite's turn, degrees (`rot_angle`).
@@ -139,6 +142,7 @@ impl Element {
             wrap: true,
             padding: 1.0,
             spacing: 0.0,
+            regular: None,
             internal_scale: 1.0,
             angle: 0.0,
             handlers: Vec::new(),
@@ -722,10 +726,10 @@ impl Screen {
                     };
                     let s = self.size(c) * child.look.scale;
                     if across {
-                        long += s.x + e.spacing;
+                        long += e.regular.unwrap_or(s.x + e.spacing);
                         wide = wide.max(s.y);
                     } else {
-                        long += s.y * e.padding + e.spacing;
+                        long += e.regular.unwrap_or(s.y * e.padding + e.spacing);
                         wide = wide.max(s.x);
                     }
                 }
@@ -776,11 +780,11 @@ impl Screen {
                     )
                 };
             }
-            cursor += if across {
+            cursor += parent.regular.unwrap_or(if across {
                 s.x + parent.spacing
             } else {
                 s.y * parent.padding + parent.spacing
-            };
+            });
         }
         e.look.pos
     }
@@ -1183,6 +1187,8 @@ impl Screen {
                         e.internal_scale = v.as_f32().unwrap_or(1.0);
                     } else if k == checksum("spacing_between") {
                         e.spacing = v.as_f32().unwrap_or(0.0);
+                    } else if k == checksum("regular_space_amount") {
+                        e.regular = v.as_f32();
                     } else if k == checksum("tags") {
                         if let Value::Struct(tags) = v {
                             for (tk, tv) in tags.iter().filter(|(k, _)| k.is_some()) {
