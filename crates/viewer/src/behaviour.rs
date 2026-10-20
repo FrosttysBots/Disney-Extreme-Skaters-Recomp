@@ -197,6 +197,10 @@ pub struct Behaviour {
     /// The full controls (not the simplified ones), for the scripts that
     /// word their goals by them (`HawkControlsIsOn`).
     pub hawk_controls: bool,
+    /// The game's global flags set by the scripts (`SetGlobalFlag flag =
+    /// CHEAT_MOON`: Zurg's low gravity zones), by number (`CHEAT_MOON =
+    /// CHEAT_ON_9 = 193`).
+    global_flags: std::collections::HashSet<i32>,
     /// The goals won (their ids), for `GoalManager_HasWonGoal`.
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
@@ -491,6 +495,7 @@ impl Behaviour {
             shatters: Vec::new(),
             camera_stop: false,
             hawk_controls: true,
+            global_flags: std::collections::HashSet::new(),
             knock_down: false,
             voice_until: 0.0,
             voices_heard: false,
@@ -853,6 +858,13 @@ impl Behaviour {
 
     /// Which way an object faces (models face +Z) and how fast it's going
     /// (along a path or straight to a spot).
+    /// Whether the scripts have set a global flag, by its name
+    /// (`CHEAT_MOON`).
+    pub fn global_flag(&self, name: &str) -> bool {
+        flag_number(&self.program, &Value::Name(checksum(name)))
+            .is_some_and(|f| self.global_flags.contains(&f))
+    }
+
     pub fn motion(&self, object: usize) -> (Vec3, f32) {
         let state = &self.states[object];
         let speed = match state.moving {
@@ -1184,7 +1196,16 @@ impl Behaviour {
             // struct), then those it's added with.
             let id = goal?;
             let mut params: Params = Vec::new();
-            if let Some(Value::Struct(items)) = args.get(c("params")) {
+            // (`GoalManager_AddGoal Name = id { params = { ... } }`: in the
+            // struct after its name, or given straight.)
+            let given = args.get(c("params")).or_else(|| match args {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Struct(_)) => v.get(c("params")),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            if let Some(Value::Struct(items)) = given {
                 for (k, v) in items {
                     match (k, v) {
                         (None, Value::Name(n)) => {
@@ -2161,6 +2182,22 @@ impl Host for Commands<'_> {
             return Outcome::Done(false);
         } else if name == c("GetPlatform") {
             return Outcome::Params(vec![(Some(c("Platform")), Value::Name(c("NGC")))]);
+        } else if name == c("SetGlobalFlag") || name == c("UnSetGlobalFlag") {
+            if let Some(flag) = args
+                .get(c("flag"))
+                .and_then(|v| flag_number(self.program, v))
+            {
+                if name == c("SetGlobalFlag") {
+                    b.global_flags.insert(flag);
+                } else {
+                    b.global_flags.remove(&flag);
+                }
+            }
+        } else if name == c("GetGlobalFlag") {
+            let flag = args
+                .get(c("flag"))
+                .and_then(|v| flag_number(self.program, v));
+            return Outcome::Done(flag.is_some_and(|f| b.global_flags.contains(&f)));
         } else if name == c("HawkControlsIsOn") || name == c("HawkControlsIsOff") {
             return Outcome::Done(b.hawk_controls == (name == c("HawkControlsIsOn")));
         } else if name == c("IsCareerMode") || name == c("GoalManager_GoalExists") {
@@ -2559,4 +2596,22 @@ impl Host for Commands<'_> {
         }
         Outcome::Done(true)
     }
+}
+
+/// A global flag's number, from its value or the name of a global that
+/// comes to one (`CHEAT_MOON = CHEAT_ON_9 = 193`), or else the name.
+fn flag_number(program: &Program, v: &Value) -> Option<i32> {
+    let mut v = v.clone();
+    for _ in 0..8 {
+        match v {
+            Value::Integer(n) => return Some(n),
+            // (A name with no value: the name itself, the same each time.)
+            Value::Name(n) => match program.value(n) {
+                Some(value) => v = value.clone(),
+                None => return Some(n as i32),
+            },
+            _ => return None,
+        }
+    }
+    None
 }

@@ -124,7 +124,8 @@ struct Args {
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
     /// For --skate: put the skater somewhere at a time, as
-    /// "seconds@x,y,z,heading" (heading in degrees, 0 along +Z); can be
+    /// "seconds@x,y,z,heading[,speed]" (heading in degrees, 0 along +Z,
+    /// and going that way at that speed in the air); can be
     /// given more than once (a goal that starts it elsewhere, say)
     #[arg(long, requires = "skate")]
     skate_place: Vec<String>,
@@ -370,6 +371,16 @@ fn load_level(
     let mut behaviour = Behaviour::new(&nodes, &scripts);
     // (Its goal manager names goals as the level's scripts do.)
     behaviour.goal_prefix = desa_viewer::goals::goal_prefix(&info.id);
+    // Its goals added (`<level>_Goals`, from its start-up script): the
+    // ones its triggers turn on themselves need their set-up (Zurg's low
+    // gravity zones, `zurg_goal_MoonGrav`).
+    for level_name in [info.id.clone(), behaviour.goal_prefix.clone()] {
+        let script = qb::checksum(&format!("{level_name}_Goals"));
+        if behaviour.program().has_script(script) {
+            behaviour.run_level_script(script, Vec::new());
+            break;
+        }
+    }
     // Breakables (what touching a trigger shatters): those that are sectors
     // there at the start get layers of their own, to take away.
     let breakables = desa_viewer::triggers::breakables(&nodes, behaviour.program());
@@ -5646,7 +5657,9 @@ impl<'a> App<'a> {
             skater.special = true;
         }
         let gravity = physics.air_gravity;
-        if cheats.moon {
+        // (The cheat, or the level's own low gravity zones setting its flag.)
+        let moon_zone = level.behaviour.global_flag("CHEAT_MOON");
+        if cheats.moon || moon_zone {
             physics.air_gravity *= self.moon_gravity;
         }
         let dt = if cheats.slomo {
@@ -7200,7 +7213,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             let places = args
                 .skate_place
                 .iter()
-                .map(|p| -> Result<(f32, Vec3, f32)> {
+                .map(|p| -> Result<(f32, Vec3, f32, f32)> {
                     let (at, spot) = p
                         .split_once('@')
                         .context("--skate-place is seconds@x,y,z,heading")?;
@@ -7209,19 +7222,28 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         .map(|x| x.trim().parse())
                         .collect::<Result<_, _>>()
                         .context("--skate-place is seconds@x,y,z,heading")?;
-                    anyhow::ensure!(v.len() == 4, "--skate-place is seconds@x,y,z,heading");
-                    Ok((at.parse()?, Vec3::new(v[0], v[1], v[2]), v[3].to_radians()))
+                    anyhow::ensure!(
+                        v.len() == 4 || v.len() == 5,
+                        "--skate-place is seconds@x,y,z,heading[,speed]"
+                    );
+                    let speed = v.get(4).copied().unwrap_or(0.0);
+                    Ok((
+                        at.parse()?,
+                        Vec3::new(v[0], v[1], v[2]),
+                        v[3].to_radians(),
+                        speed,
+                    ))
                 })
                 .collect::<Result<Vec<_>>>()?;
             let steps = (args.skate * 60.0).round() as usize;
             for step in 0..steps {
                 let now = step as f32 / 60.0;
-                for &(at, spot, heading) in &places {
+                for &(at, spot, heading, speed) in &places {
                     if (at - now).abs() < 0.5 / 60.0 {
                         if let Some((skater, ..)) = &mut app.skating {
                             skater.position = spot;
                             skater.heading = heading;
-                            skater.velocity = Vec3::ZERO;
+                            skater.velocity = Vec3::new(heading.sin(), 0.0, heading.cos()) * speed;
                             skater.on_ground = false;
                         }
                     }
