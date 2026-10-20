@@ -66,6 +66,10 @@ Extreme Skate Crew's kids can be picked whole (outfit, colours and size). Create
 up to six kids of your own: pick an empty slot, make one, and Done saves
 it there.
 
+The 180 spin taps box (or the game's own 180 Spin Taps in Options >
+Controls) turns the skater half round for each tap of R (a shoulder
+button) in the air, the way A or D holds.
+
 The Simplified controls box (or the game's own Pro Controls, off, in Options > Controls)
 plays the game's simplified controls: any trick button does the trick
 for the direction held, grinds and lips included, a trick button twice

@@ -387,6 +387,11 @@ pub struct Skater {
     /// (`Squirgle`) does what the direction held asks for, and landing in
     /// a trick loses the combo rather than bailing (`Land`).
     pub simplified: bool,
+    /// 180 spin taps (the Controls option): a shoulder button tapped in the
+    /// air turns the skater half round, at `Physics_air_tap_turn_speed`, the
+    /// way held (or the last spin's); `tap_spin` is what's left to turn.
+    pub spin_taps: bool,
+    tap_spin: f32,
     /// The speed limits overridden for a while (the scripts'
     /// `OverrideLimits`, see [`Limits`]): skitching sets them every frame.
     limits: Option<Limits>,
@@ -546,6 +551,8 @@ impl Skater {
             spawns: Vec::new(),
             trace: false,
             simplified: false,
+            spin_taps: false,
+            tap_spin: 0.0,
             limits: None,
             sounds: Vec::new(),
             terrain: 0,
@@ -665,6 +672,7 @@ impl Skater {
             self.gaps.clear();
         }
         self.air_spin = 0.0;
+        self.tap_spin = 0.0;
         self.last_total = 0;
         // A bail empties the special meter.
         if !landed {
@@ -2124,6 +2132,8 @@ impl Skater {
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // (A spin tap's half turn stops on landing.)
+        self.tap_spin = 0.0;
         // `Handbrake`: braking for 1.4 seconds steps off the board (rolling
         // friction 100: it stops); up or crouch steps back on.
         self.brake_time = if input.brake && !self.manual {
@@ -2846,7 +2856,23 @@ impl Skater {
         self.air_tricks(input);
         // Spinning at the air rotation stat (0x800EE4CC); the turn counts
         // towards the latest trick's spin.
-        let turn = input.turn * p.air_rotation * STEP;
+        let mut turn = input.turn * p.air_rotation * STEP;
+        if self.spin_taps {
+            if self.pressed_within(Press::Revert, 0.0) {
+                let way = if input.turn != 0.0 {
+                    input.turn.signum()
+                } else {
+                    -self.air_spin_sign
+                };
+                self.tap_spin += PI * way;
+            }
+            if self.tap_spin != 0.0 {
+                let step = self.tap_spin.abs().min(p.air_tap_turn_speed * STEP);
+                let step = step * self.tap_spin.signum();
+                self.tap_spin -= step;
+                turn = step;
+            }
+        }
         self.heading -= turn;
         self.air_spin += turn.to_degrees();
         if turn != 0.0 {
@@ -3397,6 +3423,38 @@ mod tests {
             skater.update(Input::default(), &p, &world, STEP);
         }
         assert!(skater.grind.unwrap().speed <= p.max_max_speed + 1.0);
+    }
+
+    #[test]
+    fn a_spin_tap_turns_half_round() {
+        let p = physics();
+        let empty = ngc_collision::Collision {
+            objects: Vec::new(),
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        };
+        let world = World::new(empty);
+        let mut skater = Skater::new(Vec3::new(0.0, 50_000.0, 0.0), 0.0);
+        skater.on_ground = false;
+        skater.spin_taps = true;
+        let tap = Input {
+            revert: true,
+            ..Input::default()
+        };
+        skater.update(tap, &p, &world, STEP);
+        for _ in 0..120 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        assert!(
+            (skater.heading.abs() - PI).abs() < 1e-3,
+            "{}",
+            skater.heading
+        );
+        // Without them a tap does nothing in the air.
+        let mut skater = Skater::new(Vec3::new(0.0, 50_000.0, 0.0), 0.0);
+        skater.on_ground = false;
+        skater.update(tap, &p, &world, STEP);
+        assert_eq!(skater.heading, 0.0);
     }
 
     #[test]

@@ -126,6 +126,8 @@ pub struct CharacterModel {
     pub rumble: bool,
     /// The game's simplified controls (its Pro Controls option off).
     pub simplified: bool,
+    /// 180 spin taps (the game's Controls option).
+    pub spin_taps: bool,
     /// The created kid's parts (shown when the kid is).
     pub kid_slots: Vec<KidSlotView>,
     /// In a two-minute run: the seconds left, and once it's over the
@@ -1364,6 +1366,9 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             );
         ui.checkbox(&mut model.rumble, "Rumble").on_hover_text(
             "The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.",
+        );
+        ui.checkbox(&mut model.spin_taps, "180 spin taps").on_hover_text(
+            "The game's 180 Spin Taps: a shoulder button (R) tapped in the air spins the skater half round, the way held.",
         );
         ui.checkbox(&mut model.simplified, "Simplified controls").on_hover_text(
             "The game's simplified controls (its Pro Controls off): any trick button does the trick for the direction held, grinds and lips too, and landing in a trick loses the combo instead of bailing.",

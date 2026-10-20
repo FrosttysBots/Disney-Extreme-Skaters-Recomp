@@ -2077,6 +2077,7 @@ impl<'a> App<'a> {
         let speed = settings.speed.unwrap_or(DEFAULT_SPEED);
         let camera = settings.best.get("camera").map_or(1, |c| *c as usize);
         let simplified = settings.best.get("simplified") == Some(&1);
+        let spin_taps = settings.best.get("spintaps") == Some(&1);
         let volume = |key: &str| settings.best.get(key).map_or(1.0, |v| *v as f32 / 100.0);
         let (effects_volume, music_volume) = (volume("volume.effects"), volume("volume.music"));
         let intro = settings.best.get("intro") != Some(&0);
@@ -2141,6 +2142,7 @@ impl<'a> App<'a> {
                     music_volume,
                     rumble: true,
                     simplified,
+                    spin_taps,
                     kid_slots: Vec::new(),
                     run_clock: None,
                     run_result: None,
@@ -4540,6 +4542,16 @@ impl<'a> App<'a> {
     /// The simplified controls or the full ones, when they change: the
     /// skater's tricks read again for them, and the choice kept.
     fn apply_controls(&mut self) {
+        let spin_taps = self.model.character.spin_taps;
+        if self.settings.best.get("spintaps").is_some_and(|&v| v == 1) != spin_taps {
+            self.settings
+                .best
+                .insert("spintaps".into(), u32::from(spin_taps));
+            self.settings.save();
+        }
+        if let Some((skater, ..)) = &mut self.skating {
+            skater.spin_taps = spin_taps;
+        }
         let simplified = self.model.character.simplified;
         if self
             .settings
@@ -4716,6 +4728,11 @@ impl<'a> App<'a> {
             model.simplified = !s.hawk_controls;
         } else {
             s.hawk_controls = !model.simplified;
+        }
+        if std::mem::take(&mut s.spin_taps_changed) {
+            model.spin_taps = s.spin_taps;
+        } else {
+            s.spin_taps = model.spin_taps;
         }
         if std::mem::take(&mut s.volumes_changed) {
             model.music_volume = s.music_level as f32 / 10.0;

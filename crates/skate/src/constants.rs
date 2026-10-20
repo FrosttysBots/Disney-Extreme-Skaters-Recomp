@@ -142,6 +142,8 @@ pub struct Physics {
     pub ground_rotation: f32,
     pub ground_sharp_rotation: f32,
     pub air_rotation: f32,
+    /// How fast a 180 spin tap turns, radians a second.
+    pub air_tap_turn_speed: f32,
     pub ground_snap_up: f32,
     /// How far up a ledge the skater can be popped onto from the air
     /// (main.dol 0x800F81A8).
@@ -278,6 +280,7 @@ impl Physics {
             ground_rotation: plain("Physics_Ground_Rotation", 1.8),
             ground_sharp_rotation: plain("Physics_Ground_Sharp_Rotation", 3.6),
             air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
+            air_tap_turn_speed: scaled("Physics_air_tap_turn_speed_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),

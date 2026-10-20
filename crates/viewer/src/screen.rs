@@ -370,6 +370,10 @@ pub struct Screen {
     /// (`HawkControlsIsOn`, `HawkControlsOn`, `HawkControlsOff`).
     pub hawk_controls: bool,
     pub hawk_controls_changed: bool,
+    /// 180 spin taps, the same way (`SpinTapsAreOn`, `SpinTapsOn`,
+    /// `SpinTapsOff`).
+    pub spin_taps: bool,
+    pub spin_taps_changed: bool,
     /// Rumbles the menus asked for (`VibrateController`: the Controls
     /// menu's test): the strong motor or not, and how hard.
     pub vibrations: Vec<(bool, f32)>,
@@ -469,6 +473,8 @@ impl Screen {
             rumble_changed: false,
             hawk_controls: true,
             hawk_controls_changed: false,
+            spin_taps: false,
+            spin_taps_changed: false,
             stopping: Vec::new(),
         }
     }
@@ -2227,6 +2233,11 @@ impl Host for Ui<'_> {
             ]);
         } else if name == c("HawkControlsIsOn") {
             return Outcome::Done(s.hawk_controls);
+        } else if name == c("SpinTapsAreOn") {
+            return Outcome::Done(s.spin_taps);
+        } else if name == c("SpinTapsOn") || name == c("SpinTapsOff") {
+            s.spin_taps = name == c("SpinTapsOn");
+            s.spin_taps_changed = true;
         } else if name == c("HawkControlsOn") || name == c("HawkControlsOff") {
             s.hawk_controls = name == c("HawkControlsOn");
             s.hawk_controls_changed = true;
