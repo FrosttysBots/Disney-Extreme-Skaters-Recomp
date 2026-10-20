@@ -314,6 +314,10 @@ struct LoadedLevel {
     /// Shop's TV, the Hub's), in a layer of its own; the movie playing
     /// there and when it started.
     movie_screen: Option<usize>,
+    /// The level's texture file, for textures its pieces' scripts swap in
+    /// (`Obj_ReplaceTexture`), and those decoded so far, by name.
+    texture_file: Option<Vec<u8>>,
+    swapped_textures: HashMap<String, Option<desa_viewer::level::TextureData>>,
     screen_movie: Option<(desa_viewer::movie::Movie, Instant, bool)>,
     /// The breakables (trigger object: its script, what it shatters, its
     /// sound) and the triggers already broken.
@@ -605,11 +609,38 @@ fn load_level(
         if let (false, Some(world)) = (m.created_at_start, skate_world.as_mut()) {
             world.disable(m.name);
         }
+        // Most pieces' geometry is in their own space, round the origin
+        // (the bedroom's toilet, Pizza's arcade screen): put where their
+        // node is, turned its way, they and their collision. (A few are
+        // in the level's space already, where their node is.)
+        let (lo, hi) = mesh.vertices.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())),
+        );
+        let (centre, radius) = ((lo + hi) / 2.0, (hi - lo).length() / 2.0);
+        let local =
+            centre.length() < radius + 1.0 && m.position.distance(centre) > radius * 2.0 + 50.0;
+        let mut base = mesh.vertices;
+        if local {
+            let turn = m.rotation();
+            for v in &mut base {
+                v.position = (m.position + turn * Vec3::from(v.position)).to_array();
+                v.normal = (turn * Vec3::from(v.normal)).to_array();
+            }
+            renderer.update_layer(layer, 0, &base);
+            if let Some(world) = skate_world.as_mut() {
+                world.place(
+                    m.name,
+                    Some(Mat4::from_rotation_translation(turn, m.position)),
+                );
+            }
+        }
         movers.push(MoverState {
             object: behaviour.mover(i),
             name: m.name,
             layer,
-            base: mesh.vertices,
+            base,
+            local,
             pivot: m.position,
             placed: m.rotation(),
             last: (m.created_at_start, m.position, m.rotation()),
@@ -674,6 +705,8 @@ fn load_level(
             bouncies,
             movers,
             movie_screen,
+            texture_file: files.textures.clone(),
+            swapped_textures: HashMap::new(),
             screen_movie: None,
             breakables,
             touch_scripts,
@@ -835,6 +868,31 @@ impl LoadedLevel {
             goal_objects,
             self.world.as_ref(),
         );
+        // Textures its pieces' scripts swap (`Obj_ReplaceTexture`): Pizza's
+        // arcade screens, a Treehouse piece's five frames.
+        // (The texture's swapped wherever it's used, as the game's are
+        // shared: the master piece holds the frames, the cabinets show
+        // them.)
+        for (_, src, dest) in std::mem::take(&mut self.behaviour.texture_swaps) {
+            let from = desa_viewer::level::texture_checksums(&src);
+            let texture = if src.eq_ignore_ascii_case(&dest) {
+                None
+            } else {
+                let file = &self.texture_file;
+                let found = self
+                    .swapped_textures
+                    .entry(dest.to_ascii_lowercase())
+                    .or_insert_with(|| {
+                        let to = desa_viewer::level::texture_checksums(&dest);
+                        file.as_deref()
+                            .and_then(|f| desa_viewer::level::decode_texture_from(f, &to))
+                    })
+                    .clone();
+                let Some(found) = found else { continue };
+                Some(found)
+            };
+            self.renderer.swap_texture(&from, texture.as_ref());
+        }
         // The level's pieces the scripts moved, made or took away.
         for m in &mut self.movers {
             let now = (
@@ -869,9 +927,14 @@ impl LoadedLevel {
                 self.renderer.update_layer(m.layer, 0, &moved);
                 // Its collision goes with it.
                 if let Some(world) = &mut self.world {
-                    let transform = Mat4::from_translation(now.1)
-                        * Mat4::from_quat(turn)
-                        * Mat4::from_translation(-m.pivot);
+                    // (Collision in its own space goes straight where it is.)
+                    let transform = if m.local {
+                        Mat4::from_rotation_translation(now.2, now.1)
+                    } else {
+                        Mat4::from_translation(now.1)
+                            * Mat4::from_quat(turn)
+                            * Mat4::from_translation(-m.pivot)
+                    };
                     world.place(m.name, Some(transform));
                 }
             }
@@ -1076,6 +1139,9 @@ struct BouncyState {
 struct MoverState {
     object: usize,
     name: u32,
+    /// Whether its geometry (and collision) is in its own space, put
+    /// where it is (else in the level's, moved from where it was).
+    local: bool,
     layer: Option<usize>,
     base: Vec<desa_viewer::level::Vertex>,
     pivot: Vec3,

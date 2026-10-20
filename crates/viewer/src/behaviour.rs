@@ -201,6 +201,11 @@ pub struct Behaviour {
     /// Where the level's moving pieces start among the objects (one each,
     /// in `LevelNodes::movers` order).
     movers: usize,
+    mover_count: usize,
+    /// Textures swapped on the level's moving pieces by their scripts
+    /// (`Obj_ReplaceTexture src = "00A.png" dest = "05A.png"`): the piece
+    /// (in `LevelNodes::movers` order) and the two names, for the viewer.
+    pub texture_swaps: Vec<(usize, String, String)>,
     /// Where the bouncy things are among them.
     bouncies: std::ops::Range<usize>,
     /// Which of the level's objects are pedestrians (in `objects` order).
@@ -439,6 +444,8 @@ impl Behaviour {
                 .map(|(i, name)| (name, i))
                 .collect(),
             movers,
+            mover_count: nodes.movers.len(),
+            texture_swaps: Vec::new(),
             bouncies,
             peds: nodes
                 .objects
@@ -1873,6 +1880,21 @@ impl Host for Commands<'_> {
             let left = b.voice_until - b.now;
             if left > 0.0 {
                 return Outcome::Wait(left);
+            }
+        } else if name == c("Obj_ReplaceTexture") {
+            // On a moving piece of the level (it has a layer of its own to
+            // draw differently): for the viewer. Elsewhere (a pedestrian's
+            // eyes blinking) not done, false so the blink gives up.
+            let text = |key: &str| match args.get(c(key)) {
+                Some(Value::String(t) | Value::LocalString(t)) => Some(t.clone()),
+                _ => None,
+            };
+            let piece = object.checked_sub(b.movers).filter(|&i| i < b.mover_count);
+            match (piece, text("src"), text("dest")) {
+                (Some(i), Some(src), Some(dest)) if b.texture_swaps.len() < 64 => {
+                    b.texture_swaps.push((i, src, dest));
+                }
+                _ => return Outcome::Done(false),
             }
         } else if name == c("Obj_StopSound") {
             // (Objects' sounds play once here, loops too: nothing to stop.)

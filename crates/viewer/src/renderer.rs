@@ -166,6 +166,8 @@ struct GpuLevel {
     batches: Vec<GpuBatch>,
     /// Kept for rebinding passes to other textures.
     views: Vec<wgpu::TextureView>,
+    /// Each slot's texture checksum, for swapping one by name.
+    checksums: Vec<u32>,
     params: wgpu::Buffer,
 }
 
@@ -208,6 +210,8 @@ pub struct Renderer {
     /// Pictures shown over layers' own textures (a movie on a screen in
     /// the level), by layer: the texture and its size.
     layer_pictures: std::collections::HashMap<usize, (wgpu::Texture, u32, u32)>,
+    /// Textures uploaded to swap in on layers (by checksum).
+    swap_views: std::collections::HashMap<u32, wgpu::TextureView>,
     pass_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     collision: Option<(wgpu::Buffer, u32)>,
@@ -349,6 +353,7 @@ impl Renderer {
             character: None,
             layers: Vec::new(),
             layer_pictures: std::collections::HashMap::new(),
+            swap_views: std::collections::HashMap::new(),
             pass_layout,
             sampler,
             collision,
@@ -528,6 +533,42 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    /// Draws every pass, in the level and its layers, whose texture is
+    /// one of `from` (a texture's checksums) with `texture` instead (a
+    /// script swapping it: Pizza's arcade screens), or with its own again
+    /// (`None`).
+    pub fn swap_texture(&mut self, from: &[u32], texture: Option<&crate::level::TextureData>) {
+        if let Some(t) = texture {
+            if !self.swap_views.contains_key(&t.checksum) {
+                let view = upload_texture(&self.device, &self.queue, t);
+                self.swap_views.insert(t.checksum, view);
+            }
+        }
+        let swapped = texture.map(|t| &self.swap_views[&t.checksum]);
+        let (device, layout, sampler) = (&self.device, &self.pass_layout, &self.sampler);
+        let levels = std::iter::once(&mut self.world).chain(self.layers.iter_mut().map(|(l, _)| l));
+        for level in levels {
+            let Some(slot) = level.checksums.iter().position(|c| from.contains(c)) else {
+                continue;
+            };
+            let Some(view) = swapped.or(level.views.get(slot)) else {
+                continue;
+            };
+            for pass in level.batches.iter_mut().flat_map(|b| &mut b.passes) {
+                if pass.texture == slot {
+                    pass.bind_group = pass_bind_group(
+                        device,
+                        layout,
+                        view,
+                        sampler,
+                        &level.params,
+                        pass.params_slot,
+                    );
+                }
+            }
+        }
     }
 
     /// Replaces a layer's vertices from `first` on (same order as its mesh).
@@ -1092,6 +1133,7 @@ fn upload_level(
         indices,
         batches,
         views,
+        checksums: level.textures.iter().map(|t| t.checksum).collect(),
         params: params_buffer,
     }
 }

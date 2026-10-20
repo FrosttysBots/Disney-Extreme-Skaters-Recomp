@@ -528,6 +528,35 @@ impl TextureCache<'_> {
     }
 }
 
+/// The checksums a texture named `name` (`"05A.png"`, as the scripts
+/// name them) can have in a `.tex.ngc`: as the game finds it (main.dol
+/// 0x8007CA24), its name's checksum times one of a few factors, or the
+/// same for the name with `_auto32m0.png` in place of its extension
+/// (`05A_auto32m0.png`, the levels' textures).
+pub fn texture_checksums(name: &str) -> Vec<u32> {
+    const FACTORS: [u32; 10] = [2, 3, 4, 6, 12, 8, 24, 0xffff_ffff, 0x4000_4010, 0x4020_4080];
+    let auto = name
+        .len()
+        .checked_sub(4)
+        .and_then(|cut| name.get(..cut))
+        .map(|stem| format!("{stem}_auto32m0.png"));
+    [Some(name.to_string()), auto]
+        .into_iter()
+        .flatten()
+        .flat_map(|form| {
+            let base = qb::checksum(&form);
+            FACTORS.map(|f| base.wrapping_mul(f))
+        })
+        .collect()
+}
+
+/// One texture of a `.tex.ngc`, decoded (`None` if it has none of
+/// `checksums`).
+pub fn decode_texture_from(textures: &[u8], checksums: &[u32]) -> Option<TextureData> {
+    let dict = TexDictionary::parse(textures).ok()?;
+    checksums.iter().find_map(|&c| decode_texture(&dict, c))
+}
+
 /// Decodes every usable mip level of one texture, or `None` if it's
 /// missing or fails to decode.
 fn decode_texture(dict: &TexDictionary, checksum: u32) -> Option<TextureData> {
