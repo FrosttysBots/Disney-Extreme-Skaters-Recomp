@@ -10,7 +10,7 @@
 //! `MISSES=1` lists the rail approaches that didn't grind; `TRACE=run:frame`
 //! prints 25 frames of a random run from there (and why the ground was
 //! lost); `SHAKES=1` lists where the camera shook; `PROBE=x,y,z` lists the
-//! faces around a spot; `RAILS=x,z,radius` lists the rails near one;
+//! faces around a spot; `RAY=x,y,z,x,y,z` what a line hits; `RAILS=x,z,radius` lists the rails near one;
 //! `APPROACH=n` prints each frame of rail approach `n` (as `MISSES` numbers
 //! them).
 use std::path::Path;
@@ -74,6 +74,19 @@ fn main() {
         return;
     }
 
+    // RAY=x,y,z,x,y,z: what a line between two spots hits first.
+    if let Ok(ray) = std::env::var("RAY") {
+        let v: Vec<f32> = ray.split(',').map(|x| x.parse().unwrap()).collect();
+        let (from, to) = (Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5]));
+        match world.ray(from, to) {
+            Some(hit) => println!(
+                "hit {:.2} normal {:.2} flags {:#x} object {:#010x}",
+                hit.point, hit.normal, hit.flags, hit.object
+            ),
+            None => println!("no hit"),
+        }
+        return;
+    }
     // PROBE=x,y,z: every face on the vertical line through a spot, and
     // what's around it at knee height.
     if let Ok(probe) = std::env::var("PROBE") {
