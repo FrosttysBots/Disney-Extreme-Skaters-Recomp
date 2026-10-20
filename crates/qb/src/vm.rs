@@ -538,22 +538,11 @@ impl Thread {
                     return false;
                 };
                 // A struct passed whole (`script { a = 1 b = 2 }`) gives
-                // its fields as the script's parameters.
+                // its fields as the script's parameters, and so does one
+                // inside that (`edit_skater_menu_add_item { (<options_array>
+                // [ <index> ]) tab = tab2 }`: the item's fields).
                 let mut params = Vec::with_capacity(items.len());
-                for (k, v) in items {
-                    match (k, v) {
-                        (None, Value::Struct(fields)) => {
-                            for (fk, fv) in fields {
-                                match fk {
-                                    Some(fk) => set_param(&mut params, fk, fv),
-                                    None => params.push((None, fv)),
-                                }
-                            }
-                        }
-                        (Some(k), v) => set_param(&mut params, k, v),
-                        (None, v) => params.push((None, v)),
-                    }
-                }
+                merge_params(&mut params, items);
                 if trace_calls() {
                     eprintln!("qb: call {name:#010x} (depth {})", self.frames.len());
                 }
@@ -1117,14 +1106,15 @@ fn skip_branch(body: &[Token], mut at: usize, stop_at_else: bool) -> usize {
 /// parameter holding one or naming a global that is. The item, if it's
 /// all the tokens are.
 fn indexed(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
-    // `(array [ i ]).field`: what's in the brackets, then its fields.
+    // `(array [ i ]).field`: what's in the brackets, then its fields (or
+    // none: `check_option_is_visible (<options_array> [ <index> ])`).
     if tokens.first() == Some(&Token::OpenParen) {
         let close = matching_paren(tokens, 0);
         let inner = &tokens[1..close.min(tokens.len())];
         let mut value = indexed(inner, params, program)?;
         let mut i = close + 1;
         member_chain(&mut value, tokens, &mut i, params, program)?;
-        return (i == tokens.len() && i > close + 1).then_some(value);
+        return (i == tokens.len()).then_some(value);
     }
     let (array, mut i) = match tokens {
         [Token::Arg, Token::Name(n), ..] => {
@@ -1234,6 +1224,66 @@ fn after_repeat(body: &[Token], mut at: usize) -> usize {
     body.len()
 }
 
+/// Structs added together (`<a> + { b = 1 }`): the fields of each, the
+/// later's in place of the earlier's of the same name. `None` unless every
+/// term is a struct (a parameter holding one, or one written out).
+fn struct_sum(tokens: &[Token], params: &Params, program: &Program) -> Option<Value> {
+    let mut terms = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, t) in tokens.iter().enumerate() {
+        match t {
+            Token::StartStruct | Token::StartArray | Token::OpenParen => depth += 1,
+            Token::EndStruct | Token::EndArray | Token::CloseParen => depth -= 1,
+            Token::Add if depth == 0 => {
+                terms.push(&tokens[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    terms.push(&tokens[start..]);
+    if terms.len() < 2 {
+        return None;
+    }
+    let mut out: Params = Vec::new();
+    for term in terms {
+        let items = match term {
+            [Token::Arg, Token::Name(n)] => match params.iter().find(|(k, _)| *k == Some(*n)) {
+                Some((_, Value::Struct(items))) => items.clone(),
+                _ => return None,
+            },
+            [Token::StartStruct, .., Token::EndStruct] => match resolve(term, params, program) {
+                Value::Struct(items) => match items.as_slice() {
+                    // (A struct written out comes back wrapped in one.)
+                    [(None, Value::Struct(inner))] => inner.clone(),
+                    _ => items,
+                },
+                _ => return None,
+            },
+            _ => return None,
+        };
+        for (k, v) in items {
+            match k {
+                Some(k) => set_param(&mut out, k, v),
+                None => out.push((None, v)),
+            }
+        }
+    }
+    Some(Value::Struct(out))
+}
+
+/// Adds `items` to `params` as a script's arguments: named ones by name,
+/// structs passed unnamed by their fields.
+fn merge_params(params: &mut Params, items: Params) {
+    for (k, v) in items {
+        match (k, v) {
+            (None, Value::Struct(fields)) => merge_params(params, fields),
+            (Some(k), v) => set_param(params, k, v),
+            (None, v) => params.push((None, v)),
+        }
+    }
+}
+
 fn set_param(params: &mut Params, name: u32, value: Value) {
     match params.iter_mut().find(|(k, _)| *k == Some(name)) {
         Some(item) => item.1 = value,
@@ -1254,6 +1304,12 @@ fn resolve(tokens: &[Token], params: &Params, program: &Program) -> Value {
                 // `(<array> [ i ].field)`: the item itself (text too).
                 if let Some(item) = indexed(&tokens[i + 1..close], params, program) {
                     flat.extend(value_tokens(&item));
+                    i = close + 1;
+                    continue;
+                }
+                // `(<pad_choose_params> + { parent_index = <index> })`.
+                if let Some(sum) = struct_sum(&tokens[i + 1..close], params, program) {
+                    flat.extend(value_tokens(&sum));
                     i = close + 1;
                     continue;
                 }
