@@ -54,7 +54,8 @@ it off).
 
 The Kid and Kid (Girl) can be dressed under the panel's Kid's clothes:
 the Skate Shop's own parts (skin, hair, shirt, legs, shoes, socks, hat,
-glasses, face paint, accessory, pads and backpack), starting in the
+glasses, face paint, accessory, pads, backpack, deck and griptape),
+starting in the
 game's outfit, and the parts the shop lets you colour can be (untick
 "own colour": hue, saturation and value, as its colour menu); what's
 picked is kept. The game's own Edit Skater (Main menu, the kid, Edit
