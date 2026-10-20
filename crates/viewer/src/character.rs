@@ -75,6 +75,12 @@ impl Character {
             );
             influences.extend(self::influences(board)?);
         }
+        for (part, textures) in &files.parts {
+            mesh.append(
+                Level::from_bytes(part, textures.as_deref()).context("could not load a part")?,
+            );
+            influences.extend(self::influences(part)?);
+        }
         if influences.len() != mesh.vertices.len() {
             bail!(
                 "{} vertices but {} bone weights",

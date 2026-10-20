@@ -85,6 +85,9 @@ pub struct CharacterFiles {
     pub textures: Option<Vec<u8>>,
     /// The skateboard, skinned to the character's skeleton.
     pub board: Option<(Vec<u8>, Option<Vec<u8>>)>,
+    /// More of the model, skinned to the same skeleton: the created
+    /// kid's clothes and hair.
+    pub parts: Vec<(Vec<u8>, Option<Vec<u8>>)>,
     pub skeleton: Vec<u8>,
     /// `standardkeyq.bin` and `standardkeyt.bin`.
     pub key_tables: (Vec<u8>, Vec<u8>),
@@ -440,9 +443,10 @@ impl GameData {
             .filter_map(|name| {
                 let lower = name.to_ascii_lowercase();
                 let id = lower.strip_prefix("anims_")?.strip_suffix(".prg")?;
-                // The created skater is assembled from parts in
-                // skaterparts.prg, so its archive has animations but no model.
-                (id != "kid").then(|| name[6..6 + id.len()].to_string())
+                // (The created skater, the kid, has animations here but its
+                // model's made of parts in skaterparts.prg: see
+                // `load_character`.)
+                Some(name[6..6 + id.len()].to_string())
             })
             .map(|id| LevelInfo {
                 title: title(&id),
@@ -750,11 +754,47 @@ impl GameData {
         let archive =
             Archive::parse(&data).with_context(|| format!("could not read anims_{id}.prg"))?;
         let file = |suffix: &str| entry(&archive, &|p| p.ends_with(&format!("/{name}{suffix}")));
-        let skin = file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;
-        let textures = file(".tex.ngc")?;
-        let board = match file("board.skin.ngc")? {
-            Some(board) => Some((board, file("board.tex.ngc")?)),
-            None => None,
+        let mut parts = Vec::new();
+        let (skin, textures, board) = if name == "kid" {
+            // The kid as the career starts it (`appearance_kid`: the boy's
+            // body, `KidBody`, on the kid's board), from the created
+            // skater's parts.
+            let kit = self
+                .read_archive("skaterparts.prg")?
+                .context("skaterparts.prg is missing")?;
+            let kit = Archive::parse(&kit).context("could not read skaterparts.prg")?;
+            let part = |path: &str| entry(&kit, &|p| p.eq_ignore_ascii_case(path));
+            let skin =
+                part("models/boy/boy.skin.ngc")?.context("skaterparts.prg has no boy.skin")?;
+            let board = match part("models/boy/boyboard.skin.ngc")? {
+                Some(board) => Some((board, part("models/boy/boyboard.tex.ngc")?)),
+                None => None,
+            };
+            // Dressed as the game's created skater starts (its default
+            // boy, CASMENU.q): Buzzcut, Shortsleeve 1, Cargo Pants 1,
+            // Tennis Shoes 1, Skate Helmet 1 and Elbow Pads 1, the meshes
+            // the Skate Shop's part lists give them.
+            for piece in [
+                "hair_boy_1",
+                "shirt_boy_1",
+                "pants_boy_2",
+                "shoe_8",
+                "hat_12",
+                "pads_elbows",
+            ] {
+                if let Some(mesh) = part(&format!("models/boy/{piece}.skin.ngc"))? {
+                    parts.push((mesh, part(&format!("models/boy/{piece}.tex.ngc"))?));
+                }
+            }
+            (skin, part("models/boy/boy.tex.ngc")?, board)
+        } else {
+            let skin =
+                file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;
+            let board = match file("board.skin.ngc")? {
+                Some(board) => Some((board, file("board.tex.ngc")?)),
+                None => None,
+            };
+            (skin, file(".tex.ngc")?, board)
         };
         let mut animations = Vec::new();
         for e in archive.entries() {
@@ -786,6 +826,7 @@ impl GameData {
             skin,
             textures,
             board,
+            parts,
             skeleton,
             key_tables,
             animations,

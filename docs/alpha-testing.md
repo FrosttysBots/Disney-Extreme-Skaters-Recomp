@@ -163,8 +163,9 @@ skater is and what it's doing.
 
 ## Known differences from the game
 
-- Not yet: the Simplified controls, creating a kid, Zurg's UFO launch,
-  and two players. Every character can be picked, where the career
+- Not yet: the Simplified controls, dressing your own kid (the Kid
+  skates in the game's default outfit), Zurg's UFO launch, and two
+  players. Every character can be picked, where the career
   unlocks some as goals are won.
 - Scripts that swap a texture (Pizza's arcade screens flickering,
   a piece of Tarzan's Treehouse cycling five frames) don't: the disc's textures aren't named the
