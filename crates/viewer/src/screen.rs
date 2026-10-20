@@ -207,6 +207,20 @@ struct Running {
     then: Option<(u32, Params)>,
 }
 
+/// What the Skate Shop's Edit Skater menus do to the created kid, in
+/// order: a part put on (`EditPlayerAppearance target = SetPart`, by its
+/// list and `desc_id`) or taken off (`ClearPart`, `None`), a part's
+/// colour (`SetPlayerAppearanceColor`, `None` its own), the appearance
+/// kept as it is (`RememberTemporaryProfile`: a part accepted) or put
+/// back to what was kept (`RestoreTemporaryAppearance`: one tried on).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AppearanceEdit {
+    Part(u32, Option<u32>),
+    Color(u32, Option<[f32; 3]>),
+    Keep,
+    Restore,
+}
+
 pub struct Screen {
     elements: Vec<Option<Element>>,
     by_id: HashMap<u32, usize>,
@@ -278,17 +292,12 @@ pub struct Screen {
     /// `desc_id`), for the Edit Skater menus to ask after; and the parts
     /// they change (`EditPlayerAppearance target = SetPart`, `ClearPart`:
     /// `None`), for whoever dresses the kid.
-    pub kid_appearance: Vec<(u32, u32)>,
+    pub kid_appearance: Vec<(u32, u32, Option<[f32; 3]>)>,
     /// Where the menus have put the skater (`skater:Obj_MoveToNode Name =
     /// TRG_Start_P1`: the Edit Skater set), till they put it back on the
     /// stage (`None`).
     pub skater_node: Option<u32>,
-    pub appearance_edits: Vec<(u32, Option<u32>)>,
-    /// The kid's appearance kept as it is (`RememberTemporaryProfile`: a
-    /// part accepted, `true`) or put back to what was kept
-    /// (`RestoreTemporaryAppearance`: one only tried on, `false`), in order
-    /// with the edits.
-    pub appearance_keeps: Vec<(usize, bool)>,
+    pub appearance_edits: Vec<AppearanceEdit>,
     /// A movie asked for on the level's screen (`playmovie "movies\x"
     /// mesh = moviescreen loop`: the skater select's character clip), by
     /// its file's name and whether it loops; or none (`StopMovie`).
@@ -352,7 +361,6 @@ impl Screen {
             kid_appearance: Vec::new(),
             skater_node: None,
             appearance_edits: Vec::new(),
-            appearance_keeps: Vec::new(),
             screen_movie: None,
             camera: None,
             movies: Vec::new(),
@@ -2031,9 +2039,23 @@ impl Host for Ui<'_> {
             // `if GetPlayerAppearancePart part = skater_m_hair`: its
             // `desc_id`, if the kid wears one.
             let part = named("part").and_then(|v| v.as_name());
-            let worn = s.kid_appearance.iter().find(|(p, _)| Some(*p) == part);
+            let worn = s.kid_appearance.iter().find(|(p, ..)| Some(*p) == part);
             return match worn {
-                Some(&(_, desc)) => Outcome::Params(vec![(Some(c("desc_id")), Value::Name(desc))]),
+                Some(&(_, desc, color)) => {
+                    let mut out = vec![(Some(c("desc_id")), Value::Name(desc))];
+                    // (Its colour, as the colour menu reads it.)
+                    let [h, sat, v] = color.unwrap_or([0.0, 50.0, 50.0]);
+                    out.extend([
+                        (Some(c("h")), Value::Integer(h.round() as i32)),
+                        (Some(c("S")), Value::Integer(sat.round() as i32)),
+                        (Some(c("v")), Value::Integer(v.round() as i32)),
+                        (
+                            Some(c("use_default_hsv")),
+                            Value::Integer(i32::from(color.is_none())),
+                        ),
+                    ]);
+                    Outcome::Params(out)
+                }
                 None => Outcome::Done(false),
             };
         } else if name == c("GetActualCASOptionStruct") {
@@ -2052,10 +2074,22 @@ impl Host for Ui<'_> {
                 Some(Value::Struct(fields)) => Outcome::Params(fields.clone()),
                 _ => Outcome::Done(false),
             };
-        } else if name == c("RememberTemporaryProfile") || name == c("RestoreTemporaryAppearance") {
-            let at = s.appearance_edits.len();
-            s.appearance_keeps
-                .push((at, name == c("RememberTemporaryProfile")));
+        } else if name == c("RememberTemporaryProfile") {
+            s.appearance_edits.push(AppearanceEdit::Keep);
+        } else if name == c("RestoreTemporaryAppearance") {
+            s.appearance_edits.push(AppearanceEdit::Restore);
+        } else if name == c("SetPlayerAppearanceColor") {
+            // `part = hat h = 220 S = 90 v = 60 use_default_hsv = 0`.
+            let part = named("part").and_then(|v| v.as_name());
+            let n = |k: &str| named(k).and_then(|v| v.as_f32());
+            let own = named("use_default_hsv").and_then(|v| v.as_int()) == Some(1);
+            let color = match (n("h"), n("S"), n("v")) {
+                (Some(h), Some(sat), Some(v)) if !own => Some([h, sat, v]),
+                _ => None,
+            };
+            if let Some(part) = part {
+                s.appearance_edits.push(AppearanceEdit::Color(part, color));
+            }
         } else if name == c("EditPlayerAppearance") {
             // `target = SetPart targetParams = { part = hat desc_id = x }`.
             let target = named("target").and_then(|v| v.as_name());
@@ -2071,10 +2105,11 @@ impl Host for Ui<'_> {
             if let Some(part) = part {
                 if target == Some(c("SetPart")) {
                     if let Some(desc) = desc {
-                        s.appearance_edits.push((part, Some(desc)));
+                        s.appearance_edits
+                            .push(AppearanceEdit::Part(part, Some(desc)));
                     }
                 } else if target == Some(c("ClearPart")) {
-                    s.appearance_edits.push((part, None));
+                    s.appearance_edits.push(AppearanceEdit::Part(part, None));
                 }
             }
         } else if name == c("PauseMusic") || name == c("PauseStream") {
@@ -2388,7 +2423,16 @@ fn globals_in(program: &qb::vm::Program, props: Value) -> Value {
     let Value::Struct(items) = props else {
         return props;
     };
-    let keys = ["scale", "pos", "Dims", "rgba", "text_scale", "dims"].map(checksum);
+    let keys = [
+        "scale",
+        "pos",
+        "Dims",
+        "rgba",
+        "text_scale",
+        "dims",
+        "spacing_between",
+    ]
+    .map(checksum);
     Value::Struct(
         items
             .into_iter()

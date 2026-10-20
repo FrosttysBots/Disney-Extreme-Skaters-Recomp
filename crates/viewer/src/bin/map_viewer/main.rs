@@ -1956,7 +1956,7 @@ struct App<'a> {
     kid_shown: Option<bool>,
     /// The kid's parts as last kept by the Edit Skater menus (a part
     /// accepted), to put back what was only tried on.
-    kid_kept: HashMap<bool, Vec<usize>>,
+    kid_kept: HashMap<bool, Vec<KidWorn>>,
     /// Dressed by the menus just now (not the panel: not kept).
     kid_from_menus: bool,
     pad_back: bool,
@@ -2054,6 +2054,9 @@ struct App<'a> {
     started: Instant,
     error: Option<anyhow::Error>,
 }
+
+/// A part of the created kid as worn: the choice picked and its colour.
+type KidWorn = (usize, Option<[f32; 3]>);
 
 impl<'a> App<'a> {
     fn new(settings: &'a mut Settings) -> Self {
@@ -5279,6 +5282,7 @@ impl<'a> App<'a> {
     /// wears, for them to ask after, and the parts they put on it (as each
     /// is picked, as the game shows it), worn and kept.
     fn dress_kid_from_menus(&mut self) {
+        use desa_viewer::screen::AppearanceEdit;
         let (Some(screen), Some(girl)) = (&mut self.screen, self.kid_shown) else {
             return;
         };
@@ -5287,83 +5291,71 @@ impl<'a> App<'a> {
         };
         screen.screen.kid_appearance = slots
             .iter()
-            .map(|s| (s.list, s.choices[s.picked].desc_id))
+            .map(|s| (s.list, s.choices[s.picked].desc_id, s.color))
             .collect();
         let edits = std::mem::take(&mut screen.screen.appearance_edits);
-        let mut keeps = std::mem::take(&mut screen.screen.appearance_keeps)
-            .into_iter()
-            .peekable();
-        let sex = if girl { "f" } else { "m" };
-        let mut changed = false;
-        let kept = self
-            .kid_kept
-            .entry(girl)
-            .or_insert_with(|| slots.iter().map(|s| s.picked).collect());
-        // Kept, or put back to what was (before the edit at that point).
-        let mut keep = |slots: &mut Vec<desa_viewer::source::KidSlot>, remember: bool| {
-            if remember {
-                *kept = slots.iter().map(|s| s.picked).collect();
-                false
-            } else {
-                let mut any = false;
-                for (slot, &picked) in slots.iter_mut().zip(kept.iter()) {
-                    any |= slot.picked != picked;
-                    slot.picked = picked;
-                }
-                any
-            }
+        if edits.is_empty() {
+            return;
+        }
+        let worn = |slots: &[desa_viewer::source::KidSlot]| -> Vec<KidWorn> {
+            slots.iter().map(|s| (s.picked, s.color)).collect()
         };
-        let mut restored = false;
-        for (at, (list, desc)) in edits.into_iter().enumerate() {
-            while let Some(&(when, remember)) = keeps.peek() {
-                if when > at {
-                    break;
+        let before = worn(slots);
+        let kept = self.kid_kept.entry(girl).or_insert_with(|| worn(slots));
+        for edit in edits {
+            match edit {
+                AppearanceEdit::Part(list, desc) => {
+                    let Some(slot) = slots.iter_mut().find(|s| s.list == list) else {
+                        continue;
+                    };
+                    // (Taken off: the choice that's nothing at all.)
+                    let choice = match desc {
+                        Some(desc) => slot.choices.iter().position(|c| c.desc_id == desc),
+                        None => slot
+                            .choices
+                            .iter()
+                            .position(|c| c.mesh.is_none() && c.swaps.is_empty()),
+                    };
+                    if let Some(choice) = choice {
+                        slot.picked = choice;
+                    }
                 }
-                restored |= keep(slots, remember);
-                keeps.next();
+                AppearanceEdit::Color(list, color) => {
+                    if let Some(slot) = slots.iter_mut().find(|s| s.list == list) {
+                        slot.color = color;
+                    }
+                }
+                AppearanceEdit::Keep => *kept = worn(slots),
+                AppearanceEdit::Restore => {
+                    for (slot, &(picked, color)) in slots.iter_mut().zip(kept.iter()) {
+                        slot.picked = picked;
+                        slot.color = color;
+                    }
+                }
             }
-            let Some((i, slot)) = slots.iter_mut().enumerate().find(|(_, s)| s.list == list) else {
-                continue;
-            };
-            // (Taken off: the choice that's nothing at all.)
-            let choice = match desc {
-                Some(desc) => slot.choices.iter().position(|c| c.desc_id == desc),
-                None => slot
-                    .choices
-                    .iter()
-                    .position(|c| c.mesh.is_none() && c.swaps.is_empty()),
-            };
-            let Some(choice) = choice.filter(|&c| c != slot.picked) else {
-                continue;
-            };
-            slot.picked = choice;
-            self.settings
-                .best
-                .insert(format!("outfit.{sex}.{}", slot.label), choice as u32);
+        }
+        if worn(slots) == before {
+            return;
+        }
+        // Worn: kept for next time and shown in the panel too.
+        let sex = if girl { "f" } else { "m" };
+        for (i, slot) in slots.iter().enumerate() {
+            let key = format!("outfit.{sex}.{}", slot.label);
+            let best = &mut self.settings.best;
+            best.insert(key.clone(), slot.picked as u32);
+            best.insert(format!("{key}.c"), u32::from(slot.color.is_some()));
+            if let Some([h, s, v]) = slot.color {
+                best.insert(format!("{key}.h"), h.round() as u32);
+                best.insert(format!("{key}.s"), s.round() as u32);
+                best.insert(format!("{key}.v"), v.round() as u32);
+            }
             if let Some(view) = self.model.character.kid_slots.get_mut(i) {
-                view.picked = choice;
+                view.picked = slot.picked;
+                view.color = slot.color;
             }
-            changed = true;
         }
-        for (_, remember) in keeps {
-            restored |= keep(slots, remember);
-        }
-        if restored {
-            changed = true;
-        }
-        if changed {
-            // (The panel and the saved picks as worn.)
-            for (i, slot) in slots.iter().enumerate() {
-                self.settings
-                    .best
-                    .insert(format!("outfit.{sex}.{}", slot.label), slot.picked as u32);
-                if let Some(view) = self.model.character.kid_slots.get_mut(i) {
-                    view.picked = slot.picked;
-                }
-            }
-            self.kid_from_menus = true;
-            self.load_character(self.model.character.current);
-        }
+        self.kid_from_menus = true;
+        self.load_character(self.model.character.current);
     }
 
     /// The game's menus run on: their scripts (with the level's), sounds,
@@ -6157,7 +6149,7 @@ impl<'a> App<'a> {
                     && !std::mem::take(&mut self.kid_from_menus)
                 {
                     self.kid_kept
-                        .insert(girl, slots.iter().map(|s| s.picked).collect());
+                        .insert(girl, slots.iter().map(|s| (s.picked, s.color)).collect());
                 }
                 outfit = Some(slots.iter().map(|s| s.worn()).collect::<Vec<_>>());
                 self.kid_shown = Some(girl);

@@ -1523,7 +1523,20 @@ fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<
                 params
                     .iter()
                     .find(|(k, _)| *k == Some(*n))
-                    .and_then(|(_, v)| Num::of(v))
+                    .and_then(|(_, v)| match v {
+                        // The name of a global that's a number: its value
+                        // (`Left = colormenu_wrap_arrow_left`).
+                        Value::Name(g) => match program.value(*g) {
+                            Some(
+                                global @ (Value::Integer(_)
+                                | Value::Float(_)
+                                | Value::Pair(_)
+                                | Value::Vector(_)),
+                            ) => Num::of(global),
+                            _ => Num::of(v),
+                        },
+                        v => Num::of(v),
+                    })
             }
             // `global [ index ].member`: an array's item, a struct's field.
             Token::Name(n) if tokens.get(i + 1) == Some(&Token::StartArray) => {
