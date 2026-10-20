@@ -7406,6 +7406,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             if std::env::var_os("DESA_SCREEN_DUMP").is_some() {
                 if let Some(screen) = &app.screen {
                     eprintln!("{}", screen.screen.describe());
+                    eprintln!("unknown {:x?}", screen.screen.unknown);
                 }
             }
             // A second of the screen's movie (it keeps its own time).

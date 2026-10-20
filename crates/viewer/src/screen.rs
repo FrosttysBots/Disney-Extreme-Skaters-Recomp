@@ -2258,6 +2258,30 @@ impl Host for Ui<'_> {
             }
         } else if name == c("StopMovie") {
             s.screen_movie = Some(None);
+        } else if name == c("MenuSelectedIndexIs") {
+            // `id = menu first` (or `last`, or `index = n`): whether its
+            // focused item is that one (the menus' up and down arrows).
+            let Some(menu) = target_of(s).and_then(|i| s.el(i)) else {
+                return Outcome::Done(false);
+            };
+            let Some(selected) = menu.selected else {
+                return Outcome::Done(false);
+            };
+            let shown: Vec<usize> = menu
+                .children
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| s.el(c).is_some_and(|e| !e.hidden))
+                .map(|(i, _)| i)
+                .collect();
+            let is = if props.has_flag(c("first")) {
+                shown.first() == Some(&selected)
+            } else if props.has_flag(c("last")) {
+                shown.last() == Some(&selected)
+            } else {
+                named("index").and_then(|v| v.as_int()) == Some(selected as i32)
+            };
+            return Outcome::Done(is);
         } else if name == c("GetPlayerAppearancePart") {
             // `if GetPlayerAppearancePart part = skater_m_hair`: its
             // `desc_id`, if the kid wears one.
