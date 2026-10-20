@@ -2029,6 +2029,7 @@ impl<'a> App<'a> {
     fn new(settings: &'a mut Settings) -> Self {
         let speed = settings.speed.unwrap_or(DEFAULT_SPEED);
         let camera = settings.best.get("camera").map_or(1, |c| *c as usize);
+        let simplified = settings.best.get("simplified") == Some(&1);
         let volume = |key: &str| settings.best.get(key).map_or(1.0, |v| *v as f32 / 100.0);
         let (effects_volume, music_volume) = (volume("volume.effects"), volume("volume.music"));
         let intro = settings.best.get("intro") != Some(&0);
@@ -2092,6 +2093,7 @@ impl<'a> App<'a> {
                     effects_volume,
                     music_volume,
                     rumble: true,
+                    simplified,
                     run_clock: None,
                     run_result: None,
                     run_goal: None,
@@ -2404,6 +2406,7 @@ impl<'a> App<'a> {
         let heard = self.audio.is_some() && self.model.character.sound;
         if let Some(level) = &mut self.level {
             level.behaviour.voices_heard = heard;
+            level.behaviour.hawk_controls = !self.model.character.simplified;
             // (Cut off by the scripts, unless a new one's said after.)
             if std::mem::take(&mut level.behaviour.stop_voice) {
                 if let Some(audio) = &mut self.audio {
@@ -2816,7 +2819,9 @@ impl<'a> App<'a> {
         // (`DESA_SKATE_TRACE` set: why it leaves rails, and the like.)
         skater.trace = std::env::var_os("DESA_SKATE_TRACE").is_some();
         // The character's tricks, timed by its animations.
-        let mut tricks = TrickBook::new(program, id, &stats);
+        let mut tricks =
+            TrickBook::with_controls(program, id, &stats, self.model.character.simplified);
+        skater.simplified = self.model.character.simplified;
         if let Some(character) = &self.character {
             // And its animations' lengths, to play pushes, landings and
             // bails through.
@@ -4474,6 +4479,52 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The simplified controls or the full ones, when they change: the
+    /// skater's tricks read again for them, and the choice kept.
+    fn apply_controls(&mut self) {
+        let simplified = self.model.character.simplified;
+        if self
+            .settings
+            .best
+            .get("simplified")
+            .is_some_and(|&v| v == 1)
+            != simplified
+        {
+            self.settings
+                .best
+                .insert("simplified".into(), u32::from(simplified));
+            self.settings.save();
+        }
+        let (Some((skater, _, _)), Some(level), Some(index)) =
+            (&mut self.skating, &self.level, self.model.character.current)
+        else {
+            return;
+        };
+        if skater.simplified == simplified {
+            return;
+        }
+        skater.simplified = simplified;
+        let id = &self.model.character.characters[index].id;
+        let program = level.behaviour.program();
+        let stats = if self.model.character.cheats.stats_13 {
+            Stats([13.0; 10])
+        } else {
+            Stats::of(program, id)
+        };
+        let mut tricks = TrickBook::with_controls(program, id, &stats, simplified);
+        if let Some(character) = &self.character {
+            tricks.set_durations(|anim| {
+                character
+                    .animations
+                    .iter()
+                    .find(|(name, _)| qb::checksum(name) == anim)
+                    .map(|(_, a)| a.duration)
+            });
+        }
+        self.model.character.trick_list = tricks.trick_list();
+        skater.tricks = tricks;
+    }
+
     /// Pauses skating, or goes on.
     fn toggle_pause(&mut self) {
         if self.skating.is_some() && self.replay.is_none() {
@@ -4562,6 +4613,11 @@ impl<'a> App<'a> {
             model.rumble = s.rumble;
         } else {
             s.rumble = model.rumble;
+        }
+        if std::mem::take(&mut s.hawk_controls_changed) {
+            model.simplified = !s.hawk_controls;
+        } else {
+            s.hawk_controls = !model.simplified;
         }
         if std::mem::take(&mut s.volumes_changed) {
             model.music_volume = s.music_level as f32 / 10.0;
@@ -6149,6 +6205,7 @@ impl<'a> App<'a> {
         }
         self.update_map();
         self.apply_camera();
+        self.apply_controls();
         if self.frame % 30 == 0 {
             self.update_progress();
             self.update_goals_won();

@@ -383,6 +383,10 @@ pub struct Skater {
     pub spawns: Vec<(Vec3, f32)>,
     /// Print why the ground was lost, for debugging (off by default).
     pub trace: bool,
+    /// The simplified controls (`HawkControlsOff`): any trick button
+    /// (`Squirgle`) does what the direction held asks for, and landing in
+    /// a trick loses the combo rather than bailing (`Land`).
+    pub simplified: bool,
     /// Sound moments since they were last taken (see [`SkateSound`]).
     pub sounds: Vec<SkateSound>,
     /// The terrain of the ground last stood on (`TERRAIN_...`).
@@ -538,6 +542,7 @@ impl Skater {
             last_ground: position,
             spawns: Vec::new(),
             trace: false,
+            simplified: false,
             sounds: Vec::new(),
             terrain: 0,
             teleports: HashMap::new(),
@@ -999,7 +1004,11 @@ impl Skater {
     }
 
     /// Advances `dt` seconds in fixed steps.
-    pub fn update(&mut self, input: Input, physics: &Physics, world: &World, dt: f32) {
+    pub fn update(&mut self, mut input: Input, physics: &Physics, world: &World, dt: f32) {
+        if self.simplified {
+            let any = input.flip || input.grab || input.grind;
+            (input.flip, input.grab, input.grind) = (any, any, any);
+        }
         self.leftover += dt.min(0.25);
         while self.leftover >= STEP {
             self.leftover -= STEP;
@@ -2173,7 +2182,17 @@ impl Skater {
                 if trick.is_some() && !(self.manual && same) {
                     self.start_manual(trick, !self.manual, p);
                 }
-            } else if !self.manual && pressed_pair {
+            } else if !self.manual
+                && (pressed_pair
+                    || self.simplified
+                        && circle
+                        && self
+                            .presses
+                            .iter()
+                            .filter(|&&(p, t)| p == Press::Flip && self.clock - t <= 0.23 + 1e-4)
+                            .count()
+                            >= 2)
+            {
                 let trick = TrickBook::balance_trick(&self.tricks.manuals, None);
                 self.start_manual(trick, true, p);
             }
@@ -2899,7 +2918,12 @@ impl Skater {
                 // Landing sideways at speed: `YawBail` (faster than 500,
                 // 60 to 120 degrees off).
                 let yaw_bail = flat.length() > 500.0 && yaw >= 60.0;
-                // Landing mid-trick (`BailOn`): a bail.
+                // Landing mid-trick (`BailOn`): a bail; with the simplified
+                // controls, the combo lost instead (`ClearPanel_Bailed`).
+                if self.simplified && self.bail_on() && !yaw_bail {
+                    self.trick = None;
+                    self.end_combo(false);
+                }
                 if self.bail_on() || yaw_bail {
                     self.trick = None;
                     self.end_combo(false);

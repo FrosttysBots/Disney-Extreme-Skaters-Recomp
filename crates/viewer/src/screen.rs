@@ -260,6 +260,10 @@ pub struct Screen {
     /// (`VibrationIsOn`, `VibrationOn`, `VibrationOff`).
     pub rumble: bool,
     pub rumble_changed: bool,
+    /// The full controls or the simplified ones, the same way
+    /// (`HawkControlsIsOn`, `HawkControlsOn`, `HawkControlsOff`).
+    pub hawk_controls: bool,
+    pub hawk_controls_changed: bool,
     /// Rumbles the menus asked for (`VibrateController`: the Controls
     /// menu's test): the strong motor or not, and how hard.
     pub vibrations: Vec<(bool, f32)>,
@@ -330,6 +334,8 @@ impl Screen {
             camera: None,
             movies: Vec::new(),
             rumble_changed: false,
+            hawk_controls: true,
+            hawk_controls_changed: false,
             stopping: Vec::new(),
         }
     }
@@ -1955,8 +1961,10 @@ impl Host for Ui<'_> {
                 (Some(c("longestcombo")), single(r[5])),
             ]);
         } else if name == c("HawkControlsIsOn") {
-            // (The full controls are the only ones: Simplified isn't done.)
-            return Outcome::Done(true);
+            return Outcome::Done(s.hawk_controls);
+        } else if name == c("HawkControlsOn") || name == c("HawkControlsOff") {
+            s.hawk_controls = name == c("HawkControlsOn");
+            s.hawk_controls_changed = true;
         } else if name == c("AddMusicTrack") {
             let track = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {

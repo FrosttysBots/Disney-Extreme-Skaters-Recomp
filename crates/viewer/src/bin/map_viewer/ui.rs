@@ -112,6 +112,8 @@ pub struct CharacterModel {
     pub music_volume: f32,
     /// The gamepad rumbles where the game's does.
     pub rumble: bool,
+    /// The game's simplified controls (its Hawk Controls option off).
+    pub simplified: bool,
     /// In a two-minute run: the seconds left, and once it's over the
     /// score, the best before it, and whether it beat it.
     pub run_clock: Option<f32>,
@@ -1289,6 +1291,9 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
             );
         ui.checkbox(&mut model.rumble, "Rumble").on_hover_text(
             "The gamepad rumbles for ollies, landings, grinds, reverts and bails, as in the game.",
+        );
+        ui.checkbox(&mut model.simplified, "Simplified controls").on_hover_text(
+            "The game's simplified controls (its Hawk Controls off): any trick button does the              trick for the direction held, grinds and lips too, and landing in a trick loses              the combo instead of bailing.",
         );
     });
     if !model.cameras.is_empty() {

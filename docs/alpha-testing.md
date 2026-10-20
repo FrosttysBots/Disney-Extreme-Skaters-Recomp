@@ -52,6 +52,12 @@ A gamepad rumbles where the game's does: ollies, landings, grinds (a
 buzz while on the rail), reverts, flails and bails (the Rumble box turns
 it off).
 
+The Simplified controls box (or the game's own Hawk Controls option, off)
+plays the game's simplified controls: any trick button does the trick
+for the direction held, grinds and lips included, a trick button twice
+starts a manual, and landing in a trick loses the combo instead of
+bailing.
+
 On screen: the score and the special meter (top right), the combo and the
 balance meter (bottom), and in the panel a status line with where the
 skater is and what it's doing.
@@ -163,7 +169,7 @@ skater is and what it's doing.
 
 ## Known differences from the game
 
-- Not yet: the Simplified controls, dressing your own kid (the Kid
+- Not yet: dressing your own kid (the Kid
   skates in the game's default outfit), Zurg's UFO launch, and two
   players. Every character can be picked, where the career
   unlocks some as goals are won.

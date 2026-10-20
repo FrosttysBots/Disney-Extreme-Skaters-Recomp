@@ -194,6 +194,9 @@ pub struct Behaviour {
     /// The camera path playing stopped by the scripts (`KillSkaterCamAnim
     /// current`, `PlaySkaterCamAnim ... STOP`), before any they play next.
     pub camera_stop: bool,
+    /// The full controls (not the simplified ones), for the scripts that
+    /// word their goals by them (`HawkControlsIsOn`).
+    pub hawk_controls: bool,
     /// The goals won (their ids), for `GoalManager_HasWonGoal`.
     pub won_goals: std::collections::HashSet<u32>,
     /// The level's own runner (an extra state past the objects).
@@ -487,6 +490,7 @@ impl Behaviour {
             killing: Vec::new(),
             shatters: Vec::new(),
             camera_stop: false,
+            hawk_controls: true,
             knock_down: false,
             voice_until: 0.0,
             voices_heard: false,
@@ -2157,9 +2161,8 @@ impl Host for Commands<'_> {
             return Outcome::Done(false);
         } else if name == c("GetPlatform") {
             return Outcome::Params(vec![(Some(c("Platform")), Value::Name(c("NGC")))]);
-        } else if name == c("HawkControlsIsOn") {
-            // The full controls are the only ones (no Simplified yet).
-            return Outcome::Done(true);
+        } else if name == c("HawkControlsIsOn") || name == c("HawkControlsIsOff") {
+            return Outcome::Done(b.hawk_controls == (name == c("HawkControlsIsOn")));
         } else if name == c("IsCareerMode") || name == c("GoalManager_GoalExists") {
             // The levels are played as the career has them (their set-up
             // scripts leave things as the goals won say), with all their

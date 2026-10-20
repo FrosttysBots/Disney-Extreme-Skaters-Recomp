@@ -74,6 +74,26 @@ fn real_skater_on_the_hub() {
         .air_trick(skate::Button::Grab, Some(skate::Dir::Left))
         .unwrap();
     assert_eq!(book.tricks[grab_left].name, "Well Howdy There");
+    // The simplified controls: either button does the direction's trick
+    // (down the down flip, left the left grab).
+    let simple =
+        skate::TrickBook::with_controls(&program, "jessie", &Stats::of(&program, "jessie"), true);
+    for button in [skate::Button::Flip, skate::Button::Grab] {
+        let name = |dir| {
+            simple
+                .air_trick(button, dir)
+                .map(|i| simple.tricks[i].name.clone())
+        };
+        assert_eq!(
+            name(Some(skate::Dir::Down)).as_deref(),
+            Some("Roll'Em Roll'Em Roll'Em")
+        );
+        assert_eq!(
+            name(Some(skate::Dir::Left)).as_deref(),
+            Some("Well Howdy There")
+        );
+        assert!(name(None).is_some());
+    }
 
     let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
     let nodes = LevelNodes::from_bytes(files.nodes.as_ref().unwrap()).unwrap();
