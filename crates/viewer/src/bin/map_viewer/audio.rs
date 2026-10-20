@@ -293,6 +293,18 @@ impl Audio {
         }
     }
 
+    /// Pauses the music and the voice line playing, or goes on with them
+    /// (the game's pause menu).
+    pub fn pause_music(&mut self, paused: bool) {
+        for player in [&self.music, &self.voice].into_iter().flatten() {
+            if paused {
+                player.pause();
+            } else {
+                player.play();
+            }
+        }
+    }
+
     /// Silences the loops and the music (skating stopped).
     pub fn stop(&mut self) {
         self.roll = None;

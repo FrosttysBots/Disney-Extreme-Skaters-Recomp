@@ -4574,6 +4574,10 @@ impl<'a> App<'a> {
             let paused = self.model.character.paused;
             if let Some(screen) = &mut self.screen {
                 screen.screen.destroy_id("pause_menu");
+                // (Whichever way it's left, the music goes on.)
+                if !paused {
+                    screen.screen.music_paused = Some(false);
+                }
                 if paused && self.level.is_some() {
                     screen
                         .screen
@@ -5257,6 +5261,12 @@ impl<'a> App<'a> {
         // Movies over the whole screen (the Options' Movies).
         for movie in std::mem::take(&mut screen.screen.movies) {
             self.movie_queue.push_back(movie);
+        }
+        // Paused with the game (its pause menu), and on again.
+        if let Some(paused) = screen.screen.music_paused.take() {
+            if let Some(audio) = &mut self.audio {
+                audio.pause_music(paused);
+            }
         }
         // The song they ask for.
         if let Some(track) = screen.screen.music.take() {

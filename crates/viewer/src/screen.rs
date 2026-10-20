@@ -271,6 +271,9 @@ pub struct Screen {
     /// "music\Jessie"`: the skater select's character theme), or none
     /// (`StopMusic`), when they've asked since the viewer last looked.
     pub music: Option<Option<String>>,
+    /// The music and streams paused or going on again (`PauseMusic 1`,
+    /// `PauseStream 0`: the pause menu's), for whoever plays them.
+    pub music_paused: Option<bool>,
     /// A movie asked for on the level's screen (`playmovie "movies\x"
     /// mesh = moviescreen loop`: the skater select's character clip), by
     /// its file's name and whether it loops; or none (`StopMovie`).
@@ -330,6 +333,7 @@ impl Screen {
             rumble: true,
             vibrations: Vec::new(),
             music: None,
+            music_paused: None,
             screen_movie: None,
             camera: None,
             movies: Vec::new(),
@@ -1993,6 +1997,27 @@ impl Host for Ui<'_> {
             }
         } else if name == c("StopMovie") {
             s.screen_movie = Some(None);
+        } else if name == c("PauseMusic") || name == c("PauseStream") {
+            let on = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(n)) => Some(*n != 0),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            s.music_paused = Some(on.unwrap_or(true));
+        } else if name == c("LocalSkaterExists") {
+            return Outcome::Done(true);
+        } else if [
+            "InNetGame",
+            "InSplitScreenGame",
+            "InMultiPlayerGame",
+            "RunningReplay",
+        ]
+        .iter()
+        .any(|n| name == c(n))
+        {
+            return Outcome::Done(false);
         } else if name == c("StopMusic") || name == c("ClearMusicTrackList") {
             s.music = Some(None);
         } else if name == c("VibrateController") {
