@@ -2169,10 +2169,21 @@ impl Host for Ui<'_> {
             // The character's profile (its name, stats...), its three
             // special tricks assigned as the career gives them (lip,
             // manual, air: `goal_get_special_trick_display_text`).
-            let Some(Value::Struct(profile)) = s
-                .character
-                .as_deref()
-                .and_then(|id| skate::constants::profile(self.program, id))
+            // (On a kid in the Skate Shop's skater select, `disney_skater`
+            // up to `LAST_CAK`, the profile asked about is the created
+            // skater's, as the game has it.)
+            let int = |name: &str| self.program.value(c(name)).and_then(Value::as_int);
+            let on_kid = matches!(
+                (int("disney_skater"), int("LAST_CAK")),
+                (Some(i), Some(last)) if (0..=last).contains(&i)
+            ) && s.level == Some(c("load_skateshop"));
+            let id = if on_kid {
+                Some("kid")
+            } else {
+                s.character.as_deref()
+            };
+            let Some(Value::Struct(profile)) =
+                id.and_then(|id| skate::constants::profile(self.program, id))
             else {
                 return Outcome::Done(false);
             };
