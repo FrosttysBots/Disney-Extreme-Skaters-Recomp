@@ -1952,7 +1952,7 @@ impl Skater {
         }
         // Not with the feet at or below a floor there (coming down onto it
         // beside a wall that goes on below: a landing, not a wallride).
-        let feet = hit.point + n - Vec3::Y * p.forward_collision_height;
+        let feet = off_wall(hit.point, n, p.forward_collision_height);
         if world
             .ray(hit.point + n, feet - Vec3::Y)
             .is_some_and(|floor| !is_wall(&floor, p))
@@ -1962,7 +1962,7 @@ impl Skater {
         let left = Vec3::new(-n.z, 0.0, n.x).dot(self.velocity) < 0.0;
         self.wall = Some(WallRide { normal: n, left });
         self.since_wallride = 0.0;
-        self.position = hit.point + n - Vec3::Y * p.forward_collision_height;
+        self.position = feet;
         self.velocity -= n * self.velocity.dot(n);
         self.trick = None;
         self.manual = false;
@@ -2040,11 +2040,17 @@ impl Skater {
                 return;
             }
         }
-        // Ground just below: off, and the air step lands on it.
+        // Ground just below: off, and the air step lands on it (from just
+        // above it, so the step down meets it even at the wall's foot).
         let below = world
-            .ray(target + Vec3::Y * p.ground_snap_up, target - Vec3::Y * 10.0)
-            .is_some_and(|hit| !is_wall(&hit, p) && hit.normal.y > 0.5);
-        if below {
+            .ray_past(
+                from.with_y(from.y.max(target.y)) + Vec3::Y * p.ground_snap_up,
+                target - Vec3::Y * 10.0,
+                |hit| !is_wall(hit, p) && hit.normal.y > 0.5,
+            )
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.5);
+        if let Some(ground) = below {
+            self.position = ground.point + ground.normal;
             self.leave_wall(self.velocity);
             return;
         }
@@ -2060,7 +2066,20 @@ impl Skater {
             return;
         };
         wall.normal = hit.normal;
-        target = hit.point + hit.normal - lift;
+        target = off_wall(hit.point, hit.normal, p.forward_collision_height);
+        // (Or there, held off the wall, at the edge of a floor.)
+        if let Some(ground) = world
+            .ray_past(
+                target + Vec3::Y * p.ground_snap_up,
+                target - Vec3::Y * 10.0,
+                |hit| !is_wall(hit, p) && hit.normal.y > 0.5,
+            )
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.5)
+        {
+            self.position = ground.point + ground.normal;
+            self.leave_wall(self.velocity);
+            return;
+        }
         self.velocity -= hit.normal * self.velocity.dot(hit.normal);
         self.position = target;
         self.wall = Some(wall);
@@ -2453,6 +2472,14 @@ impl Skater {
                     if out < 6.0 {
                         target += normal * (6.0 - out);
                     }
+                    // (A wall leaning back, a bank too steep to ride up,
+                    // would still have the feet inside it.)
+                    if hit.normal.y > 0.0 {
+                        let feet = (target - hit.point).dot(hit.normal);
+                        if feet < 1.0 {
+                            target += hit.normal * (1.0 - feet);
+                        }
+                    }
                 }
             }
         }
@@ -2840,6 +2867,14 @@ impl Skater {
                     let out = (target + lift - hit.point).dot(normal);
                     if out < p.min_distance_to_wall {
                         target += normal * (p.min_distance_to_wall - out);
+                    }
+                    // A wall leaning back (a bank too steep to ride up)
+                    // would still have the feet inside it.
+                    if hit.normal.y > 0.0 {
+                        let feet = (target - hit.point).dot(hit.normal);
+                        if feet < 1.0 {
+                            target += hit.normal * (1.0 - feet);
+                        }
                     }
                 }
             }
@@ -3494,5 +3529,18 @@ mod tests {
                 .iter()
                 .any(|t| t.name == "Wallie")
         );
+    }
+}
+
+/// Where the skater rides a wall it touched at knee height (`hit`, `lift`
+/// above the feet): a unit off it, the feet too on a wall that leans back
+/// (a bank's slope would otherwise have them inside it).
+fn off_wall(hit: Vec3, normal: Vec3, lift: f32) -> Vec3 {
+    let at = hit + normal - Vec3::Y * lift;
+    let off = (at - hit).dot(normal);
+    if off < 1.0 {
+        at + normal * (1.0 - off)
+    } else {
+        at
     }
 }
