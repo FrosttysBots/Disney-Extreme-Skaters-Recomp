@@ -384,6 +384,7 @@ fn pedestrian(node: &ObjectNode, files: &LevelFiles, sets: &AnimationSets) -> Re
         textures: texture_path(&node.model).and_then(|t| files.models.get(&t).cloned()),
         board: None,
         parts: Vec::new(),
+        extra_textures: Vec::new(),
         skeleton: skeleton.clone(),
         key_tables,
         animations,

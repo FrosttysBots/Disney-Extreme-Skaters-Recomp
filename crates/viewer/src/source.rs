@@ -88,6 +88,9 @@ pub struct CharacterFiles {
     /// More of the model, skinned to the same skeleton: the created
     /// kid's clothes and hair.
     pub parts: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    /// Textures (`.img.ngc` files) for checksums the model's own texture
+    /// file hasn't: the created girl's head.
+    pub extra_textures: Vec<(u32, Vec<u8>)>,
     pub skeleton: Vec<u8>,
     /// `standardkeyq.bin` and `standardkeyt.bin`.
     pub key_tables: (Vec<u8>, Vec<u8>),
@@ -453,6 +456,14 @@ impl GameData {
                 id,
             })
             .collect();
+        // The created kid as a girl too (the skater select's first kid),
+        // on the kid's animations.
+        if characters.iter().any(|c| c.id.eq_ignore_ascii_case("kid")) {
+            characters.push(LevelInfo {
+                title: "Kid (Girl)".into(),
+                id: "kid_girl".into(),
+            });
+        }
         characters.sort_by(|a, b| a.title.cmp(&b.title));
         characters
     }
@@ -747,6 +758,8 @@ impl GameData {
     }
 
     pub fn load_character(&mut self, id: &str) -> Result<CharacterFiles> {
+        let girl = id.eq_ignore_ascii_case("kid_girl");
+        let id = if girl { "kid" } else { id };
         let name = id.to_ascii_lowercase();
         let data = self
             .read_archive(&format!("anims_{id}.prg"))?
@@ -755,6 +768,7 @@ impl GameData {
             Archive::parse(&data).with_context(|| format!("could not read anims_{id}.prg"))?;
         let file = |suffix: &str| entry(&archive, &|p| p.ends_with(&format!("/{name}{suffix}")));
         let mut parts = Vec::new();
+        let mut extra_textures = Vec::new();
         let (skin, textures, board) = if name == "kid" {
             // The kid as the career starts it (`appearance_kid`: the boy's
             // body, `KidBody`, on the kid's board), from the created
@@ -764,29 +778,58 @@ impl GameData {
                 .context("skaterparts.prg is missing")?;
             let kit = Archive::parse(&kit).context("could not read skaterparts.prg")?;
             let part = |path: &str| entry(&kit, &|p| p.eq_ignore_ascii_case(path));
-            let skin =
-                part("models/boy/boy.skin.ngc")?.context("skaterparts.prg has no boy.skin")?;
-            let board = match part("models/boy/boyboard.skin.ngc")? {
-                Some(board) => Some((board, part("models/boy/boyboard.tex.ngc")?)),
+            let body = if girl { "girl/girl" } else { "boy/boy" };
+            let skin = part(&format!("models/{body}.skin.ngc"))?
+                .with_context(|| format!("skaterparts.prg has no {body}.skin"))?;
+            let deck = if girl {
+                "girl/girlboard"
+            } else {
+                "boy/boyboard"
+            };
+            let board = match part(&format!("models/{deck}.skin.ngc"))? {
+                Some(board) => Some((board, part(&format!("models/{deck}.tex.ngc"))?)),
                 None => None,
             };
             // Dressed as the game's created skater starts (its default
-            // boy, CASMENU.q): Buzzcut, Shortsleeve 1, Cargo Pants 1,
-            // Tennis Shoes 1, Skate Helmet 1 and Elbow Pads 1, the meshes
-            // the Skate Shop's part lists give them.
-            for piece in [
-                "hair_boy_1",
-                "shirt_boy_1",
-                "pants_boy_2",
-                "shoe_8",
-                "hat_12",
-                "pads_elbows",
-            ] {
-                if let Some(mesh) = part(&format!("models/boy/{piece}.skin.ngc"))? {
-                    parts.push((mesh, part(&format!("models/boy/{piece}.tex.ngc"))?));
+            // boy and girl, CASMENU.q), the meshes the Skate Shop's part
+            // lists give them. The boy: Buzzcut, Shortsleeve 1, Cargo
+            // Pants 1, Tennis Shoes 1, Skate Helmet 1, Elbow Pads 1. The
+            // girl: Pigtails 1, Shortsleeve 1, Shorts 3, Flipflops 1,
+            // Skate Helmet 2, Elbow and Knee Pads 1.
+            let pieces: &[&str] = if girl {
+                &[
+                    "girl/hair_girl_2",
+                    "girl/shirt_girl_1",
+                    "girl/pants_girl_1",
+                    "boy/shoe_4",
+                    "boy/hat_12",
+                    "boy/pads_elbows",
+                    "boy/pads_knees",
+                ]
+            } else {
+                &[
+                    "boy/hair_boy_1",
+                    "boy/shirt_boy_1",
+                    "boy/pants_boy_2",
+                    "boy/shoe_8",
+                    "boy/hat_12",
+                    "boy/pads_elbows",
+                ]
+            };
+            // The girl's head isn't in her girl.tex (its `girl_a1.png`,
+            // 6563d500, is always swapped for the skin chosen): Skin 4's,
+            // the default girl's (GirlBody3: `textures/girl/girl_a4`).
+            if girl {
+                if let Some(head) = part("textures/girl/girl_a4.img.ngc")? {
+                    extra_textures.push((0x6563_d500, head));
                 }
             }
-            (skin, part("models/boy/boy.tex.ngc")?, board)
+            for piece in pieces {
+                if let Some(mesh) = part(&format!("models/{piece}.skin.ngc"))? {
+                    parts.push((mesh, part(&format!("models/{piece}.tex.ngc"))?));
+                }
+            }
+            (skin, part(&format!("models/{body}.tex.ngc"))?, board)
         } else {
             let skin =
                 file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;
@@ -827,6 +870,7 @@ impl GameData {
             textures,
             board,
             parts,
+            extra_textures,
             skeleton,
             key_tables,
             animations,

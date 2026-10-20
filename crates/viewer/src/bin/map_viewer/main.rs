@@ -5037,8 +5037,14 @@ impl<'a> App<'a> {
         }
         // Not set yet: the character the viewer has.
         if now < 0 || name_of(now).is_none() {
-            let index =
-                (0..skaters.len() as i32).find(|&i| name_of(i).is_some() && name_of(i) == current);
+            // (The girl kid is the first kid, the boy the one after.)
+            let index = if current == Some(c("kid_girl")) {
+                Some(0)
+            } else if current == Some(c("kid")) {
+                Some(1)
+            } else {
+                (0..skaters.len() as i32).find(|&i| name_of(i).is_some() && name_of(i) == current)
+            };
             if let Some(index) = index {
                 program.change(c("disney_skater"), qb::Value::Integer(index));
                 self.shop_skater = Some(index);
@@ -5049,7 +5055,12 @@ impl<'a> App<'a> {
             return;
         }
         self.shop_skater = Some(now);
-        let wanted = name_of(now).filter(|n| Some(*n) != current).and_then(|n| {
+        // (The first kid's the girl: its theme's CAS_Girl.)
+        let name = match name_of(now) {
+            Some(n) if n == c("kid") && now == 0 => Some(c("kid_girl")),
+            n => n,
+        };
+        let wanted = name.filter(|n| Some(*n) != current).and_then(|n| {
             self.model
                 .character
                 .characters

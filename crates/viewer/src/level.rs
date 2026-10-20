@@ -212,6 +212,26 @@ impl Level {
         textures: Option<&[u8]>,
         keep: impl Fn(u32) -> bool,
     ) -> Result<Level> {
+        Self::build(scene, textures, &[], keep)
+    }
+
+    /// Like [`from_bytes`](Self::from_bytes), with textures from elsewhere
+    /// for any the texture file hasn't (by checksum): the created girl's
+    /// head, which her `girl.tex` leaves to the skin chosen.
+    pub fn from_bytes_with_extra(
+        scene: &[u8],
+        textures: Option<&[u8]>,
+        extra: &[TextureData],
+    ) -> Result<Level> {
+        Self::build(scene, textures, extra, |_| true)
+    }
+
+    fn build(
+        scene: &[u8],
+        textures: Option<&[u8]>,
+        extra: &[TextureData],
+        keep: impl Fn(u32) -> bool,
+    ) -> Result<Level> {
         let scene = Scene::parse(scene).context("could not parse the scene")?;
         let dictionary = match textures {
             Some(data) => {
@@ -315,6 +335,7 @@ impl Level {
         let mut textures = TextureCache {
             dictionary: dictionary.as_ref(),
             slots: HashMap::new(),
+            extra,
         };
         for (material_checksum, triangles) in by_material {
             let material = scene.material(material_checksum);
@@ -479,6 +500,8 @@ fn pass_draw_untextured() -> PassDraw {
 struct TextureCache<'a> {
     dictionary: Option<&'a TexDictionary<'a>>,
     slots: HashMap<u32, usize>,
+    /// Textures to use where the dictionary has none of that checksum.
+    extra: &'a [TextureData],
 }
 
 impl TextureCache<'_> {
@@ -489,7 +512,11 @@ impl TextureCache<'_> {
         if let Some(&slot) = self.slots.get(&checksum) {
             return slot;
         }
-        let slot = match self.dictionary.and_then(|d| decode_texture(d, checksum)) {
+        let found = self
+            .dictionary
+            .and_then(|d| decode_texture(d, checksum))
+            .or_else(|| self.extra.iter().find(|t| t.checksum == checksum).cloned());
+        let slot = match found {
             Some(data) => {
                 level.textures.push(data);
                 level.textures.len() - 1

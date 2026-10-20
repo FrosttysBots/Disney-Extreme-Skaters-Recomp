@@ -27,8 +27,8 @@ fn real_characters() {
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
     let mut data = GameData::open(Path::new(&path)).unwrap();
     let characters = data.characters();
-    // The twelve Disney skaters and the created kid.
-    assert_eq!(characters.len(), 13);
+    // The twelve Disney skaters and the created kid, boy and girl.
+    assert_eq!(characters.len(), 14);
 
     let mut poses = 0;
     for info in &characters {

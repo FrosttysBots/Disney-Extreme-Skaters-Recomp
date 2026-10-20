@@ -23,7 +23,7 @@ use glam::{Mat4, Quat, Vec3};
 use ngc_anim::{Animation, KeyTables, Skeleton, pose};
 use ngc_model::Scene;
 
-use crate::level::{Level, Vertex};
+use crate::level::{Level, TextureData, Vertex};
 use crate::source::CharacterFiles;
 
 pub struct Character {
@@ -65,7 +65,22 @@ impl Character {
             .map(|(_, a)| pose::model_space(&skeleton, &a.sample(0.0)))
             .context("the character has no default animation (its rest pose)")?;
 
-        let mut mesh = Level::from_bytes(&files.skin, files.textures.as_deref())
+        // (Textures from elsewhere for any its own file hasn't.)
+        let extra: Vec<TextureData> = files
+            .extra_textures
+            .iter()
+            .filter_map(|(checksum, bytes)| {
+                let file = ngc_texture::img::ImgFile::parse(bytes).ok()?;
+                let image = file.decode().ok()?.cropped(file.width, file.height);
+                Some(TextureData {
+                    checksum: *checksum,
+                    width: image.width,
+                    height: image.height,
+                    levels: vec![image.rgba],
+                })
+            })
+            .collect();
+        let mut mesh = Level::from_bytes_with_extra(&files.skin, files.textures.as_deref(), &extra)
             .context("could not load the model")?;
         let mut influences = influences(&files.skin)?;
         if let Some((board, textures)) = &files.board {

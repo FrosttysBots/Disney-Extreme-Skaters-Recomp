@@ -60,7 +60,13 @@ impl Stats {
 
 /// The skater profile whose `Name` is `character` (in `disneytricks.q`):
 /// stats, trick mapping and more.
+/// (The created kid as a girl, `kid_girl`, is the kid's profile.)
 pub fn profile<'a>(program: &'a Program, character: &str) -> Option<&'a Value> {
+    let character = if character == "kid_girl" {
+        "kid"
+    } else {
+        character
+    };
     profile_named(program, checksum(character))
 }
 
