@@ -387,6 +387,9 @@ pub struct Skater {
     /// (`Squirgle`) does what the direction held asks for, and landing in
     /// a trick loses the combo rather than bailing (`Land`).
     pub simplified: bool,
+    /// The speed limits overridden for a while (the scripts'
+    /// `OverrideLimits`, see [`Limits`]): skitching sets them every frame.
+    limits: Option<Limits>,
     /// Sound moments since they were last taken (see [`SkateSound`]).
     pub sounds: Vec<SkateSound>,
     /// The terrain of the ground last stood on (`TERRAIN_...`).
@@ -543,6 +546,7 @@ impl Skater {
             spawns: Vec::new(),
             trace: false,
             simplified: false,
+            limits: None,
             sounds: Vec::new(),
             terrain: 0,
             teleports: HashMap::new(),
@@ -1128,18 +1132,26 @@ impl Skater {
         } else {
             input
         };
+        // The scripts' overridden limits run out (0x800F48BC).
+        if let Some(l) = &mut self.limits {
+            l.time -= STEP;
+            if l.time <= 0.0 {
+                self.limits = None;
+            }
+        }
+        let limits = self.limits.unwrap_or(Limits::of(p));
         // The speed limits run every frame whatever the skater is doing
         // (main.dol 0x8010B120 calls 0x800F4834 before the ground, air
         // and rail updates), so chaining grinds and jumps can't build
         // speed past `max_max_speed`. The ground step applies them itself.
         if let Some(grind) = self.grind.as_mut() {
             let velocity = self.velocity.normalize_or_zero() * grind.speed;
-            let limited = limit_speed(velocity, p);
+            let limited = limit_speed(velocity, limits);
             if velocity.length() > 0.0 {
                 grind.speed *= limited.length() / velocity.length();
             }
         } else if !self.on_ground {
-            self.velocity = limit_speed(self.velocity, p);
+            self.velocity = limit_speed(self.velocity, limits);
         }
         let before = self.position;
         if self.skitch.is_some() {
@@ -1314,6 +1326,16 @@ impl Skater {
     /// meter lets go (`SkitchOut`, no bail), and an ollie jumps off with
     /// the car's speed.
     fn skitch_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // `Skitch` (GROUNDTRICKS.q), every frame: `overridelimits max =
+        // 10000 Friction = 0 time = 5 Gravity = 0`, so it can go as fast as
+        // what it's holding, and flies on a while after letting go.
+        self.limits = Some(Limits {
+            time: 5.0,
+            max: 10000.0,
+            max_max: 10000.0,
+            friction: 0.0,
+            gravity: 0.0,
+        });
         let Some(car) = self.skitch.and_then(|i| world.vehicles.get(i)).copied() else {
             self.let_go_skitch(Vec3::ZERO);
             return;
@@ -1353,11 +1375,10 @@ impl Skater {
         // Behind the car, on the ground there.
         let spot = car.position - car.forward * (car.half_length + p.skitch_offset);
         let ground = world
-            .ray(spot + Vec3::Y * 50.0, spot - Vec3::Y * 150.0)
+            .ray(spot + Vec3::Y * 50.0, spot - Vec3::Y * 400.0)
             .filter(|hit| !is_wall(hit, p));
-        // No ground there (off the end of a ramp: Zurg's UFO launch):
-        // off into the air at the car's speed, the way the slope was
-        // going.
+        // No ground there (off the end of a ramp): off into the air at the
+        // car's speed, the way the slope was going.
         let Some(hit) = ground else {
             if self.trace {
                 eprintln!(
@@ -1388,6 +1409,12 @@ impl Skater {
     fn let_go_skitch(&mut self, velocity: Vec3) {
         self.skitch = None;
         self.velocity = velocity;
+        // (Let go of in the air: flying on as it was going.)
+        if !self.on_ground {
+            self.air_time = 0.0;
+            self.set_action(Action::Air);
+            return;
+        }
         self.end_combo(true);
         self.set_action(Action::Rolling);
     }
@@ -2375,7 +2402,7 @@ impl Skater {
         };
         velocity = forward * velocity.length() * sign;
         // Speed limits, on the horizontal speed (0x800F4834).
-        velocity = limit_speed(velocity, p);
+        velocity = limit_speed(velocity, self.limits.unwrap_or(Limits::of(p)));
         let mut speed = velocity.dot(forward);
 
         // Jump when letting go of a crouch.
@@ -2830,6 +2857,11 @@ impl Skater {
         // As the game does (0x800FC7F8): gravity, divided by the hang-time
         // stat, and the exact step of a thrown body.
         let gravity = p.air_gravity / p.air_hang.max(0.01);
+        // (Overridden limits: their gravity while rising, 0x800FB4F0.)
+        let gravity = match self.limits {
+            Some(l) if self.velocity.y > 0.0 => l.gravity,
+            _ => gravity,
+        };
         let from = self.position;
         let mut target = from + self.velocity * STEP + Vec3::Y * (0.5 * gravity * STEP * STEP);
         self.velocity.y += gravity * STEP;
@@ -2853,6 +2885,12 @@ impl Skater {
                     return;
                 }
                 if !ground && !ramp {
+                    if self.trace {
+                        eprintln!(
+                            "air bounce off {:#010x} at {:?} (normal {:?})",
+                            hit.object, hit.point, hit.normal
+                        );
+                    }
                     if self.velocity.with_y(0.0).length() > p.wall_bounce_dont_flail_speed {
                         self.sounds.push(SkateSound::Bonk {
                             terrain: hit.terrain,
@@ -3046,6 +3084,8 @@ impl Skater {
     /// Standing at rest on the ground at `position` (or under it), facing
     /// `heading`, out of any trick and with the combo lost.
     pub fn place(&mut self, position: Vec3, heading: f32, p: &Physics, world: &World) {
+        // (`SkaterInit`: `overridelimits ... time = 0`, back to its own.)
+        self.limits = None;
         let ground = world
             .ray(position + Vec3::Y * 100.0, position - Vec3::Y * 1000.0)
             .filter(|hit| !is_wall(hit, p));
@@ -3193,16 +3233,44 @@ fn drag(v: Vec3, k: f32) -> Vec3 {
     v - v * v.length() * k * 60.0 * STEP
 }
 
-/// The game's speed limits on horizontal speed: a hard cap at
-/// `max_max_speed`, and heavy drag above `max_speed` (0x800F4834).
-fn limit_speed(v: Vec3, p: &Physics) -> Vec3 {
+/// The speed limits (0x800F4834), as the physics has them or as the
+/// scripts override them for a while (`OverrideLimits max = .. max_max =
+/// .. friction = .. time = .. gravity = ..`, 0x80118BE8: `max_max` as
+/// `max` unless given).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    /// Seconds left (the physics' own: forever).
+    pub time: f32,
+    pub max: f32,
+    pub max_max: f32,
+    /// The drag above `max`.
+    pub friction: f32,
+    /// Gravity in the air while rising.
+    pub gravity: f32,
+}
+
+impl Limits {
+    fn of(p: &Physics) -> Self {
+        Limits {
+            time: f32::INFINITY,
+            max: p.max_speed,
+            max_max: p.max_max_speed,
+            friction: p.heavy_air_friction,
+            gravity: p.air_gravity,
+        }
+    }
+}
+
+/// The game's speed limits on horizontal speed: a hard cap at `max_max`,
+/// and heavy drag above `max` (0x800F4834).
+fn limit_speed(v: Vec3, l: Limits) -> Vec3 {
     let mut flat = Vec3::new(v.x, 0.0, v.z);
     let speed = flat.length();
-    if speed > p.max_max_speed {
-        flat *= p.max_max_speed / speed;
+    if speed > l.max_max {
+        flat *= l.max_max / speed;
     }
-    if flat.length() > p.max_speed {
-        flat = drag(flat, p.heavy_air_friction);
+    if flat.length() > l.max {
+        flat = drag(flat, l.friction);
     }
     Vec3::new(flat.x, v.y, flat.z)
 }
@@ -3240,10 +3308,10 @@ mod tests {
     #[test]
     fn speed_is_capped_horizontally_only() {
         let p = physics();
-        let v = limit_speed(Vec3::new(3000.0, -500.0, 0.0), &p);
+        let v = limit_speed(Vec3::new(3000.0, -500.0, 0.0), Limits::of(&p));
         assert!(v.x <= p.max_max_speed);
         assert_eq!(v.y, -500.0);
-        let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
+        let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), Limits::of(&p));
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
     }
 

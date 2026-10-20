@@ -123,6 +123,11 @@ struct Args {
     /// without it W is held throughout
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
+    /// For --skate: put the skater somewhere at a time, as
+    /// "seconds@x,y,z,heading" (heading in degrees, 0 along +Z); can be
+    /// given more than once (a goal that starts it elsewhere, say)
+    #[arg(long, requires = "skate")]
+    skate_place: Vec<String>,
     /// For --skate: start at x,y,z facing a heading in degrees (0 along +Z,
     /// 90 along +X) instead of the level's start
     #[arg(long, requires = "screenshot", allow_hyphen_values = true)]
@@ -7192,9 +7197,35 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             if script.is_none() {
                 app.keys.insert(KeyCode::KeyW);
             }
+            let places = args
+                .skate_place
+                .iter()
+                .map(|p| -> Result<(f32, Vec3, f32)> {
+                    let (at, spot) = p
+                        .split_once('@')
+                        .context("--skate-place is seconds@x,y,z,heading")?;
+                    let v: Vec<f32> = spot
+                        .split(',')
+                        .map(|x| x.trim().parse())
+                        .collect::<Result<_, _>>()
+                        .context("--skate-place is seconds@x,y,z,heading")?;
+                    anyhow::ensure!(v.len() == 4, "--skate-place is seconds@x,y,z,heading");
+                    Ok((at.parse()?, Vec3::new(v[0], v[1], v[2]), v[3].to_radians()))
+                })
+                .collect::<Result<Vec<_>>>()?;
             let steps = (args.skate * 60.0).round() as usize;
             for step in 0..steps {
                 let now = step as f32 / 60.0;
+                for &(at, spot, heading) in &places {
+                    if (at - now).abs() < 0.5 / 60.0 {
+                        if let Some((skater, ..)) = &mut app.skating {
+                            skater.position = spot;
+                            skater.heading = heading;
+                            skater.velocity = Vec3::ZERO;
+                            skater.on_ground = false;
+                        }
+                    }
+                }
                 for &(at, key, down) in script.iter().flatten() {
                     if (at - now).abs() < 0.5 / 60.0 {
                         if key == KeyCode::Enter {
