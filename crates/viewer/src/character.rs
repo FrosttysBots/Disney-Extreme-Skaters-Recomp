@@ -47,6 +47,10 @@ pub struct Character {
     /// How much bigger or smaller than its model it's shown (its
     /// appearance's `scale`: Jessie 1.12, the kid 0.85; 1 for most).
     pub scale: f32,
+    /// Bones scaled, and what hangs off them (the created kid's body
+    /// shape: `cak_scale_info`'s `head = (0.9, 0.9, 0.9)`), by bone; empty
+    /// for none.
+    pub bone_scales: Vec<Vec3>,
 }
 
 impl Character {
@@ -124,6 +128,7 @@ impl Character {
         Ok(Self {
             blink: Blink::find(&mesh),
             scale: 1.0,
+            bone_scales: Vec::new(),
             partner,
             mesh,
             influences,
@@ -131,6 +136,25 @@ impl Character {
             rest,
             animations,
         })
+    }
+
+    /// Scales the bones named in `shape` (a body shape: `head = (0.9, 0.9,
+    /// 0.9)`, by the bones' names), and what hangs off them.
+    pub fn set_body_shape(&mut self, shape: &[(u32, Vec3)]) {
+        self.bone_scales = self
+            .skeleton
+            .bones
+            .iter()
+            .map(|b| {
+                shape
+                    .iter()
+                    .find(|(name, _)| *name == b.name)
+                    .map_or(Vec3::ONE, |&(_, s)| s)
+            })
+            .collect();
+        if self.bone_scales.iter().all(|s| *s == Vec3::ONE) {
+            self.bone_scales.clear();
+        }
     }
 
     pub fn animation(&self, name: &str) -> Option<usize> {
@@ -168,7 +192,7 @@ impl Character {
         placement: Mat4,
         mirrored: bool,
     ) -> Vec<Vertex> {
-        let posed = pose::model_space(&self.skeleton, local);
+        let posed = pose::model_space_scaled(&self.skeleton, local, &self.bone_scales);
         let skin = pose::skinning(&self.rest, &posed);
         let skin = if mirrored {
             let flip = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));

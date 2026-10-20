@@ -1959,6 +1959,8 @@ struct App<'a> {
     kid_kept: HashMap<bool, Vec<KidWorn>>,
     /// Dressed by the menus just now (not the panel: not kept).
     kid_from_menus: bool,
+    /// The kid's body shape (bones scaled by name), as the shop makes it.
+    kid_shape: Vec<(u32, Vec3)>,
     pad_back: bool,
     /// What a teleporter created or killed on the way, to apply.
     pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
@@ -2222,6 +2224,7 @@ impl<'a> App<'a> {
             kid_shown: None,
             kid_kept: HashMap::new(),
             kid_from_menus: false,
+            kid_shape: Vec::new(),
             pad_back: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
@@ -4582,6 +4585,10 @@ impl<'a> App<'a> {
             "kid_girl" => "girl".to_string(),
             id => id.to_string(),
         };
+        // (And the kid's body shape, its head smaller.)
+        if name == "kid" || name == "girl" {
+            character.set_body_shape(&self.kid_shape);
+        }
         character.scale = level
             .behaviour
             .program()
@@ -6118,8 +6125,12 @@ impl<'a> App<'a> {
         if let Some(girl) = kid {
             let sex = if girl { "f" } else { "m" };
             if !self.wardrobes.contains_key(&girl) {
-                match data.kid_wardrobe(girl) {
-                    Ok(mut slots) => {
+                match data.kid_wardrobe_and_shape(girl) {
+                    Ok((mut slots, shape)) => {
+                        self.kid_shape = shape
+                            .into_iter()
+                            .map(|(bone, s)| (bone, Vec3::from(s)))
+                            .collect();
                         for slot in &mut slots {
                             let key = format!("outfit.{sex}.{}", slot.label);
                             let saved = |k: &str| self.settings.best.get(&format!("{key}.{k}"));

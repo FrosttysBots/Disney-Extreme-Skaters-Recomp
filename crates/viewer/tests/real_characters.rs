@@ -106,7 +106,19 @@ fn real_kid_wardrobe() {
         assert!(tinted.part_tints.contains(&Some([128, 0, 0])));
         Character::from_files(&tinted).unwrap();
         let files = data.load_kid(girl, &outfit).unwrap();
-        Character::from_files(&files).unwrap();
+        let mut kid = Character::from_files(&files).unwrap();
+        // Its body shape (the head 0.9), on its skeleton's bones.
+        let (_, shape) = data.kid_wardrobe_and_shape(girl).unwrap();
+        assert!(shape.contains(&(qb::checksum("head"), [0.9, 0.9, 0.9])));
+        let shape: Vec<_> = shape
+            .into_iter()
+            .map(|(b, s)| (b, glam::Vec3::from(s)))
+            .collect();
+        kid.set_body_shape(&shape);
+        assert!(
+            !kid.bone_scales.is_empty(),
+            "no bone named in the body shape"
+        );
         assert!(
             files.parts.len() >= 5,
             "{girl}: {} parts",

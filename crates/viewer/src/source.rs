@@ -827,6 +827,16 @@ impl GameData {
     /// the Skate Shop's lists. The skin's choices are the bodies they put on
     /// (`SetPart part = body desc_id = BoyBody1`...).
     pub fn kid_wardrobe(&mut self, girl: bool) -> Result<Vec<KidSlot>> {
+        Ok(self.kid_wardrobe_and_shape(girl)?.0)
+    }
+
+    /// [`GameData::kid_wardrobe`], and the kid's body shape as the Skate
+    /// Shop makes it (`body_shape = cak_scale_info`: its bones scaled by
+    /// name, `head = (0.9, 0.9, 0.9)`; the overall `scale` left out).
+    pub fn kid_wardrobe_and_shape(
+        &mut self,
+        girl: bool,
+    ) -> Result<(Vec<KidSlot>, Vec<(u32, [f32; 3])>)> {
         use qb::{Value, checksum};
         let mut program = qb::vm::Program::new();
         for file in self.global_scripts()? {
@@ -992,7 +1002,19 @@ impl GameData {
                 color,
             });
         }
-        Ok(slots)
+        let shape = match reset
+            .as_ref()
+            .and_then(|r| r.get(checksum("body_shape")))
+            .and_then(Value::as_name)
+            .and_then(|n| program.value(n))
+        {
+            Some(Value::Struct(items)) => items
+                .iter()
+                .filter_map(|(k, v)| Some((k.filter(|k| *k != checksum("scale"))?, v.as_vector()?)))
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok((slots, shape))
     }
 
     /// The created kid dressed in `outfit` (a choice for each slot of
