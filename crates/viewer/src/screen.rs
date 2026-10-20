@@ -1706,6 +1706,41 @@ impl Host for Ui<'_> {
                     e.tags.push((*k, v.clone()));
                 }
             }
+        } else if name == c("TextElementConcatenate")
+            || name == c("TextElementBackspace")
+            || name == c("GetTextElementLength")
+            || name == c("GetTextElementString")
+        {
+            // A text element typed into (the game's on-screen keyboard):
+            // a letter added (`TextElementConcatenate id = x "a"`), the
+            // last taken off, how long it is (`length`), what it says
+            // (`string`).
+            let Some(i) = target_of(s) else {
+                return Outcome::Done(false);
+            };
+            let added = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::String(t) | Value::LocalString(t)) => Some(t.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let Some(e) = s.el_mut(i) else {
+                return Outcome::Done(false);
+            };
+            if name == c("TextElementConcatenate") {
+                if let Some(added) = added {
+                    e.text.push_str(&added);
+                }
+            } else if name == c("TextElementBackspace") {
+                e.text.pop();
+            } else if name == c("GetTextElementLength") {
+                let length = e.text.chars().count() as i32;
+                return Outcome::Params(vec![(Some(c("length")), Value::Integer(length))]);
+            } else {
+                return Outcome::Params(vec![(Some(c("string")), Value::String(e.text.clone()))]);
+            }
+            return Outcome::Done(true);
         } else if name == c("GetScreenElementPosition") || name == c("GetScreenElementDims") {
             let Some(i) = target_of(s) else {
                 return Outcome::Done(false);
