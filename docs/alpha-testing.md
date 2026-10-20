@@ -167,9 +167,6 @@ skater is and what it's doing.
   skates in the game's default outfit), Zurg's UFO launch, and two
   players. Every character can be picked, where the career
   unlocks some as goals are won.
-- Scripts that swap a texture (Pizza's arcade screens flickering,
-  a piece of Tarzan's Treehouse cycling five frames) don't: the disc's textures aren't named the
-  way the scripts name them.
 - Wallrides have no animation of their own (the characters on the disc
   have none): the skater leans off the wall instead.
 - Approximations of our own: the camera follows the game's camera
