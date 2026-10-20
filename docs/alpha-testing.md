@@ -159,6 +159,11 @@ skater is and what it's doing.
 - Cheats (the panel's Cheats list, the game's own): Perfect Manual, Rail
   and Skitch, Always Special, Moon Gravity and Slomo (the game's
   Moon_gravity and slomo_speed, both 0.5), Stats 13.
+  The Options' Cheat Codes keyboard takes the game's codes too (hashed as
+  the game does): the movie codes (marin, nugget, savannah), and the
+  PS2's and Xbox's (supercharger, extremepassport, sweetthreads...), as
+  the GameCube's own others aren't known; a code turns its cheat on in
+  the panel as well.
 - Every level, and a few characters (each has its own tricks and stats).
 - Wallrides: jump at a wall alongside it, fast enough, holding Grind (E):
   "FS Wallride" or "BS Wallride", then Wallie or Wallplant off it. The
