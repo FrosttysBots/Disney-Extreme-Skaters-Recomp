@@ -500,7 +500,8 @@ fn pass_draw_untextured() -> PassDraw {
 struct TextureCache<'a> {
     dictionary: Option<&'a TexDictionary<'a>>,
     slots: HashMap<u32, usize>,
-    /// Textures to use where the dictionary has none of that checksum.
+    /// Textures to use in place of the dictionary's of that checksum (or
+    /// where it has none).
     extra: &'a [TextureData],
 }
 
@@ -513,9 +514,11 @@ impl TextureCache<'_> {
             return slot;
         }
         let found = self
-            .dictionary
-            .and_then(|d| decode_texture(d, checksum))
-            .or_else(|| self.extra.iter().find(|t| t.checksum == checksum).cloned());
+            .extra
+            .iter()
+            .find(|t| t.checksum == checksum)
+            .cloned()
+            .or_else(|| self.dictionary.and_then(|d| decode_texture(d, checksum)));
         let slot = match found {
             Some(data) => {
                 level.textures.push(data);

@@ -80,6 +80,26 @@ pub struct LevelFiles {
 }
 
 /// The raw files for one playable character.
+/// A choice for one of the created kid's parts, from the Skate Shop's
+/// lists (`skater_m_hair`, `hat`...): its name as the shop shows it, its
+/// mesh, and the textures it swaps (`replace = "hair_boy_1_a1.png" with =
+/// "textures/boy/hair_boy_1_a2"`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KidPart {
+    pub name: String,
+    pub mesh: Option<String>,
+    pub swaps: Vec<(String, String)>,
+}
+
+/// One of the created kid's parts: its choices and the one picked (the
+/// game's own to start, `appearance_reset_boy` or `_girl`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KidSlot {
+    pub label: &'static str,
+    pub choices: Vec<KidPart>,
+    pub picked: usize,
+}
+
 pub struct CharacterFiles {
     pub skin: Vec<u8>,
     pub textures: Option<Vec<u8>>,
@@ -757,7 +777,136 @@ impl GameData {
         Ok(out)
     }
 
+    /// The created kid's parts (as a boy or a girl) and their choices, from
+    /// the Skate Shop's lists. The skin's choices are the bodies they put on
+    /// (`SetPart part = body desc_id = BoyBody1`...).
+    pub fn kid_wardrobe(&mut self, girl: bool) -> Result<Vec<KidSlot>> {
+        use qb::{Value, checksum};
+        let mut program = qb::vm::Program::new();
+        for file in self.global_scripts()? {
+            let _ = program.add(&file);
+        }
+        for file in self.load_level("SkateShop")?.scripts {
+            let _ = program.add(&file);
+        }
+        let text = |v: &Value| match v {
+            Value::String(s) | Value::LocalString(s) => Some(s.clone()),
+            _ => None,
+        };
+        let id_of = |v: &Value| v.get(checksum("desc_id")).and_then(Value::as_name);
+        let part = |entry: &Value| -> KidPart {
+            let field = |name: &str| entry.get(checksum(name)).and_then(text);
+            let name = entry
+                .get(checksum("frontend_desc"))
+                .and_then(|v| text(v).or_else(|| program.value(v.as_name()?).and_then(text)))
+                .unwrap_or_default();
+            let mut swaps = Vec::new();
+            for n in ["", "1", "2", "3", "4", "5"] {
+                let from = field(&format!("replace{n}"));
+                if let (Some(from), Some(to)) = (from, field(&format!("with{n}"))) {
+                    swaps.push((from, to));
+                }
+            }
+            KidPart {
+                name,
+                mesh: field("mesh"),
+                swaps,
+            }
+        };
+        let list = |name: &str| -> Vec<Value> {
+            program
+                .value(checksum(name))
+                .and_then(Value::as_array)
+                .map(<[Value]>::to_vec)
+                .unwrap_or_default()
+        };
+        let reset = program
+            .value(checksum(if girl {
+                "appearance_reset_girl"
+            } else {
+                "appearance_reset_boy"
+            }))
+            .cloned();
+        let picked_in = |array: &str| id_of(reset.as_ref()?.get(checksum(array))?);
+        let sex = if girl { "f" } else { "m" };
+        let bodies = list("body");
+        let mut slots = Vec::new();
+        // The skin: the bodies (`BoyBody`, `BoyBody1`...), by the order the
+        // skins come in.
+        let head = format!("skater_{sex}_head");
+        let skins = list(&head);
+        let body_name = if girl { "GirlBody" } else { "BoyBody" };
+        let mut skin_choices = Vec::new();
+        for (i, skin) in skins.iter().enumerate() {
+            let id = if i == 0 {
+                body_name.to_string()
+            } else {
+                format!("{body_name}{i}")
+            };
+            let Some(body) = bodies.iter().find(|b| id_of(b) == Some(checksum(&id))) else {
+                continue;
+            };
+            skin_choices.push(KidPart {
+                name: part(skin).name,
+                ..part(body)
+            });
+        }
+        let skin_picked = picked_in(&head)
+            .and_then(|id| skins.iter().position(|s| id_of(s) == Some(id)))
+            .unwrap_or(0);
+        slots.push(KidSlot {
+            label: "Skin",
+            choices: skin_choices,
+            picked: skin_picked,
+        });
+        for (label, array) in [
+            ("Hair", format!("skater_{sex}_hair")),
+            ("Shirt", format!("skater_{sex}_torso")),
+            ("Legs", format!("skater_{sex}_legs")),
+            ("Shoes", "shoes".into()),
+            ("Socks", format!("skater_{sex}_socks")),
+            ("Hat", "hat".into()),
+            ("Glasses", "glasses".into()),
+            ("Face paint", "face_paints".into()),
+            ("Accessory", "accessories".into()),
+            ("Elbow pads", format!("skater_{sex}_elbowpads")),
+            ("Knee pads", format!("skater_{sex}_kneepads")),
+            ("Backpack", format!("skater_{sex}_backpack")),
+        ] {
+            let entries = list(&array);
+            if entries.is_empty() {
+                continue;
+            }
+            let choices: Vec<KidPart> = entries.iter().map(part).collect();
+            // Not in the game's set-up: the first that's nothing at all.
+            let picked = picked_in(&array)
+                .and_then(|id| entries.iter().position(|e| id_of(e) == Some(id)))
+                .or_else(|| {
+                    choices
+                        .iter()
+                        .position(|c| c.mesh.is_none() && c.swaps.is_empty())
+                })
+                .unwrap_or(0);
+            slots.push(KidSlot {
+                label,
+                choices,
+                picked,
+            });
+        }
+        Ok(slots)
+    }
+
+    /// The created kid dressed in `outfit` (a choice for each slot of
+    /// [`GameData::kid_wardrobe`], the skin first).
+    pub fn load_kid(&mut self, girl: bool, outfit: &[KidPart]) -> Result<CharacterFiles> {
+        self.load_dressed(if girl { "kid_girl" } else { "kid" }, Some(outfit))
+    }
+
     pub fn load_character(&mut self, id: &str) -> Result<CharacterFiles> {
+        self.load_dressed(id, None)
+    }
+
+    fn load_dressed(&mut self, id: &str, outfit: Option<&[KidPart]>) -> Result<CharacterFiles> {
         let girl = id.eq_ignore_ascii_case("kid_girl");
         let id = if girl { "kid" } else { id };
         let name = id.to_ascii_lowercase();
@@ -824,12 +973,53 @@ impl GameData {
                     extra_textures.push((0x6563_d500, head));
                 }
             }
-            for piece in pieces {
-                if let Some(mesh) = part(&format!("models/{piece}.skin.ngc"))? {
-                    parts.push((mesh, part(&format!("models/{piece}.tex.ngc"))?));
+            if let Some(outfit) = outfit {
+                // Dressed as picked: the skin's body, the other parts'
+                // meshes, and every texture they swap.
+                let (skin_part, rest) = outfit.split_first().context("no skin picked")?;
+                let mesh_of = |mesh: &str| mesh.strip_suffix(".skin").unwrap_or(mesh).to_string();
+                let body = skin_part
+                    .mesh
+                    .as_deref()
+                    .map_or(format!("models/{body}"), mesh_of);
+                let skin = part(&format!("{body}.skin.ngc"))?
+                    .with_context(|| format!("skaterparts.prg has no {body}.skin"))?;
+                for piece in rest {
+                    let Some(mesh) = piece.mesh.as_deref().map(mesh_of) else {
+                        continue;
+                    };
+                    if let Some(skin) = part(&format!("{mesh}.skin.ngc"))? {
+                        parts.push((skin, part(&format!("{mesh}.tex.ngc"))?));
+                    }
                 }
+                // (The girl's missing head texture as the skin picked has it.)
+                extra_textures.clear();
+                if girl {
+                    let head = skin_part
+                        .swaps
+                        .iter()
+                        .find(|(from, _)| from.eq_ignore_ascii_case("girl_a1.png"))
+                        .map_or("textures/girl/girl_a1", |(_, to)| to.as_str());
+                    if let Some(head) = part(&format!("{head}.img.ngc"))? {
+                        extra_textures.push((0x6563_d500, head));
+                    }
+                }
+                for (from, to) in outfit.iter().flat_map(|p| &p.swaps) {
+                    if let Some(image) = part(&format!("{to}.img.ngc"))? {
+                        for sum in crate::level::texture_checksums(from) {
+                            extra_textures.push((sum, image.clone()));
+                        }
+                    }
+                }
+                (skin, part(&format!("{body}.tex.ngc"))?, board)
+            } else {
+                for piece in pieces {
+                    if let Some(mesh) = part(&format!("models/{piece}.skin.ngc"))? {
+                        parts.push((mesh, part(&format!("models/{piece}.tex.ngc"))?));
+                    }
+                }
+                (skin, part(&format!("models/{body}.tex.ngc"))?, board)
             }
-            (skin, part(&format!("models/{body}.tex.ngc"))?, board)
         } else {
             let skin =
                 file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;

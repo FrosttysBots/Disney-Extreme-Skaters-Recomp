@@ -114,6 +114,9 @@ pub struct CharacterModel {
     pub rumble: bool,
     /// The game's simplified controls (its Hawk Controls option off).
     pub simplified: bool,
+    /// The created kid's parts (shown when the kid is): each one's label,
+    /// its choices' names and the one picked.
+    pub kid_slots: Vec<(String, Vec<String>, usize)>,
     /// In a two-minute run: the seconds left, and once it's over the
     /// score, the best before it, and whether it beat it.
     pub run_clock: Option<f32>,
@@ -1114,6 +1117,33 @@ fn character_section(ui: &mut egui::Ui, model: &mut CharacterModel, actions: &mu
     }
     if model.current.is_none() || model.animations.is_empty() {
         return;
+    }
+    // Dressing the created kid, as the Skate Shop's Edit Skater does.
+    if !model.kid_slots.is_empty() {
+        let mut changed = false;
+        egui::CollapsingHeader::new("Kid's clothes")
+            .default_open(false)
+            .show(ui, |ui| {
+                egui::Grid::new("kid_slots").num_columns(2).show(ui, |ui| {
+                    for (i, (label, choices, picked)) in model.kid_slots.iter_mut().enumerate() {
+                        ui.label(label.as_str());
+                        let before = *picked;
+                        egui::ComboBox::from_id_salt(("kid_slot", i))
+                            .selected_text(choices.get(*picked).map_or("", String::as_str))
+                            .height(400.0)
+                            .show_ui(ui, |ui| {
+                                for (j, name) in choices.iter().enumerate() {
+                                    ui.selectable_value(picked, j, name);
+                                }
+                            });
+                        changed |= *picked != before;
+                        ui.end_row();
+                    }
+                });
+            });
+        if changed {
+            actions.push(Action::LoadCharacter(model.current));
+        }
     }
 
     let current = model.animations[model.animation].clone();

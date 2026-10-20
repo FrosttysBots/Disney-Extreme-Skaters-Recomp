@@ -1929,6 +1929,11 @@ struct App<'a> {
     /// The camera setting following the skater now (index into the
     /// panel's list), and whether the pad's Back was down.
     camera_shown: usize,
+    /// The created kid's wardrobe, as a boy (false) and a girl (true), with
+    /// the parts picked: read from the Skate Shop's lists when first shown.
+    wardrobes: HashMap<bool, Vec<desa_viewer::source::KidSlot>>,
+    /// Which of them the panel's showing.
+    kid_shown: Option<bool>,
     pad_back: bool,
     /// What a teleporter created or killed on the way, to apply.
     pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
@@ -2094,6 +2099,7 @@ impl<'a> App<'a> {
                     music_volume,
                     rumble: true,
                     simplified,
+                    kid_slots: Vec::new(),
                     run_clock: None,
                     run_result: None,
                     run_goal: None,
@@ -2184,6 +2190,8 @@ impl<'a> App<'a> {
             splash_hold: None,
             pending_creates: Vec::new(),
             camera_shown: usize::MAX,
+            wardrobes: HashMap::new(),
+            kid_shown: None,
             pad_back: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
@@ -5909,8 +5917,69 @@ impl<'a> App<'a> {
         };
         let Some(data) = &mut self.data else { return };
         let info = self.model.character.characters[index].clone();
-        let loaded = data
-            .load_character(&info.id)
+        // The created kid: dressed as picked (the game's outfit to start).
+        let kid = match info.id.to_ascii_lowercase().as_str() {
+            "kid" => Some(false),
+            "kid_girl" => Some(true),
+            _ => None,
+        };
+        let shown_kid = std::mem::take(&mut self.model.character.kid_slots);
+        let kid_shown = self.kid_shown.take();
+        let mut outfit = None;
+        if let Some(girl) = kid {
+            let sex = if girl { "f" } else { "m" };
+            if !self.wardrobes.contains_key(&girl) {
+                match data.kid_wardrobe(girl) {
+                    Ok(mut slots) => {
+                        for slot in &mut slots {
+                            let key = format!("outfit.{sex}.{}", slot.label);
+                            if let Some(&i) = self.settings.best.get(&key) {
+                                if (i as usize) < slot.choices.len() {
+                                    slot.picked = i as usize;
+                                }
+                            }
+                        }
+                        self.wardrobes.insert(girl, slots);
+                    }
+                    Err(e) => eprintln!("the kid's wardrobe: {e:#}"),
+                }
+            }
+            if let Some(slots) = self.wardrobes.get_mut(&girl) {
+                // (The panel's picks, when it was showing this kid.)
+                if kid_shown == Some(girl) && shown_kid.len() == slots.len() {
+                    for (shown, slot) in shown_kid.iter().zip(slots.iter_mut()) {
+                        if slot.picked != shown.2 {
+                            slot.picked = shown.2;
+                            self.settings
+                                .best
+                                .insert(format!("outfit.{sex}.{}", slot.label), shown.2 as u32);
+                        }
+                    }
+                }
+                outfit = Some(
+                    slots
+                        .iter()
+                        .map(|s| s.choices[s.picked].clone())
+                        .collect::<Vec<_>>(),
+                );
+                self.kid_shown = Some(girl);
+                self.model.character.kid_slots = slots
+                    .iter()
+                    .map(|s| {
+                        (
+                            s.label.to_string(),
+                            s.choices.iter().map(|c| c.name.clone()).collect(),
+                            s.picked,
+                        )
+                    })
+                    .collect();
+            }
+        }
+        let files = match (kid, &outfit) {
+            (Some(girl), Some(outfit)) => data.load_kid(girl, outfit),
+            _ => data.load_character(&info.id),
+        };
+        let loaded = files
             .and_then(|files| Character::from_files(&files))
             .with_context(|| format!("could not load {}", info.title));
         match loaded {

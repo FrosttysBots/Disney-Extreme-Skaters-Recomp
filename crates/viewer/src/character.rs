@@ -65,7 +65,8 @@ impl Character {
             .map(|(_, a)| pose::model_space(&skeleton, &a.sample(0.0)))
             .context("the character has no default animation (its rest pose)")?;
 
-        // (Textures from elsewhere for any its own file hasn't.)
+        // (Textures from elsewhere: any its own files haven't, and the
+        // created kid's swapped colours.)
         let extra: Vec<TextureData> = files
             .extra_textures
             .iter()
@@ -85,14 +86,15 @@ impl Character {
         let mut influences = influences(&files.skin)?;
         if let Some((board, textures)) = &files.board {
             mesh.append(
-                Level::from_bytes(board, textures.as_deref())
+                Level::from_bytes_with_extra(board, textures.as_deref(), &extra)
                     .context("could not load the board")?,
             );
             influences.extend(self::influences(board)?);
         }
         for (part, textures) in &files.parts {
             mesh.append(
-                Level::from_bytes(part, textures.as_deref()).context("could not load a part")?,
+                Level::from_bytes_with_extra(part, textures.as_deref(), &extra)
+                    .context("could not load a part")?,
             );
             influences.extend(self::influences(part)?);
         }
