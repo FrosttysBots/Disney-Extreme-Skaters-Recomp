@@ -573,9 +573,13 @@ impl Screen {
 
     /// What to draw, back to front.
     pub fn draw(&self) -> Vec<Draw> {
+        // As the game draws its screen: one list, by z_priority and then
+        // the order the elements were made in (a key's label, made after
+        // the key's middle pieces, goes over them), not parent by parent.
         let mut out = Vec::new();
-        self.draw_element(ROOT, Vec2::ZERO, Vec2::ONE, 1.0, &mut out);
-        out
+        self.draw_element(ROOT, Vec2::ZERO, Vec2::ONE, 1.0, (0.0, None), &mut out);
+        out.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        out.into_iter().map(|(_, _, d)| d).collect()
     }
 
     fn el(&self, i: usize) -> Option<&Element> {
@@ -594,7 +598,9 @@ impl Screen {
             .filter(|i| self.el(*i).is_some())
     }
 
-    /// An element named in a script: by id or alias, or `{ <id> child = n }`.
+    /// An element named in a script: by id or alias, or `{ <id> child = n }`
+    /// (the child can be one of its own: `child = { n child = 0 }`, the
+    /// keyboard's key's letter).
     fn resolve(&self, value: &Value) -> Option<usize> {
         match value {
             Value::Name(n) => self.find(*n),
@@ -603,13 +609,28 @@ impl Screen {
                     (None, v) => self.resolve(v),
                     _ => None,
                 })?;
-                match items
-                    .iter()
-                    .find(|(k, _)| *k == Some(checksum("child")))
-                    .and_then(|(_, v)| v.as_int())
-                {
-                    Some(n) => self.el(base)?.children.get(n.max(0) as usize).copied(),
+                match items.iter().find(|(k, _)| *k == Some(checksum("child"))) {
+                    Some((_, child)) => self.child_of(base, child),
                     None => Some(base),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// `child = n` of `base`, or `child = { n child = m }`: the n-th's m-th.
+    fn child_of(&self, base: usize, child: &Value) -> Option<usize> {
+        match child {
+            Value::Integer(n) => self.el(base)?.children.get((*n).max(0) as usize).copied(),
+            Value::Struct(items) => {
+                let n = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(n)) => Some(*n),
+                    _ => None,
+                })?;
+                let at = self.el(base)?.children.get(n.max(0) as usize).copied()?;
+                match items.iter().find(|(k, _)| *k == Some(checksum("child"))) {
+                    Some((_, deeper)) => self.child_of(at, deeper),
+                    None => Some(at),
                 }
             }
             _ => None,
@@ -774,25 +795,40 @@ impl Screen {
         (self.local_pos(i) - e.just * size, size)
     }
 
-    fn draw_element(&self, i: usize, origin: Vec2, scale: Vec2, alpha: f32, out: &mut Vec<Draw>) {
-        self.draw_element_except(i, origin, scale, alpha, out, &[]);
+    /// Element `i` and what's in it, each draw with where it goes in the
+    /// game's order: its z (its own, else its parent's) and the order it
+    /// was made in (or, behind its parent, just before the parent's).
+    fn draw_element(
+        &self,
+        i: usize,
+        origin: Vec2,
+        scale: Vec2,
+        alpha: f32,
+        layer: (f32, Option<f64>),
+        out: &mut Vec<(f32, f64, Draw)>,
+    ) {
+        self.draw_element_except(i, origin, scale, alpha, layer, out, &[]);
     }
 
     /// As `draw_element`, its children in `except` left out (a scrolling
     /// menu's rows out of its box).
+    #[allow(clippy::too_many_arguments)]
     fn draw_element_except(
         &self,
         i: usize,
         origin: Vec2,
         scale: Vec2,
         alpha: f32,
-        out: &mut Vec<Draw>,
+        (parent_z, behind): (f32, Option<f64>),
+        out: &mut Vec<(f32, f64, Draw)>,
         except: &[usize],
     ) {
         let Some(e) = self.el(i) else { return };
         if e.hidden {
             return;
         }
+        let z = if e.z != 0.0 { e.z } else { parent_z };
+        let order = behind.unwrap_or(i as f64);
         let (top_left, _) = self.local_rect(i);
         let at = origin + top_left * scale;
         let scale = scale * e.look.scale;
@@ -817,18 +853,22 @@ impl Screen {
         // Those drawn behind it first.
         for &c in &children {
             if self.el(c).is_some_and(|c| c.behind_parent) {
-                self.draw_element(c, at, scale, alpha, out);
+                self.draw_element(c, at, scale, alpha, (z, Some(order - 0.5)), out);
             }
         }
         match e.kind {
             Kind::Sprite => {
                 if let Some(texture) = e.texture {
-                    out.push(Draw::Sprite {
-                        texture,
-                        rect: [at.x, at.y, at.x + size.x, at.y + size.y],
-                        rgba,
-                        angle: e.angle,
-                    });
+                    out.push((
+                        z,
+                        order,
+                        Draw::Sprite {
+                            texture,
+                            rect: [at.x, at.y, at.x + size.x, at.y + size.y],
+                            rgba,
+                            angle: e.angle,
+                        },
+                    ));
                 }
             }
             Kind::Text | Kind::TextBlock => {
@@ -865,17 +905,21 @@ impl Screen {
                             let x0 = x - f32::from(g.ink_left) * scale.x;
                             let top =
                                 y + (font.baseline as f32 - f32::from(g.top)).max(0.0) * scale.y;
-                            out.push(Draw::Glyph {
-                                font: font_name,
-                                source: [g.x, g.y, g.width, g.height],
-                                rect: [
-                                    x0,
-                                    top,
-                                    x0 + f32::from(g.width) * scale.x,
-                                    top + f32::from(g.height) * scale.y,
-                                ],
-                                rgba,
-                            });
+                            out.push((
+                                z,
+                                order,
+                                Draw::Glyph {
+                                    font: font_name,
+                                    source: [g.x, g.y, g.width, g.height],
+                                    rect: [
+                                        x0,
+                                        top,
+                                        x0 + f32::from(g.width) * scale.x,
+                                        top + f32::from(g.height) * scale.y,
+                                    ],
+                                    rgba,
+                                },
+                            ));
                             x += font.advance(ch) * scale.x;
                         }
                     }
@@ -883,19 +927,22 @@ impl Screen {
             }
             _ => {}
         }
+        // (Inside something drawn behind its parent, all of it is.)
+        let inner = (z, behind.map(|_| order));
         if e.scrolling {
-            self.draw_scrolled(i, &children, at, scale, alpha, out);
+            self.draw_scrolled(i, &children, at, scale, alpha, inner, out);
             return;
         }
         for &c in &children {
             if self.el(c).is_some_and(|c| !c.behind_parent) {
-                self.draw_element(c, at, scale, alpha, out);
+                self.draw_element(c, at, scale, alpha, inner, out);
             }
         }
     }
 
     /// A scrolling menu's insides: moved by its scroll (kept so the
     /// selected item shows), and only what's inside its box.
+    #[allow(clippy::too_many_arguments)]
     fn draw_scrolled(
         &self,
         i: usize,
@@ -903,7 +950,8 @@ impl Screen {
         at: Vec2,
         scale: Vec2,
         alpha: f32,
-        out: &mut Vec<Draw>,
+        layer: (f32, Option<f64>),
+        out: &mut Vec<(f32, f64, Draw)>,
     ) {
         let Some(e) = self.el(i) else { return };
         let across = e.kind == Kind::HMenu;
@@ -955,7 +1003,7 @@ impl Screen {
                     })
                     .collect()
             });
-            self.draw_element_except(c, at + shift, scale, alpha, out, &outside);
+            self.draw_element_except(c, at + shift, scale, alpha, layer, out, &outside);
         }
     }
 
@@ -1593,7 +1641,7 @@ impl Host for Ui<'_> {
             },
             None => self.element,
         };
-        let props = Ui::props(args);
+        let props = globals_in(self.program, Ui::props(args));
         let named = |key: &str| props.get(c(key)).cloned();
         let target_of = |s: &Screen| -> Option<usize> {
             match named("id") {
@@ -2157,6 +2205,34 @@ impl Host for Ui<'_> {
         }
         Outcome::Done(true)
     }
+}
+
+/// Settings given by a global's name (`scale = keyboard_button_scale`,
+/// a pair): the global's value in its place. Only for sizes, places
+/// and colours: other names (ids, textures, scripts) stay names.
+fn globals_in(program: &qb::vm::Program, props: Value) -> Value {
+    let Value::Struct(items) = props else {
+        return props;
+    };
+    let keys = ["scale", "pos", "Dims", "rgba", "text_scale", "dims"].map(checksum);
+    Value::Struct(
+        items
+            .into_iter()
+            .map(|(k, v)| match (k, &v) {
+                (Some(key), Value::Name(n)) if keys.contains(&key) => match program.value(*n) {
+                    Some(
+                        g @ (Value::Pair(_)
+                        | Value::Vector(_)
+                        | Value::Float(_)
+                        | Value::Integer(_)
+                        | Value::Array(_)),
+                    ) => (k, g.clone()),
+                    _ => (k, v),
+                },
+                _ => (k, v),
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

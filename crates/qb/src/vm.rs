@@ -855,8 +855,9 @@ impl Thread {
             return a.is_some() && a == b;
         }
         // Built in: an array's items one by one (`GetNextArrayElement
-        // array` gives `element`, counting with `index`; false past the
-        // end).
+        // array` gives `element`, and `index` its place, from 0: the
+        // keyboard puts each row's letter on key `index`; the next call
+        // gives the one after; false past the end).
         if target.is_none() && name == checksum("GetNextArrayElement") {
             let array = match &args {
                 Value::Struct(items) => match items.iter().find(|(k, _)| k.is_none()) {
@@ -878,8 +879,7 @@ impl Thread {
                 .iter()
                 .find(|(k, _)| *k == Some(checksum("index")))
                 .and_then(|(_, v)| v.as_int())
-                .unwrap_or(0)
-                .max(0) as usize;
+                .map_or(0, |i| i.max(-1) + 1) as usize;
             let Some(element) = array.get(index) else {
                 frame.params.retain(|(k, _)| *k != Some(checksum("index")));
                 return false;
@@ -888,7 +888,7 @@ impl Thread {
             set_param(
                 &mut frame.params,
                 checksum("index"),
-                Value::Integer(index as i32 + 1),
+                Value::Integer(index as i32),
             );
             return true;
         }
