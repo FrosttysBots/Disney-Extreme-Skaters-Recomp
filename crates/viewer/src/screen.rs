@@ -2206,6 +2206,10 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             return Outcome::Done(set.is_some_and(|v| v != 0));
+        } else if name == c("JoinServerComplete") {
+            // (Back to the stage, the game joins its own one-player
+            // server first, and waits on it: there's none to wait on.)
+            return Outcome::Done(true);
         } else if name == c("English") {
             // The USA disc's language (the menus lay out wider for others).
             return Outcome::Done(true);

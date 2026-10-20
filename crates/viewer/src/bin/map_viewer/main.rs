@@ -5147,7 +5147,13 @@ impl<'a> App<'a> {
                 if let Some(screen) = &mut self.screen {
                     screen.screen.clear();
                 }
-                if let Some(i) = index {
+                // (Back to the stage, Exit to Stage: the main menu there.)
+                let shop = index
+                    .and_then(|i| self.model.levels.get(i))
+                    .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"));
+                if shop {
+                    self.open_main_menu();
+                } else if let Some(i) = index {
                     if self.skating.is_some() {
                         self.toggle_skate();
                     }
