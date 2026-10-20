@@ -2600,7 +2600,7 @@ impl Host for Commands<'_> {
 
 /// A global flag's number, from its value or the name of a global that
 /// comes to one (`CHEAT_MOON = CHEAT_ON_9 = 193`), or else the name.
-fn flag_number(program: &Program, v: &Value) -> Option<i32> {
+pub fn flag_number(program: &Program, v: &Value) -> Option<i32> {
     let mut v = v.clone();
     for _ in 0..8 {
         match v {

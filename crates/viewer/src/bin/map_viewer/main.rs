@@ -4729,6 +4729,34 @@ impl<'a> App<'a> {
         } else {
             s.hawk_controls = !model.simplified;
         }
+        // The cheats: as the game's codes and cheats menu set their flags
+        // (CHEAT_MOON...), else as the panel has them.
+        {
+            let flag = |name: &str| {
+                desa_viewer::behaviour::flag_number(program, &qb::Value::Name(qb::checksum(name)))
+            };
+            let cheats = &mut model.cheats;
+            let pairs: [(&str, &mut bool); 7] = [
+                ("CHEAT_PERFECT_MANUAL", &mut cheats.perfect_manual),
+                ("CHEAT_PERFECT_RAIL", &mut cheats.perfect_rail),
+                ("CHEAT_PERFECT_SKITCH", &mut cheats.perfect_skitch),
+                ("CHEAT_ALWAYS_SPECIAL", &mut cheats.always_special),
+                ("CHEAT_MOON", &mut cheats.moon),
+                ("CHEAT_SLOMO", &mut cheats.slomo),
+                ("CHEAT_STATS_13", &mut cheats.stats_13),
+            ];
+            let from_game = std::mem::take(&mut s.flags_changed);
+            for (name, on) in pairs {
+                let Some(number) = flag(name) else { continue };
+                if from_game {
+                    *on = s.global_flags.contains(&number);
+                } else if *on {
+                    s.global_flags.insert(number);
+                } else {
+                    s.global_flags.remove(&number);
+                }
+            }
+        }
         if std::mem::take(&mut s.spin_taps_changed) {
             model.spin_taps = s.spin_taps;
         } else {

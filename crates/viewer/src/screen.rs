@@ -374,6 +374,11 @@ pub struct Screen {
     /// `SpinTapsOff`).
     pub spin_taps: bool,
     pub spin_taps_changed: bool,
+    /// The game's global flags the menus set (`SetGlobalFlag flag =
+    /// CHEAT_MOON`: a cheat on, by a code or the cheats menu), by number,
+    /// and whether they've changed since the viewer looked.
+    pub global_flags: std::collections::HashSet<i32>,
+    pub flags_changed: bool,
     /// Rumbles the menus asked for (`VibrateController`: the Controls
     /// menu's test): the strong motor or not, and how hard.
     pub vibrations: Vec<(bool, f32)>,
@@ -475,6 +480,8 @@ impl Screen {
             hawk_controls_changed: false,
             spin_taps: false,
             spin_taps_changed: false,
+            global_flags: std::collections::HashSet::new(),
+            flags_changed: false,
             stopping: Vec::new(),
         }
     }
@@ -2175,11 +2182,65 @@ impl Host for Ui<'_> {
                     then: None,
                 });
             }
+        } else if name == c("SetGlobalFlag") || name == c("UnSetGlobalFlag") {
+            let flag = named("flag").and_then(|v| crate::behaviour::flag_number(self.program, &v));
+            if let Some(flag) = flag {
+                if name == c("SetGlobalFlag") {
+                    s.global_flags.insert(flag);
+                } else {
+                    s.global_flags.remove(&flag);
+                }
+                s.flags_changed = true;
+            }
+        } else if name == c("TryCheatString") {
+            // A code typed on the Cheat Codes keyboard: the cheat it is
+            // (`Cheat_Array_Gamecube`, by the game's hash of it), its
+            // script run, with the game's good or bad sound.
+            let code = match named("string") {
+                Some(Value::String(t) | Value::LocalString(t)) => t,
+                _ => String::new(),
+            };
+            let hash = crate::cheats::cheat_hash(&code);
+            // (The other consoles' codes too, their tables being in the
+            // scripts: the GameCube's own are mostly unknown.)
+            let cheat = hash.and_then(|(c1, c2)| {
+                [
+                    "Cheat_Array_Gamecube",
+                    "Cheat_Array_PS2",
+                    "Cheat_Array_Xbox",
+                ]
+                .iter()
+                .filter_map(|table| self.program.value(c(table)).and_then(Value::as_array))
+                .flatten()
+                .find(|e| {
+                    e.get(c("c1")).and_then(Value::as_int) == Some(c1)
+                        && e.get(c("c2")).and_then(Value::as_int) == Some(c2)
+                })
+                .and_then(|e| e.get(c("CheatScript")).and_then(Value::as_name))
+            });
+            match cheat {
+                Some(script) => {
+                    s.run(c("cheat_playsound_good"), Vec::new());
+                    s.run(script, Vec::new());
+                }
+                None => s.run(c("cheat_playsound_bad"), Vec::new()),
+            }
+            return Outcome::Done(false);
         } else if name == c("GetGlobalFlag") {
             // The levels' unlock flags (`LEVEL_UNLOCKED_PIZZA_PLANET`, as
             // the level list names them): every level's open in the
-            // viewer. (Others, cheats and the like, are off.)
+            // viewer, and every cheat in the cheats menu
+            // (`CHEAT_UNLOCKED_13`). Others as set.
             let flag = named("flag").and_then(|v| v.as_name());
+            if let Some(f) = flag {
+                if (1..=64).any(|n| c(&format!("CHEAT_UNLOCKED_{n}")) == f) {
+                    return Outcome::Done(true);
+                }
+                let number = crate::behaviour::flag_number(self.program, &Value::Name(f));
+                if number.is_some_and(|n| s.global_flags.contains(&n)) {
+                    return Outcome::Done(true);
+                }
+            }
             // (And the Skate Shop's locked parts, `CAS_UNLOCK_063`: open
             // too, as everything is.)
             if flag.is_some_and(|f| cas_unlock_flags(self.program).contains(&f)) {

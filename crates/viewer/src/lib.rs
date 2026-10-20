@@ -4,6 +4,7 @@
 pub mod behaviour;
 pub mod camera;
 pub mod character;
+pub mod cheats;
 pub mod collision;
 pub mod font;
 pub mod goals;

@@ -393,3 +393,54 @@ fn real_select_skater() {
     render(&screen, &images, "select_skater");
     assert!(screen.exists("select_skater_anchor"));
 }
+
+/// A cheat code typed as the Cheat Codes keyboard hands it on
+/// (`TryCheatString`): the game's hash finds it in `Cheat_Array_Gamecube`
+/// and its script runs (the Lion King movie unlocked); a wrong one
+/// doesn't.
+#[test]
+#[ignore = "needs the game data"]
+fn real_cheat_codes() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, program, _) = screen_from_disc(&mut data);
+    let code = |text: &str| {
+        qb::Value::Struct(vec![(
+            Some(qb::checksum("string")),
+            qb::Value::String(text.into()),
+        )])
+    };
+    // (The GameCube's own codes for the rest aren't known; the movies'
+    // are the same on every console.)
+    let special = desa_viewer::behaviour::flag_number(
+        &program,
+        &qb::Value::Name(qb::checksum("MOVIE_UNLOCKED_LIONKING0")),
+    )
+    .unwrap();
+    screen.command(qb::checksum("TryCheatString"), &code("notacheat"), &program);
+    for _ in 0..10 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    assert!(!screen.global_flags.contains(&special));
+    screen.command(qb::checksum("TryCheatString"), &code("savannah"), &program);
+    for _ in 0..10 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    assert!(screen.global_flags.contains(&special));
+    // And the other consoles' codes (the PS2's always special).
+    let always = desa_viewer::behaviour::flag_number(
+        &program,
+        &qb::Value::Name(qb::checksum("CHEAT_ALWAYS_SPECIAL")),
+    )
+    .unwrap();
+    screen.command(
+        qb::checksum("TryCheatString"),
+        &code("supercharger"),
+        &program,
+    );
+    for _ in 0..10 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    assert!(screen.global_flags.contains(&always));
+}
