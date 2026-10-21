@@ -7724,7 +7724,13 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 for &(at, key, down) in script.iter().flatten() {
                     if (at - now).abs() < 0.5 / 60.0 {
                         if key == KeyCode::Enter {
-                            if let (true, Some(screen)) = (down, &mut app.screen) {
+                            // (A on the game's screen, or taking the warp
+                            // or goal offered.)
+                            if down && app.warp_offer.is_some() {
+                                app.take_warp();
+                            } else if down && app.goal_offer.is_some() {
+                                app.take_goal();
+                            } else if let (true, Some(screen)) = (down, &mut app.screen) {
                                 screen.screen.pad(desa_viewer::screen::Pad::Choose);
                             }
                         } else if down {
