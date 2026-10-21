@@ -314,8 +314,9 @@ const REVERT_SCORE: u32 = 100;
 /// How long after a revert a manual still carries the combo on (about the
 /// revert animation).
 const REVERT_LINGER: f32 = 0.6;
-/// How long after skating in off a coping a revert keeps the combo going
-/// (`SkateInOrBail`'s `Reverts duration = 20`).
+/// How long after skating in off a coping, or landing off a lip, a revert
+/// keeps the combo going (`SkateInOrBail`'s and `LipLand`'s `Reverts
+/// duration = 20`).
 const SKATE_IN_REVERT: f32 = 20.0 / 60.0;
 
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
@@ -3204,6 +3205,8 @@ impl Skater {
                 self.landing_soon = false;
                 self.sounds.push(SkateSound::Land);
                 let from_vert = self.vert.is_some();
+                // (Down from a lip's way out: `LipLand`.)
+                let from_lip = self.lip_out.is_some();
                 self.vert = None;
                 self.lip_out = None;
                 self.crouched = input.crouch;
@@ -3295,7 +3298,12 @@ impl Skater {
                         self.revert();
                         return;
                     }
-                    self.revert_window = REVERT_AFTER;
+                    // (`LipLand` allows 20 frames.)
+                    self.revert_window = if from_lip {
+                        SKATE_IN_REVERT
+                    } else {
+                        REVERT_AFTER
+                    };
                 } else {
                     self.end_combo(true);
                 }
