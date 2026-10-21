@@ -374,6 +374,10 @@ on-ground update switches on.
   `...SpLip`. Special grabs tweak 30 a frame (`GRABTWEAK_SPECIAL`),
   special manuals 5. Ported, with every special unlocked (the special lip
   too), without `NoDegrade`.
+- **Buttons** (0x8011D4CC copies the pad into the skater): Up `+0x800`,
+  Down `+0x828`, Left `+0x850`, Right `+0x878`, L1 `+0x8A0`, L2
+  `+0x8C8`, R1 `+0x8F0`, R2 `+0x918`, Circle `+0x940`, Square `+0x968`,
+  Triangle `+0x990`, X `+0x9B8`, each 0x28 long (held at `+4`).
 - **Lips.** State 3 (0x80103418) is the lip, not a wall ride. Grind start
   (0x80108470) turns a rail into a lip when the skater is rising, flat
   against the ramp (matrix up Y under `sin(LipPlayerHorizontalAngle)`,
@@ -397,7 +401,12 @@ on-ground update switches on.
   trick choice, balance, tweaks and the ways off: off the top over
   onto the deck (`LipOut spine`, a "Spine Transfer"; `SkateInAble Lip`
   approximated as ground 24 behind the coping) or `LipBail` without one;
-  not lip combos or the reversed camera's swap. On the Hub, every quarter
+  not the reversed camera's swap. Lip combos and ollying off a lip
+  never happen on this disc: all 78 lip tricks are `NoOllie`, so
+  `OllieLipOut` (and `HandleLipOllieDirection`, 0x80113804: Left held
+  300 ms jumps on at `Lip_side_jump_speed`, Up or Down 300 ms along at
+  `Lip_along_jump_speed`, L1 and R1 hop, otherwise `SetUpLipCombo`) is
+  left over from the engine. On the Hub, every quarter
   pipe with a coping rail lips
   (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`;
   `LIP_TURN=-1` leans off the top: 10 of the 13 go over onto the deck,
