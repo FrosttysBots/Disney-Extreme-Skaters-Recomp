@@ -21,6 +21,14 @@ finds the code; useful hits:
 | `Physics_Ground_Rotation` | 0x800ED8AC, 0x800ED8F8 (steering) |
 | `Physics_Air_Rotation_stat` | 0x800EE654 and three more (air spins) |
 
+The scripts' global commands are a table of (name string, function)
+pairs, about 880 of them, around file offset 0x1F44F0 (`Wait` first;
+`SetScoreDegradation` is 0x801413F0). Commands on an object, the
+skater's among them, are found by checksum in long compare chains
+instead (the skater's from about 0x80110F00 to 0x80113500, so a
+command's checksum as a `lis`/`ori` pair leads to its code:
+`HawkControlsIsOff` at 0x80111194).
+
 ## Helpers
 
 | Address | What it does |
@@ -36,8 +44,10 @@ finds the code; useful hits:
 ## The skater object
 
 `r3` in these functions is the skater. Its physics component is the
-pointer at `+0x698`; in that component, `+0x34` is the velocity (x, y, z,
-w), `+0x64` the facing vectors, and `+0xE4` the frame time. The ground
+pointer at `+0x698`; in that component, `+0x04` is the position, `+0x34`
+the velocity (x, y, z, w), `+0x44`, `+0x54` and `+0x64` the orientation's
+rows (right, up, forward: the lip checks read `+0x48`, `+0x58` and
+`+0x68` as their heights), and `+0xE4` the frame time. The ground
 normal is at skater `+0x3A10`; `+0x28CC` holds a state checksum the
 on-ground update switches on.
 
@@ -56,20 +66,49 @@ on-ground update switches on.
 - **On-ground update** (0x800FB3E4, 1,172 instructions): builds gravity
   (0, `Physics_Ground_Gravity`, 0), removes its component into the ground
   (0x80009AC0 with the ground normal), adds the rest times the frame time
-  to the velocity, then by state brakes (0x800F418C) or pushes. So slope
-  gravity acts along the whole ground plane, sideways too; the port only
-  applies it along the facing so far. It calls about 35 helpers still to
+  to the velocity, then by state brakes (0x800F418C) or pushes, then
+  drag and friction (0x800F4CF0). So slope gravity acts along the whole
+  ground plane, sideways too. Ported. It calls about 35 helpers still to
   be read. Next in it, behind a debug flag (`WalkTest`, `skitch_speed_match`
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
   velocity * dt, at skater `+0x39A8`) for the collision checks.
-- **Drag and friction** (0x800F4CF0): while the push button is held (skater
-  `+0x3A38`), or another flag is set, or a friction value at `+0x3A58`
-  differs from `Physics_Rolling_Friction`: quadratic drag with
+- **Turning downhill when slow** (0x800F3564, ahead of the friction):
+  under `Skater_max_sloped_turn_speed` (300) on ground whose normal's
+  height is under `Skater_max_sloped_turn_cosine` (0.5), the skater
+  turns about the ground's normal from the way it's going (its facing
+  when stopped) towards straight downhill at `Skater_Slow_Turn_on_slopes`
+  (3 radians a second), never past it, and the friction's skipped that
+  frame. Crawling up a quarter pipe, the skater turns round. Ported.
+- **The ollie's speed** (0x800F62C4): the tense time (crouched, up to
+  `skater_max_tense_time`) takes it from the `_min` stat to the full one:
+  `Physics_Jump_Speed_stat`, or `Physics_air_Jump_Speed_stat` (220 to
+  275, min 100) while the ground is a vert face (`+0x3650`, the ground
+  following's copy of the face's vert flag) or in vert air (`+0x3634`),
+  and the `Boneless` ones for a boneless (`BonelessHeight`). Ported, but
+  for the boneless in vert.
+- **Drag and friction** (0x800F4CF0, every frame on the ground): with
+  AutoKick on (skater `+0x3A38`, what `AutoKickIsOff` reads), or in a
+  bail (`+0x36C4`, `InBail`/`NotInBail`), or the friction at `+0x3A58` other than
+  `Physics_Rolling_Friction`: quadratic drag with
   `Physics_Crouched_Air_Friction` or `Physics_Standing_Air_Friction`
-  (0x800F49B8), then linear friction with the `+0x3A58` value times 60
-  (0x800F4C9C, unless 0x800F3564 says otherwise). Ported: the drag while
-  pushing. Not yet: when `+0x3A58` changes (terrain, perhaps).
+  (0x800F49B8), then linear friction, that much off the speed a 60th of
+  a second, stopping rather than reversing (0x800F4C9C, 0x800F4AC0;
+  unless 0x800F3564 says otherwise). `+0x3A58` is the scripts'
+  `SetRollingFriction` (a value, or `Default`; reset only by a skater
+  reset). `SetSpecialFriction`, only in `Revert` (`[ 0, 10, 15, 20, 30,
+  50 ]`), takes the next value of its array each call, the last from
+  then on; `ClearPanel_Landed` and `ClearPanel_Bailed` start it again
+  (`+0x3A5C`), so each revert in a combo after the first slows the
+  skater more while it plays (`OnGroundExceptions` after its animation,
+  like `InAirExceptions` and `OnGroundAI`, sets `Default` again).
+  `GeneralBail` slides a bail to a stop with
+  it (`HeavyFriction` 100 for 3 frames, `Friction` to 30% of the fall,
+  `Friction2` after, 100 from a `SpeedCheckStop` under 300; 15 into a
+  wall), and the Hub's warps and ringtone hold the skater with 10000.
+  Ported: all of it for the bails and reverts (the Hub's hold isn't
+  needed: the viewer stops the skater itself), and no braking in a
+  bail (`DisablePlayerInput`).
 - **Along the board** (0x800F4D5C): the velocity is turned to the facing,
   keeping its length and its sign, so the skater can roll backwards.
   Ported.
@@ -171,7 +210,8 @@ on-ground update switches on.
   ground. A face that isn't a wall and is close to the last ground's
   normal (dot at least 0.8) or faces up (Y at least 0.5) is left for
   landing. A skatable face otherwise is tried as a ledge: up by
-  `Physics_Air_Snap_Up`, then back down 2 at a time (not ported). With
+  `Physics_Air_Snap_Up`, then back down 2 at a time (ported as one line
+  down from that height, `air_snap_up`, with the landing). With
   `+0x3638` set (vert air, perhaps) the skater is put
   `Skater_Min_Distance_To_Wall` out from the wall and its velocity
   flattened against it. Otherwise, after 0x800FDB6C (which may start a
@@ -187,7 +227,9 @@ on-ground update switches on.
   - the skater is put at the hit, back down to its feet, plus
     `Skater_Min_Distance_To_Wall` (8) along the normal; a moving
     object's motion is added.
-  Ported: the last case, without the event, sound or moving objects.
+  Ported: the last case and the bonk's sound, without the event or
+  moving objects; this crate also keeps the feet out of a wall leaning
+  back.
 
 - **Landing** (the end of 0x800FC7F8): a line from last frame's position
   to this one's (plus a moving object's motion). If it hits and the
@@ -242,10 +284,13 @@ on-ground update switches on.
   a rail dips into it, a wall) puts the skater back at the old position,
   1 higher, with its velocity flattened against what it hit, in the air
   (`OffRail`).
-  Ported: all of the above for level rails, without balance, bails, the
-  side check, moving objects' rails, lip tricks and the events. The
-  grind button is the viewer's guess (the game's call on the ground
-  depends on an argument not yet traced).
+  Ported: all of the above for level rails, with balance, bails and lip
+  tricks (below), without the side check, moving objects' rails and the
+  events. The
+  grind button (0x80108558): with the pro controls (`+0x3A3C`, what
+  `HawkControlsIsOff` reads), Triangle held; with the simplified ones,
+  Square, Triangle or Circle held or pressed within
+  `Skater_regrind_time`. Ported.
 
 - **Vert air.** State 2 (0x800FE664) is wall riding (`Wall_Ride_*`),
   not vert: vert air is the air state with a flag at `+0x36E8`. It's set
@@ -279,8 +324,21 @@ on-ground update switches on.
   then comes down in the far ramp's plane. Our own: the ramp being left
   is also looked for 3 and 6 out (a skater can leave a hair past the
   face).
-  Not ported: the spin axis, `skater_autoturn_vert_angle`,
-  `Physics_Vert_hang_Stat`. On the Hub's quarter pipes
+  Not ported: the spin axis. The autoturn: taking off into vert air
+  (0x800F12A4) keeps the skater's facing with its height negated
+  (`+0x39B8`) and sets `+0x36B8`. The spin code (0x800EE4CC), with
+  neither turn held longer than `skater_autoturn_cancel_time` (300 ms)
+  and the flag still set, turns the skater about its up axis towards
+  that facing at `Skater_autoturn_speed` (3 radians a second), stopping
+  (and clearing the flag) on reaching it, or at once when the facing is
+  within `skater_autoturn_vert_angle` (5 degrees, `acosf` at 0x8016305C)
+  of straight up. So an air off a quarter pipe at an angle comes back
+  down facing down the ramp; straight up, fakie. Ported, with the
+  skater upright in our vert air: the heading turns to its mirror across
+  the ramp, the angle taken within the ramp's face (our lips are not
+  quite vertical), not counted as spin (`ANGLE=20 cargo run --release
+  -p desa_viewer --example vert_ramps`).
+  Vert air falls by `Physics_Vert_hang_Stat` (0x800FC634). On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).
 - **Wall rides** (state 2, 0x800FE664; started by 0x800FDB6C from the
@@ -317,12 +375,17 @@ on-ground update switches on.
   Right and Left for grinds and lips) and what falling off does: a
   manual bails off the top (`BailManual`) and sets down off the bottom
   (`ManualLand`); a grind falls to that side (`SkateInOrBail`), skating
-  in onto ground beside the rail if there is any (`SkateInAble`, turning
-  30 degrees) and bailing otherwise (`FiftyFiftyFall`). Manuals start
+  in (turning 30 degrees, `SetLandedFromVert`, a revert within 20
+  frames keeping the combo going) where `SkateInAble`
+  (0x80117E68: a line across under the rail, 7 below it and 30 out each
+  side, meeting a vert face) finds a coping, and bailing otherwise
+  (`FiftyFiftyFall`). Manuals start
   with up then down (or down then up) within 400 ms (`ManualTricks`).
   Ported: all of that, the combo carrying the lean over until a landing
-  without a manual; `SkateInAble` approximated, and bails lasting their
-  fall and get-up animations. Not ported: lips, the other control scheme, special manuals.
+  without a manual; `SkateInAble` (the ground to skate in onto found 20
+  out, our own), and bails lasting their
+  fall and get-up animations; lips (`LipMacro2`, balanced as a rail),
+  the simplified controls and special manuals too.
 - **Tricks** are scripts. `AirTricks` (`airtricks.q`) maps a button and a
   direction (`AirTrickLogic`, within 400 ms) to a slot (`Air_SquareD`);
   the profile's `default_trick_mapping` (`JessieTricks`) puts a trick in
@@ -365,6 +428,10 @@ on-ground update switches on.
   `...SpLip`. Special grabs tweak 30 a frame (`GRABTWEAK_SPECIAL`),
   special manuals 5. Ported, with every special unlocked (the special lip
   too), without `NoDegrade`.
+- **Buttons** (0x8011D4CC copies the pad into the skater): Up `+0x800`,
+  Down `+0x828`, Left `+0x850`, Right `+0x878`, L1 `+0x8A0`, L2
+  `+0x8C8`, R1 `+0x8F0`, R2 `+0x918`, Circle `+0x940`, Square `+0x968`,
+  Triangle `+0x990`, X `+0x9B8`, each 0x28 long (held at `+4`).
 - **Lips.** State 3 (0x80103418) is the lip, not a wall ride. Grind start
   (0x80108470) turns a rail into a lip when the skater is rising, flat
   against the ramp (matrix up Y under `sin(LipPlayerHorizontalAngle)`,
@@ -382,11 +449,24 @@ on-ground update switches on.
   way `LipOut`, the other a spine transfer if the deck's skateable or
   `LipBail`. `LipOut` plays the way out and puts the skater back in the
   air a unit up and out, turned to drop back in. Ported: lips from vert
-  air at coping rails (the angle tests approximated by vert air rising
-  at a level rail), the trick choice, balance, tweaks and the ways off,
-  without spine transfers (the unsafe side bails) and lip combos. On the
-  Hub, every quarter pipe with a coping rail lips
-  (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`).
+  air at level coping rails, rising and facing within `LipAllowAngle`
+  of straight up the ramp (the skater stays upright in our vert air, so
+  the other two angle tests always pass; the override isn't read), the
+  trick choice, balance, tweaks and the ways off: off the top, over a
+  spine (`SkateInAble Lip`, 0x80117BC8: a line 7 below the coping from
+  24 back to it, or else 2400 straight down from 13 back, meeting a vert
+  face, `+0x395C` from the feeler 0x800F66F0) into the far ramp's vert
+  air with `LipOut spine`'s "Spine Transfer", or `LipBail` (a deck
+  behind is no spine); not the reversed camera's swap. Lip combos and
+  ollying off a lip never happen on this disc: all 78 lip tricks are
+  `NoOllie`, so `OllieLipOut` (and `HandleLipOllieDirection`, 0x80113804:
+  Left held 300 ms jumps on at `Lip_side_jump_speed`, Up or Down 300 ms
+  along at `Lip_along_jump_speed`, L1 and R1 hop, otherwise
+  `SetUpLipCombo`) is left over from the engine. On the Hub, every
+  quarter pipe with a coping rail lips
+  (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`;
+  `LIP_TURN=-1` leans off the top: one of the 13 has a vert face behind
+  and transfers, the rest bail).
 - **Animations and landing rules** (`TRICKS.q`). `OnGroundAI` plays
   `StandTurnLeft`/`Right` then their `...Idle` loops while steering
   (`CrouchTurn...` crouched), `CrouchIdle` crouched, and otherwise
@@ -433,12 +513,18 @@ on-ground update switches on.
   `REQUIRE_LIP`). Ported: teleporters and gaps, the scripts read without
   running them (`desa_viewer::triggers`). Our own rules: gaps fire on
   crossing a trigger, ends before starts, and only after 50 units across
-  (start and end pads lie together for gaps that go both ways). Not yet:
-  the other trigger scripts (breakables, goals, sounds).
+  (start and end pads lie together for gaps that go both ways).
+  Breakables are read the same way (`triggers::breakables`); the other
+  trigger scripts (a goal's things, rail nodes' like Tarzan's bowsprit)
+  run in the script engine as the skater touches them.
 - **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
   the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
   none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left
-  `Grind5` (`Grind1_180`... when turning 180 onto the rail, not ported).
+  `Grind5`. (The `Grind1_180`... grinds, `Grind_180` with
+  `FlipAndRotate`, are never reached on this disc: their slots appear
+  only in `ExtraGrindTricks_180`, which only they use, and main.dol
+  holds neither a `_180` name nor those slots' checksums; nor are
+  `grindlist.q`'s `Template` tables read.)
   `ManualTricks` and `GroundManualTrickBranches` (`manualtricks.q`) start
   or branch to `Manual2` to `5` with Circle and a direction (400 ms);
   up-down is `Manual1`. Each trick names its in and range animations

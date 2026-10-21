@@ -39,7 +39,7 @@
 //!   out; skatable ground ahead (a ramp's curve) is stepped onto.
 
 use std::collections::HashMap;
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use glam::{Mat4, Quat, Vec3};
 
@@ -101,6 +101,11 @@ pub enum SkateSound {
     },
     /// The board knocking the coping going into a lip (`Copinghit`).
     CopingHit,
+    /// Into a wall hard (the terrain's `SK3SFX_TABLE_BONK` sound), on the
+    /// wall's terrain.
+    Bonk {
+        terrain: u16,
+    },
 }
 
 /// What the skater is doing, for picking animations.
@@ -119,6 +124,10 @@ pub enum Action {
     FlailRight,
     /// On a rail.
     Grinding,
+    /// Riding along a wall (`WallRide`).
+    WallRide,
+    /// Towed along behind a vehicle (`Skitch`).
+    Skitching,
     /// Balancing on two wheels.
     Manual,
     /// Fallen off a manual (the game's `BailManual`) or a rail
@@ -149,6 +158,14 @@ pub enum Action {
     BailFall {
         backwards: bool,
     },
+}
+
+/// A wallride: the wall's normal (out of it), and which side it's on
+/// going along (`WallRideLeft`: the wall on the skater's left).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallRide {
+    pub normal: Vec3,
+    pub left: bool,
 }
 
 /// A lip trick being held: the trick, the ramp's way out, and how long.
@@ -236,8 +253,11 @@ const BAIL_TIME: f32 = 1.5;
 /// (`DoBalanceTrick ... Tweak = 1`, 5 for specials).
 const GRIND_TWEAK: u32 = 7;
 
-/// How long a press of the grind button keeps looking for a rail.
-const GRIND_WINDOW: f32 = 0.5;
+/// Skitching's points (`SetTrickScore 500`) and each frame's tweak
+/// (`Tweak = 5`).
+const SKITCH_SCORE: u32 = 500;
+const SKITCH_TWEAK: u32 = 5;
+
 const MANUAL_TWEAK: u32 = 1;
 const SPECIAL_MANUAL_TWEAK: u32 = 5;
 /// Points a frame on a lip (`LipMacro2`'s `TweakTrick 10`).
@@ -294,6 +314,10 @@ const REVERT_SCORE: u32 = 100;
 /// How long after a revert a manual still carries the combo on (about the
 /// revert animation).
 const REVERT_LINGER: f32 = 0.6;
+/// How long after skating in off a coping, or landing off a lip, a revert
+/// keeps the combo going (`SkateInOrBail`'s and `LipLand`'s `Reverts
+/// duration = 20`).
+const SKATE_IN_REVERT: f32 = 20.0 / 60.0;
 
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
 /// in the game's `manualtricks.q`).
@@ -334,6 +358,33 @@ pub struct Skater {
     /// How long the skater has been crouched (tensing for an ollie).
     crouch_time: f32,
     pub grind: Option<Grind>,
+    /// The rail node last reached on this rail (see [`Rails::nodes`]).
+    rail_node: Option<u32>,
+    /// Riding a wall, and how long since the last wallride began.
+    pub wall: Option<WallRide>,
+    since_wallride: f32,
+    /// Wallriding on any steep wall. The game only rides faces flagged
+    /// wall-ridable (main.dol 0x800F66F0 sets the flag it checks), and
+    /// only Canyon has any, 11; with this off, so does this.
+    pub wallride_anywhere: bool,
+    /// Repeated tricks in a combo score less (the game mode's
+    /// `degrade_score`: on in a single session, the career and goals,
+    /// which `goal_start` sets with `SetScoreDegradation 1`; off in free
+    /// skate, 0x800B0854).
+    pub degrade: bool,
+    /// Landed combos add up into the score (`accumulate_score`, on in the
+    /// same modes); off, as in free skate, the score is the best combo
+    /// (`track_trick_score`, 0x800B0EA8).
+    pub accumulate: bool,
+    /// Skitching: the vehicle (in [`World::vehicles`]) towing the skater,
+    /// and how long up has been held behind one.
+    pub skitch: Option<usize>,
+    /// The game's cheats that keep balance tricks steady: Perfect Manual,
+    /// Perfect Rail, Perfect Skitch.
+    pub perfect_manual: bool,
+    pub perfect_rail: bool,
+    pub perfect_skitch: bool,
+    skitch_hold: f32,
     /// Seconds since it last left a rail.
     since_rail: f32,
     /// Where it last stood on the ground: the nearest spawn to it is where
@@ -343,6 +394,20 @@ pub struct Skater {
     pub spawns: Vec<(Vec3, f32)>,
     /// Print why the ground was lost, for debugging (off by default).
     pub trace: bool,
+    /// The simplified controls (`HawkControlsOff`): any trick button
+    /// (`Squirgle`) does what the direction held asks for, and landing in
+    /// a trick loses the combo rather than bailing (`Land`).
+    pub simplified: bool,
+    /// 180 spin taps (the Controls option): a shoulder button tapped in the
+    /// air turns the skater half round, at `Physics_air_tap_turn_speed`, the
+    /// way held (or the last spin's); `tap_spin` is what's left to turn.
+    pub spin_taps: bool,
+    tap_spin: f32,
+    /// The ground's up the step before last (see `ground_step`).
+    up_before: Vec3,
+    /// The speed limits overridden for a while (the scripts'
+    /// `OverrideLimits`, see [`Limits`]): skitching sets them every frame.
+    limits: Option<Limits>,
     /// Sound moments since they were last taken (see [`SkateSound`]).
     pub sounds: Vec<SkateSound>,
     /// The terrain of the ground last stood on (`TERRAIN_...`).
@@ -351,12 +416,22 @@ pub struct Skater {
     /// like, as the level's `TriggerScript`s do): their collision object's
     /// checksum, and where to and facing which way.
     pub teleports: HashMap<u32, (Vec3, f32)>,
+    /// The teleporter (its collision object) last gone through.
+    pub last_teleport: Option<u32>,
+    /// The trigger objects touched this step (for the viewer's own
+    /// triggers: breakables).
+    pub touched: Vec<u32>,
+    /// Trigger objects newly touched (not touched the step before), for
+    /// the viewer to run their scripts; it empties this.
+    pub touches: Vec<u32>,
     /// Trigger faces that start or end gaps, by collision object, and the
     /// gaps under way.
-    pub gap_triggers: HashMap<u32, GapTrigger>,
+    pub gap_triggers: HashMap<u32, Vec<GapTrigger>>,
     gaps: Gaps,
     /// The last gap scored, its name and points (for whoever shows it).
     pub last_gap: Option<(String, u32)>,
+    /// The scripts of gaps landed (`Gapscript`), for the viewer to run.
+    pub gap_scripts: Vec<u32>,
     /// A message for the screen (`LaunchPanelMessage`: "Sketchy", a gap's
     /// name, a spine transfer) and seconds left to show it.
     pub message: Option<(String, f32)>,
@@ -367,6 +442,8 @@ pub struct Skater {
     pub auto_kick: bool,
     /// Pushing this step.
     pub pushing: bool,
+    /// The wall bounced off last step (flat normal), to tell a corner.
+    last_wall: Option<Vec3>,
     /// Seconds left of the push under way (`DoAPush` plays a whole
     /// `PushCycle` before coasting again).
     push_left: f32,
@@ -394,6 +471,16 @@ pub struct Skater {
     pub bail_anims: (&'static str, &'static str),
     /// Smacked into a wall in this bail already (`BailSmack`).
     smacked: bool,
+    /// In a bail, slow enough at one of `GeneralBail`'s `SpeedCheckStop`s
+    /// to be stopped (`SetRollingFriction 100`).
+    bail_stopping: bool,
+    /// The friction the scripts set (`SetRollingFriction`, skater
+    /// `+0x3A58`) when it isn't `Physics_Rolling_Friction`: a revert's
+    /// (`SetSpecialFriction`), for as long as it plays (`Revert` goes
+    /// back to `Default` with `OnGroundExceptions` after its animation).
+    rolling_friction: Option<f32>,
+    /// How many reverts the combo has had, for the next one's friction.
+    reverts: usize,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -424,6 +511,8 @@ pub struct Skater {
     /// The combo so far, the last one finished, and the points banked.
     pub combo_tricks: Combo,
     pub last_combo: Option<Landed>,
+    /// How many combos have ended (landed or bailed), to tell a new one.
+    pub combos_ended: u32,
     /// Degrees turned in the air since leaving the ground or a rail, and
     /// the way of the last turn.
     air_spin: f32,
@@ -443,6 +532,8 @@ pub struct Skater {
     pub lip: Option<Lip>,
     /// The lip trick's way out, playing in the air after it.
     pub lip_out: Option<(u32, f32)>,
+    /// Vert air's autoturn: the heading it's turning the skater to.
+    autoturn: Option<f32>,
     /// Recent presses, for the specials' three-press combinations, with
     /// the clock they're timed by.
     presses: Vec<(Press, f32)>,
@@ -463,6 +554,11 @@ impl Skater {
             action: Action::Standing,
             action_time: 0.0,
             crouched: false,
+            skitch: None,
+            perfect_manual: false,
+            perfect_rail: false,
+            perfect_skitch: false,
+            skitch_hold: 0.0,
             slope: 0.0,
             bump: None,
             flipped: false,
@@ -471,19 +567,35 @@ impl Skater {
             turn_time: 0.0,
             crouch_time: 0.0,
             grind: None,
+            rail_node: None,
+            wall: None,
+            since_wallride: f32::MAX,
+            wallride_anywhere: true,
+            degrade: true,
+            accumulate: true,
             since_rail: f32::MAX,
             last_ground: position,
             spawns: Vec::new(),
             trace: false,
+            simplified: false,
+            spin_taps: false,
+            tap_spin: 0.0,
+            up_before: Vec3::Y,
+            limits: None,
             sounds: Vec::new(),
             terrain: 0,
             teleports: HashMap::new(),
+            last_teleport: None,
+            touched: Vec::new(),
+            touches: Vec::new(),
             gap_triggers: HashMap::new(),
             gaps: Gaps::default(),
             last_gap: None,
+            gap_scripts: Vec::new(),
             message: None,
             auto_kick: true,
             pushing: false,
+            last_wall: None,
             push_left: 0.0,
             push_anim: "PushCycle1",
             air_time: 0.0,
@@ -503,6 +615,9 @@ impl Skater {
             anim_lengths: HashMap::new(),
             bail_anims: ("Bail1", "BailGetUp1"),
             smacked: false,
+            bail_stopping: false,
+            rolling_friction: None,
+            reverts: 0,
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -518,6 +633,7 @@ impl Skater {
             pressed: (false, false),
             combo_tricks: Combo::default(),
             last_combo: None,
+            combos_ended: 0,
             air_spin: 0.0,
             air_spin_sign: 1.0,
             special_meter: 0.0,
@@ -528,6 +644,7 @@ impl Skater {
             balance_time: 0.0,
             lip: None,
             lip_out: None,
+            autoturn: None,
             presses: Vec::new(),
             clock: 0.0,
             score: 0,
@@ -568,7 +685,16 @@ impl Skater {
     /// A trick into the combo; grinds and manuals block spins.
     fn credit(&mut self, trick: Option<(String, u32)>, block_spin: bool) {
         if let Some((name, score)) = trick {
+            // Trick spots under way that asked for it run their scripts.
+            let surface = self.surface();
+            self.gap_scripts
+                .extend(self.gaps.trick_done(&name, surface));
             self.combo_tricks.add(&name, score, block_spin);
+            if !self.degrade {
+                if let Some(last) = self.combo_tricks.tricks.last_mut() {
+                    last.repeats = 0;
+                }
+            }
         }
         if block_spin {
             self.air_spin = 0.0;
@@ -579,10 +705,14 @@ impl Skater {
     /// `score`), lost in a bail.
     fn end_combo(&mut self, landed: bool) {
         self.combo = false;
+        // (`ClearPanel_Landed` and `ClearPanel_Bailed`: the next revert's
+        // friction from the start again.)
+        self.reverts = 0;
         if !landed {
             self.gaps.clear();
         }
         self.air_spin = 0.0;
+        self.tap_spin = 0.0;
         self.last_total = 0;
         // A bail empties the special meter.
         if !landed {
@@ -594,12 +724,17 @@ impl Skater {
         }
         let combo = std::mem::take(&mut self.combo_tricks);
         let total = if landed { combo.total() } else { 0 };
-        self.score += total;
+        if self.accumulate {
+            self.score += total;
+        } else {
+            self.score = self.score.max(total);
+        }
         self.last_combo = Some(Landed {
             combo,
             total,
             bailed: !landed,
         });
+        self.combos_ended += 1;
     }
 
     /// Air tricks: start one on a button press (when none is playing, or
@@ -715,13 +850,9 @@ impl Skater {
         }
     }
 
-    /// Touching a trigger face of a teleporter (the level's `TriggerScript`
-    /// sends the skater to a restart: `Teleporter`, `Teleporter_water` and
-    /// the like): there, standing, the combo lost.
-    ///
-    /// And gaps: their start and end triggers, scored into the combo.
-    fn check_triggers(&mut self, before: Vec3, world: &World, p: &Physics) {
-        let surface = if self.lip.is_some() {
+    /// What the skater's on, for gaps.
+    fn surface(&self) -> Surface {
+        if self.lip.is_some() {
             Surface::Lip
         } else if self.grind.is_some() {
             Surface::Rail
@@ -729,19 +860,38 @@ impl Skater {
             Surface::Ground
         } else {
             Surface::Air
-        };
+        }
+    }
+
+    /// Touching a trigger face of a teleporter (the level's `TriggerScript`
+    /// sends the skater to a restart: `Teleporter`, `Teleporter_water` and
+    /// the like): there, standing, the combo lost.
+    ///
+    /// And gaps: their start and end triggers, scored into the combo.
+    fn check_triggers(&mut self, before: Vec3, world: &World, p: &Physics) {
+        let surface = self.surface();
         let across = (self.position - before) * Vec3::new(1.0, 0.0, 1.0);
         self.gaps.update(surface, across.length());
+        // The trigger faces touched: crossed along the way at knee height
+        // (planes stood up across a passage, a crate's sides), or at the
+        // feet (water and floors).
+        let knee = Vec3::Y * 10.0;
+        let mut touched = world.triggers(before + knee, self.position + knee);
+        touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
+        touched.dedup();
+        let before_touched = std::mem::replace(&mut self.touched, touched.clone());
+        self.touches
+            .extend(touched.iter().filter(|t| !before_touched.contains(t)));
         if self.teleports.is_empty() && self.gap_triggers.is_empty() {
             return;
         }
-        // Teleporters: crossed along the way at knee height (planes stood
-        // up across a passage), or touched at the feet (water and floors).
-        let knee = Vec3::Y * 10.0;
+        // Teleporters.
         if !self.teleports.is_empty() {
-            let mut touched = world.triggers(before + knee, self.position + knee);
-            touched.extend(world.triggers(self.position + knee, self.position - Vec3::Y * 4.0));
-            if let Some(&(position, heading)) = touched.iter().find_map(|o| self.teleports.get(o)) {
+            if let Some((object, &(position, heading))) = touched
+                .iter()
+                .find_map(|o| Some((*o, self.teleports.get(o)?)))
+            {
+                self.last_teleport = Some(object);
                 self.gaps.clear();
                 self.place(position, heading, p, world);
                 self.sounds.push(SkateSound::Teleport);
@@ -754,16 +904,33 @@ impl Skater {
         let mut crossed: Vec<GapTrigger> = world
             .triggers(before + feet, self.position + feet)
             .iter()
-            .filter_map(|o| self.gap_triggers.get(o).cloned())
+            .filter_map(|o| self.gap_triggers.get(o))
+            .flatten()
+            .cloned()
             .collect();
-        // Ends first: where a gap's end and the way-back gap's start lie
-        // together, crossing them ends the one before starting the other.
+        crossed.dedup();
+        self.cross_gaps(&crossed, surface);
+    }
+
+    /// Gap triggers met (a trigger face crossed, a rail node reached):
+    /// gaps started, and ended into the combo. Ends first: where a gap's
+    /// end and the way-back gap's start lie together (or one trigger does
+    /// both: Zurg's spine), crossing them ends the one before starting the
+    /// other.
+    fn cross_gaps(&mut self, crossed: &[GapTrigger], surface: Surface) {
+        let mut crossed = crossed.to_vec();
         crossed.sort_by_key(|t| matches!(t, GapTrigger::Start { .. }));
         for trigger in &crossed {
             if self.trace {
                 eprintln!("crossed {trigger:?} on {surface:?} at {:?}", self.position);
             }
-            if let Some((name, score)) = self.gaps.touch(trigger, surface) {
+            if let Some((name, score, script)) = self.gaps.touch(trigger, surface) {
+                // Its script (a goal's: `Gapscript = StrengthGrind`).
+                self.gap_scripts.extend(script);
+                // A goal's own gap has no name or points to score.
+                if name.is_empty() {
+                    continue;
+                }
                 // Into the combo like a trick; rolling along with no combo
                 // going, it banks straight away.
                 self.last_gap = Some((name.clone(), score));
@@ -800,6 +967,7 @@ impl Skater {
     /// (`BailBackward`), as `DoingTrickBail` and `YawBail` pick.
     fn start_bail(&mut self, action: Action, backwards: bool) {
         self.smacked = false;
+        self.bail_stopping = false;
         self.sounds.push(SkateSound::Bail);
         let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
         if flat.length() > 10.0 {
@@ -816,6 +984,28 @@ impl Skater {
             };
         }
         self.set_action(action);
+    }
+
+    /// Knocked down (`PedKnockDown`: a heckler's swipe, a missile): off
+    /// any rail, lip or manual and into a bail (`DoingTrickBail`), the
+    /// combo lost; in the air, a bail on landing.
+    pub fn knock_down(&mut self) {
+        if matches!(
+            self.action,
+            Action::BailManual | Action::BailGrind | Action::Bail
+        ) {
+            return;
+        }
+        self.grind = None;
+        self.lip = None;
+        self.manual = false;
+        self.trick = None;
+        self.end_combo(false);
+        if self.on_ground {
+            self.start_bail(Action::Bail, false);
+        } else {
+            self.bail_on_landing = true;
+        }
     }
 
     /// The steering held (-1 left to 1 right).
@@ -846,7 +1036,7 @@ impl Skater {
 
     /// The balance meter from -1 to 1 while balancing a manual or a grind.
     pub fn balance_meter(&self) -> Option<f32> {
-        (self.manual || self.grind.is_some() || self.lip.is_some())
+        (self.manual || self.grind.is_some() || self.lip.is_some() || self.skitch.is_some())
             .then(|| (self.balance.angle / METER).clamp(-1.0, 1.0))
     }
 
@@ -871,7 +1061,11 @@ impl Skater {
     }
 
     /// Advances `dt` seconds in fixed steps.
-    pub fn update(&mut self, input: Input, physics: &Physics, world: &World, dt: f32) {
+    pub fn update(&mut self, mut input: Input, physics: &Physics, world: &World, dt: f32) {
+        if self.simplified {
+            let any = input.flip || input.grab || input.grind;
+            (input.flip, input.grab, input.grind) = (any, any, any);
+        }
         self.leftover += dt.min(0.25);
         while self.leftover >= STEP {
             self.leftover -= STEP;
@@ -934,6 +1128,7 @@ impl Skater {
             self.since_down + STEP
         };
         self.clock += STEP;
+        self.since_wallride = (self.since_wallride + STEP).min(f32::MAX);
         if let Some((_, left)) = &mut self.message {
             *left -= STEP;
             if *left <= 0.0 {
@@ -978,11 +1173,9 @@ impl Skater {
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
         ) {
+            // (`DisablePlayerInput`: the bail's friction stops it.)
             if self.action_time < self.bail_time() {
-                Input {
-                    brake: true,
-                    ..Input::default()
-                }
+                Input::default()
             } else {
                 self.set_action(Action::Standing);
                 input
@@ -990,24 +1183,36 @@ impl Skater {
         } else {
             input
         };
+        // The scripts' overridden limits run out (0x800F48BC).
+        if let Some(l) = &mut self.limits {
+            l.time -= STEP;
+            if l.time <= 0.0 {
+                self.limits = None;
+            }
+        }
+        let limits = self.limits.unwrap_or(Limits::of(p));
         // The speed limits run every frame whatever the skater is doing
         // (main.dol 0x8010B120 calls 0x800F4834 before the ground, air
         // and rail updates), so chaining grinds and jumps can't build
         // speed past `max_max_speed`. The ground step applies them itself.
         if let Some(grind) = self.grind.as_mut() {
             let velocity = self.velocity.normalize_or_zero() * grind.speed;
-            let limited = limit_speed(velocity, p);
+            let limited = limit_speed(velocity, limits);
             if velocity.length() > 0.0 {
                 grind.speed *= limited.length() / velocity.length();
             }
         } else if !self.on_ground {
-            self.velocity = limit_speed(self.velocity, p);
+            self.velocity = limit_speed(self.velocity, limits);
         }
         let before = self.position;
-        if self.lip.is_some() {
-            self.lip_step(input, p);
+        if self.skitch.is_some() {
+            self.skitch_step(input, p, world);
+        } else if self.lip.is_some() {
+            self.lip_step(input, p, world);
         } else if self.grind.is_some() {
             self.grind_step(input, p, world);
+        } else if self.wall.is_some() {
+            self.wall_step(input, p, world);
         } else if self.on_ground {
             self.ground_step(input, p, world);
         } else {
@@ -1018,9 +1223,11 @@ impl Skater {
             // Onto a rail met on the way (main.dol 0x801078A8), only from
             // the air (the main update asks with 0, which skips it on the
             // ground), and not too soon after leaving one.
-            // The button held, or pressed within the last half second
-            // (`{ Press, Triangle, 500 }` in the game's `GrindTricks`).
-            let armed = input.grind || self.since_grind <= GRIND_WINDOW;
+            // The button held (main.dol 0x80108558: Triangle with the pro
+            // controls); with the simplified controls, any trick button
+            // held or pressed within `Skater_regrind_time` (0x80108568).
+            let armed =
+                input.grind || (self.simplified && self.since_grind <= p.regrind_time);
             let falling_bail = matches!(self.action, Action::BailFall { .. });
             if armed && !self.on_ground && !falling_bail && self.since_rail >= p.regrind_time {
                 if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
@@ -1029,14 +1236,19 @@ impl Skater {
                     // flat against a steep ramp, facing up and rising).
                     let level = world.rails.segments[hit.segment].direction().y.abs() < 0.3;
                     match self.vert {
-                        Some(vert) if self.velocity.y > 0.0 && level => {
-                            self.start_lip(hit.point, vert.out, p)
+                        Some(vert) if self.velocity.y > 0.0 && level && self.lip_allowed(vert, p) => {
+                            self.start_lip(hit.point, vert.out, p);
+                            if self.lip.is_some() {
+                                self.rail_node = None;
+                                self.reach_rail(hit.segment, world);
+                            }
                         }
                         _ => self.start_grind(hit, input, p, world),
                     }
                 }
             }
         }
+        self.check_skitch(input, p, world);
         self.check_triggers(before, world, p);
         self.update_special();
         let anim = anims::choose(self);
@@ -1115,6 +1327,151 @@ impl Skater {
         self.set_action(Action::Manual);
     }
 
+    /// Starts skitching (the game's `Skitched`): rolling on the ground,
+    /// up held for `skitch_hold_time` within `Skitch_Max_Distance` behind a
+    /// moving vehicle and roughly in line with it.
+    fn check_skitch(&mut self, input: Input, p: &Physics, world: &World) {
+        let free = self.on_ground
+            && self.skitch.is_none()
+            && !self.manual
+            && self.grind.is_none()
+            && self.lip.is_none()
+            && matches!(
+                self.action,
+                Action::Rolling | Action::Pushing | Action::Crouching | Action::Standing
+            );
+        if !free || !input.push {
+            self.skitch_hold = 0.0;
+            return;
+        }
+        let behind = world.vehicles.iter().position(|v| {
+            let to = self.position - v.position;
+            let back = -to.dot(v.forward);
+            let across = (to - v.forward * to.dot(v.forward)).with_y(0.0).length();
+            back > v.half_length
+                && back < v.half_length + p.skitch_max_distance
+                && across < 40.0
+                && to.y.abs() < 60.0
+        });
+        let Some(vehicle) = behind else {
+            self.skitch_hold = 0.0;
+            return;
+        };
+        self.skitch_hold += STEP;
+        if self.skitch_hold < p.skitch_hold_time {
+            return;
+        }
+        // `Skitch`: a balance trick, "Skitchin'" for 500.
+        self.skitch = Some(vehicle);
+        self.skitch_hold = 0.0;
+        self.balance.start(&p.skitch_balance, !self.combo);
+        self.combo = true;
+        self.balance_trick = None;
+        self.balance_time = 0.0;
+        self.credit(Some(("Skitchin'".to_string(), SKITCH_SCORE)), true);
+        self.sounds.push(SkateSound::Gap);
+        self.set_action(Action::Skitching);
+    }
+
+    /// Towed behind the vehicle `Skitch_Offset` past its back, balancing
+    /// with left and right (`DoBalanceTrick ButtonA = Right ButtonB =
+    /// Left Type = Skitch Tweak = 5`); letting go of up or falling off the
+    /// meter lets go (`SkitchOut`, no bail), and an ollie jumps off with
+    /// the car's speed.
+    fn skitch_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // `Skitch` (GROUNDTRICKS.q), every frame: `overridelimits max =
+        // 10000 Friction = 0 time = 5 Gravity = 0`, so it can go as fast as
+        // what it's holding, and flies on a while after letting go.
+        self.limits = Some(Limits {
+            time: 5.0,
+            max: 10000.0,
+            max_max: 10000.0,
+            friction: 0.0,
+            gravity: 0.0,
+        });
+        let Some(car) = self.skitch.and_then(|i| world.vehicles.get(i)).copied() else {
+            self.let_go_skitch(Vec3::ZERO);
+            return;
+        };
+        let velocity = car.forward * car.speed;
+        if self.crouched && !input.crouch {
+            self.crouched = false;
+            self.skitch = None;
+            self.velocity = velocity + Vec3::Y * self.jump_speed(p);
+            self.on_ground = false;
+            self.ollied = true;
+            self.position += Vec3::Y;
+            self.up = Vec3::Y;
+            self.air_time = 0.0;
+            self.sounds.push(SkateSound::Jump { from_rail: false });
+            self.set_action(Action::Air);
+            return;
+        }
+        self.crouched = input.crouch;
+        if self.perfect_skitch {
+            self.balance.steady();
+        }
+        let lean = self
+            .balance
+            .update(input.turn > 0.0, input.turn < 0.0, &p.skitch_balance, STEP);
+        self.combo_tricks.tweak(SKITCH_TWEAK);
+        if !input.push || lean != Lean::Balanced {
+            if self.trace {
+                eprintln!(
+                    "let go of the skitch at {:?}: push {}, {lean:?}",
+                    self.position, input.push
+                );
+            }
+            self.let_go_skitch(velocity);
+            return;
+        }
+        // Behind the car, on the ground there.
+        let spot = car.position - car.forward * (car.half_length + p.skitch_offset);
+        let ground = world
+            .ray(spot + Vec3::Y * 50.0, spot - Vec3::Y * 400.0)
+            .filter(|hit| !is_wall(hit, p));
+        // No ground there (off the end of a ramp): off into the air at the
+        // car's speed, the way the slope was going.
+        let Some(hit) = ground else {
+            if self.trace {
+                eprintln!(
+                    "off the skitch into the air at {:?}, {:.0} fast",
+                    self.position, car.speed
+                );
+            }
+            self.skitch = None;
+            self.velocity = self.velocity.normalize_or(velocity.normalize_or_zero()) * car.speed;
+            self.on_ground = false;
+            self.up = Vec3::Y;
+            self.air_time = 0.0;
+            self.end_combo(true);
+            self.set_action(Action::Air);
+            return;
+        };
+        self.position = hit.point;
+        self.up = hit.normal;
+        // Along the slope it's on, at the car's speed.
+        let along = car.forward - hit.normal * car.forward.dot(hit.normal);
+        self.velocity = along.normalize_or(car.forward) * car.speed;
+        self.heading = car.forward.x.atan2(car.forward.z);
+        self.on_ground = true;
+    }
+
+    /// Lets go of the car (`SkitchOut`): rolling on at its speed, and the
+    /// combo lands.
+    fn let_go_skitch(&mut self, velocity: Vec3) {
+        self.skitch = None;
+        self.velocity = velocity;
+        // (Let go of in the air: flying on as it was going.)
+        if !self.on_ground {
+            self.air_time = 0.0;
+            self.set_action(Action::Air);
+            return;
+        }
+        self.end_combo(true);
+        self.set_action(Action::Rolling);
+    }
+
     /// Whether `press` came within the last `window` seconds (this step
     /// with a window of 0).
     fn pressed_within(&self, press: Press, window: f32) -> bool {
@@ -1133,6 +1490,12 @@ impl Skater {
         // or it lands.
         self.revert_window = REVERT_LINGER;
         self.reverted = true;
+        // `SetSpecialFriction [ 0, 10, 15, 20, 30, 50 ]` (0x80116698): each
+        // revert in a combo the next of these, the last from then on, as
+        // the rolling friction while it plays.
+        const REVERT_FRICTION: [f32; 6] = [0.0, 10.0, 15.0, 20.0, 30.0, 50.0];
+        self.rolling_friction = Some(REVERT_FRICTION[self.reverts.min(REVERT_FRICTION.len() - 1)]);
+        self.reverts += 1;
         self.combo = true;
         let frontside = self.air_spin_sign >= 0.0;
         let name = if frontside { "FS Revert" } else { "BS Revert" };
@@ -1169,6 +1532,18 @@ impl Skater {
         recent
             .windows(3)
             .any(|w| w == [Press::Dir(first), Press::Dir(second), button])
+    }
+
+    /// Whether the game would take this coping as a lip (0x80108638):
+    /// rising, facing up the ramp (not fakie) and within `LipAllowAngle`
+    /// of straight up it, the side of the board level enough. (Its other
+    /// two, the skater upright against the wall within
+    /// `LipPlayerHorizontalAngle` and the ramp steeper than
+    /// `LipRampVertAngle`, hold on every vert face here; the rails' own
+    /// `LipAllowAngle_Override` isn't read.)
+    fn lip_allowed(&self, vert: VertAir, p: &Physics) -> bool {
+        let into = -Vec3::new(vert.out.x, 0.0, vert.out.z).normalize_or_zero();
+        self.forward().dot(into) > p.lip_allow_angle.to_radians().cos()
     }
 
     /// Onto the coping (the `LipTrick` script): the special lip if its
@@ -1224,7 +1599,7 @@ impl Skater {
     /// (`LipParams`), 10 points a frame; ollying drops back in (or ollies
     /// out), and off the meter it drops back in one way and bails the
     /// other.
-    fn lip_step(&mut self, input: Input, p: &Physics) {
+    fn lip_step(&mut self, input: Input, p: &Physics, world: &World) {
         let Some(mut lip) = self.lip.clone() else {
             return;
         };
@@ -1255,10 +1630,13 @@ impl Skater {
         match lean {
             // `LipOut`: back into the ramp.
             Lean::OffBottom => self.leave_lip(&lip, 0.0),
-            // `LipBail` (no skating in onto the deck yet).
+            // Over a spine when there's one (`SkateInAble Lip`: `LipOut
+            // spine y = -24`), else `LipBail`.
             Lean::OffTop => {
-                self.bail_on_landing = true;
-                self.leave_lip(&lip, 0.0);
+                if !self.lip_over(&lip, world) {
+                    self.bail_on_landing = true;
+                    self.leave_lip(&lip, 0.0);
+                }
             }
             Lean::Balanced if ollie => {
                 // `OllieLipOut` ollies out; `NoOllie` lips just drop in.
@@ -1271,6 +1649,53 @@ impl Skater {
             }
             Lean::Balanced => self.lip = Some(lip),
         }
+    }
+
+    /// Off the lip the other way, over a spine (`SkateInAble Lip`,
+    /// main.dol 0x80117BC8, then `LipOut spine y = -24`): a line 7 below
+    /// the coping from `SkateInAble_LipHorizOffset` (24) back to it, or
+    /// else one `SkateInAble_LipExtraCheckDownOffset` (2400) straight
+    /// down from `SkateInAble_LipExtraCheckHorizOffset` (13) back, must
+    /// meet a vert face (`+0x395C`, from the feeler 0x800F66F0): the
+    /// ramp on the far side. The skater moves 24 over, turned round
+    /// (`Rotate z = 180`, `Flip`), into that ramp's vert air for a "Spine
+    /// Transfer" of `TRANSFER_POINTS`. A deck behind is a `LipBail`.
+    fn lip_over(&mut self, lip: &Lip, world: &World) -> bool {
+        use ngc_collision::face_flags::VERT;
+        let below = self.position - Vec3::Y * 7.0;
+        let back = below - lip.out * 24.0;
+        let top = self.position - lip.out * 13.0;
+        let far = world
+            .ray(back, below)
+            .or_else(|| world.ray(top, top - Vec3::Y * 2400.0))
+            .filter(|hit| hit.flags & VERT != 0);
+        let Some(far) = far else {
+            return false;
+        };
+        let mut out = Vec3::new(far.normal.x, 0.0, far.normal.z).normalize_or_zero();
+        // (Lines meet faces from either side: the far ramp faces away.)
+        if out.dot(lip.out) > 0.0 {
+            out = -out;
+        }
+        if out == Vec3::ZERO {
+            out = -lip.out;
+        }
+        self.lip = None;
+        self.since_rail = 0.0;
+        self.position += Vec3::Y - lip.out * 24.0;
+        self.velocity = Vec3::ZERO;
+        self.heading = out.x.atan2(out.z);
+        self.up = Vec3::Y;
+        self.vert = Some(VertAir {
+            out,
+            offset: self.position.dot(out),
+        });
+        self.flipped = !self.flipped;
+        self.credit(Some(("Spine Transfer".into(), TRANSFER_POINTS)), true);
+        self.ollied = false;
+        self.air_time = 0.0;
+        self.set_action(Action::Air);
+        true
     }
 
     /// Off the coping, back into the ramp (`LipOut`: a unit up and out,
@@ -1329,7 +1754,33 @@ impl Skater {
     /// to the max tense time.
     fn jump_speed(&self, p: &Physics) -> f32 {
         let tense = (self.crouch_time / p.max_tense_time).min(1.0);
-        p.jump_speed_min + (p.jump_speed - p.jump_speed_min) * tense
+        // (Off a vert face, the air jump speeds: 0x800F62C4.)
+        let on_vert =
+            self.on_ground && self.ground_flags & ngc_collision::face_flags::VERT != 0;
+        let (top, min) = if on_vert {
+            (p.air_jump_speed, p.air_jump_speed_min)
+        } else {
+            (p.jump_speed, p.jump_speed_min)
+        };
+        min + (top - min) * tense
+    }
+
+    /// On rail segment `segment` (grinding onto it, along to it, or lip
+    /// tricking on it): its node reached, once, as a trigger touched (its
+    /// `TriggerScript` runs) and any gap it starts or ends.
+    fn reach_rail(&mut self, segment: usize, world: &World) {
+        let Some(name) = world.rails.node(segment) else {
+            return;
+        };
+        if self.rail_node == Some(name) {
+            return;
+        }
+        self.rail_node = Some(name);
+        self.touches.push(name);
+        if let Some(triggers) = self.gap_triggers.get(&name).cloned() {
+            let surface = self.surface();
+            self.cross_gaps(&triggers, surface);
+        }
     }
 
     /// Onto a rail (main.dol 0x80108470): at the point found, unless
@@ -1355,6 +1806,7 @@ impl Skater {
         let along = velocity.dot(direction);
         let forwards = along >= 0.0;
         self.vert = None;
+        self.wall = None;
         self.manual = false;
         self.balance.start(&p.grind_balance, !self.combo);
         self.combo = true;
@@ -1391,6 +1843,8 @@ impl Skater {
         }
         self.heading = travel.x.atan2(travel.z);
         self.set_action(Action::Grinding);
+        self.rail_node = None;
+        self.reach_rail(hit.segment, world);
     }
 
     /// Along the rail (main.dol 0x80100A70): rail gravity along it, on
@@ -1454,24 +1908,39 @@ impl Skater {
         // Balance (`DoBalanceTrick ButtonA = Right ButtonB = Left`): off
         // the top of the meter it falls to the left, off the bottom to the
         // right (the game's `SkateInOrBail`).
+        if self.perfect_rail {
+            self.balance.steady();
+        }
         let lean = self
             .balance
             .update(input.turn > 0.0, input.turn < 0.0, &p.grind_balance, STEP);
         // Each grinding frame adds the grind's tweak (0x801033B0).
         self.combo_tricks.tweak(GRIND_TWEAK);
         if lean != Lean::Balanced {
+            if self.trace {
+                eprintln!("off balance ({lean:?}) at {:?}", self.position);
+            }
             let right = Vec3::new(-travel.z, 0.0, travel.x);
             let (side, turn) = if lean == Lean::OffTop {
                 (-right, 30f32.to_radians())
             } else {
                 (right, -30f32.to_radians())
             };
-            // Ground just beside the rail (`SkateInAble`, approximated):
-            // skate in onto it, turned 30 degrees that way, no bail.
+            // `SkateInAble Right`/`Left` (main.dol 0x80117E68): a line
+            // across under the rail, `SkateInAble_DownOffset` (7) below it
+            // and `SkateInAble_HorizOffset` (30) out each side, meets a vert
+            // face: a coping. Then skate in onto the ground that way,
+            // turned 30 degrees, no bail; elsewhere `FiftyFiftyFall`.
+            use ngc_collision::face_flags::VERT;
+            let under = self.position - Vec3::Y * 7.0;
+            let coping = world
+                .ray(under - side * 30.0, under + side * 30.0)
+                .is_some_and(|hit| hit.flags & VERT != 0);
             let beside = self.position + side * 20.0;
             let lift = Vec3::Y * 10.0;
             let ground = world
                 .ray(beside + lift, beside - Vec3::Y * 30.0)
+                .filter(|_| coping)
                 .filter(|hit| !is_wall(hit, p))
                 .filter(|hit| world.ray(self.position + lift, hit.point + lift).is_none());
             if let Some(hit) = ground {
@@ -1482,7 +1951,11 @@ impl Skater {
                 self.heading += turn;
                 self.velocity = self.forward() * grind.speed;
                 self.on_ground = true;
-                self.end_combo(true);
+                // Landed from vert (`SetLandedFromVert`): a revert within
+                // 20 frames carries the combo on (`SetExtraTricks tricks =
+                // Reverts duration = 20`), else it's banked.
+                self.reverted = false;
+                self.revert_window = SKATE_IN_REVERT;
                 self.set_action(Action::Landing);
                 return;
             }
@@ -1509,6 +1982,9 @@ impl Skater {
                 });
             let Some((n, same)) = next else {
                 // Off the end, or a corner too sharp to follow.
+                if self.trace {
+                    eprintln!("off the rail's end at {joint:?}");
+                }
                 if !self.grind_blocked(position, travel * grind.speed, p, world) {
                     self.position = position;
                     self.leave_rail(travel * grind.speed, p, world);
@@ -1517,6 +1993,7 @@ impl Skater {
             };
             grind.segment = n;
             grind.forwards = same;
+            self.reach_rail(n, world);
             rail = rails.segments[n];
             travel = rail.direction() * if same { 1.0 } else { -1.0 };
             position = joint + travel * past;
@@ -1532,21 +2009,34 @@ impl Skater {
     }
 
     /// Anything in the way along the rail (main.dol 0x801032E4): a line 1
-    /// up from where the skater is to 1 up from `to` and 6 on. Hitting
-    /// anything, like the ground where a rail dips into it, knocks it off
-    /// the rail where it was, 1 higher, its speed along what it hit.
+    /// up from where the skater is to 1 up from `to` and 6 on. A wall
+    /// across the rail knocks it off where it was, 1 higher, its speed
+    /// along what it hit.
+    ///
+    /// Only a wall facing back along the rail, though, and met
+    /// [`GRIND_BLOCK_HEIGHT`] up: rails run along ledges, curbs, slopes and
+    /// copings, and through their own meshes and posts, whose faces cross
+    /// a line 1 up by a hair (the rail's straight, the geometry's not
+    /// quite), and those knocked the skater off partway along. Those it
+    /// grinds past.
     fn grind_blocked(&mut self, to: Vec3, velocity: Vec3, p: &Physics, world: &World) -> bool {
         let Some(direction) = (to - self.position).try_normalize() else {
             return false;
         };
-        let from = self.position + Vec3::Y;
-        let Some(hit) = world.ray(from, to + Vec3::Y + direction * 6.0) else {
+        let up = Vec3::Y * GRIND_BLOCK_HEIGHT;
+        let from = self.position + up;
+        let across = |hit: &Hit| {
+            hit.normal.y.abs() < 0.3
+                && hit.normal.dot(direction) < -0.3
+                && hit.flags & ngc_collision::face_flags::VERT == 0
+        };
+        let Some(hit) = world.ray_past(from, to + up + direction * 6.0, across) else {
             return false;
         };
         if self.trace {
             eprintln!(
-                "knocked off the rail at {:?} by a face at {:?} normal {:?} flags {:#x}",
-                self.position, hit.point, hit.normal, hit.flags
+                "knocked off the rail at {:?} by a face at {:?} normal {:?} flags {:#x} of {:#x}",
+                self.position, hit.point, hit.normal, hit.flags, hit.object
             );
         }
         self.position.y += 1.0;
@@ -1577,7 +2067,207 @@ impl Skater {
         self.set_action(Action::Air);
     }
 
+    /// Whether the skater can ride `hit`'s face: flagged wall-ridable, or
+    /// (with [`Skater::wallride_anywhere`]) any steep wall that isn't
+    /// skatable ground or a ramp.
+    fn wall_ridable(&self, hit: &Hit, p: &Physics) -> bool {
+        use ngc_collision::face_flags as f;
+        hit.flags & f::WALL_RIDABLE != 0
+            || (self.wallride_anywhere
+                && hit.flags & (f::SKATABLE | f::VERT) == 0
+                && is_wall(hit, p)
+                && hit.normal.y.abs() < 0.5)
+    }
+
+    /// Onto a wall met in the air (main.dol 0x800FDB6C), with the grind
+    /// button held or just pressed (`Wall_Ride_Triangle_Window`), not too
+    /// soon after the last (`Wall_Ride_Delay`): if the wall can be ridden,
+    /// doesn't lean over too far, is met at a glancing angle and fast
+    /// enough along it, and (rising) goes on up to where the skater will
+    /// be in 0.15 s. The skater goes a unit off it, its speed along it:
+    /// "FS Wallride" or "BS Wallride" (`WallRide`), 200 points.
+    fn start_wallride(&mut self, hit: &Hit, input: Input, p: &Physics, world: &World) -> bool {
+        let armed = input.grind || self.since_grind <= p.wall_ride_triangle_window;
+        if !armed
+            || self.since_wallride <= p.wall_ride_delay
+            || self.vert.is_some()
+            || self.transfer.is_some()
+            || matches!(self.action, Action::BailFall { .. })
+            || !self.wall_ridable(hit, p)
+        {
+            return false;
+        }
+        let n = hit.normal;
+        if n.y <= -p.wall_ride_upside_down_angle.to_radians().sin() {
+            return false;
+        }
+        let Some(flat_n) = n.with_y(0.0).try_normalize() else {
+            return false;
+        };
+        let flat_v = self.velocity.with_y(0.0);
+        let along = flat_v - flat_n * flat_v.dot(flat_n);
+        if along.length() < p.wall_ride_min_speed {
+            return false;
+        }
+        let into = flat_v.normalize_or_zero().dot(flat_n).abs();
+        if into >= p.wall_ride_max_incident_angle.to_radians().sin() {
+            return false;
+        }
+        if self.velocity.y > 0.0 {
+            let up = hit.point + Vec3::Y * (self.velocity.y * 0.15);
+            if world.ray(up + n * 6.0, up - n * 6.0).is_none() {
+                return false;
+            }
+        }
+        // Not with the feet at or below a floor there (coming down onto it
+        // beside a wall that goes on below: a landing, not a wallride).
+        let feet = off_wall(hit.point, n, p.forward_collision_height);
+        if world
+            .ray(hit.point + n, feet - Vec3::Y)
+            .is_some_and(|floor| !is_wall(&floor, p))
+        {
+            return false;
+        }
+        let left = Vec3::new(-n.z, 0.0, n.x).dot(self.velocity) < 0.0;
+        self.wall = Some(WallRide { normal: n, left });
+        self.since_wallride = 0.0;
+        self.position = feet;
+        self.velocity -= n * self.velocity.dot(n);
+        self.trick = None;
+        self.manual = false;
+        self.combo = true;
+        let name = if left != self.flipped {
+            "FS Wallride"
+        } else {
+            "BS Wallride"
+        };
+        self.credit(Some((name.into(), 200)), true);
+        self.sounds.push(SkateSound::Cess);
+        self.sounds.push(SkateSound::Trick { special: false });
+        self.crouched = input.crouch;
+        self.ride_wall_pose();
+        self.set_action(Action::WallRide);
+        true
+    }
+
+    /// Facing along the wall, leaning out from it (the game turns the
+    /// skater's up to the wall's normal for its wallride animations; the
+    /// characters on the disc have none, so a lean stands in).
+    fn ride_wall_pose(&mut self) {
+        let Some(wall) = self.wall else { return };
+        let v = self.velocity.with_y(0.0);
+        if v.length() > 1.0 {
+            self.heading = v.x.atan2(v.z);
+        }
+        self.up = (Vec3::Y + wall.normal * 0.7).normalize();
+    }
+
+    /// Along the wall (main.dol 0x800FE664): `Wall_Ride_Gravity` pulling
+    /// it down, held a unit off the wall as it curves. Off it when the
+    /// wall ends (pushed out and up a little), onto the ground below, or
+    /// into something ahead. Letting go of crouch ollies off it: a
+    /// "Wallie" (250 points), or with up held a "Wallplant" (500, at the
+    /// boneless jump speed: `WallRideTricks`).
+    fn wall_step(&mut self, input: Input, p: &Physics, world: &World) {
+        let Some(mut wall) = self.wall else { return };
+        let push = wall.normal * p.wall_ride_jump_out_speed + Vec3::Y * p.wall_ride_jump_up_speed;
+        if self.crouched && !input.crouch {
+            self.crouched = false;
+            let plant = input.push;
+            let mut velocity = self.velocity + push;
+            velocity.y = p.wall_ride_jump_up_speed
+                + if plant {
+                    p.boneless_jump_speed
+                } else {
+                    self.jump_speed(p)
+                };
+            self.leave_wall(velocity);
+            let (name, score) = if plant {
+                ("Wallplant", 500)
+            } else {
+                ("Wallie", 250)
+            };
+            self.credit(Some((name.into(), score)), true);
+            self.sounds.push(SkateSound::Jump { from_rail: false });
+            self.ollied = true;
+            return;
+        }
+        self.crouched = input.crouch;
+        let lift = Vec3::Y * p.forward_collision_height;
+        let from = self.position;
+        let mut target =
+            from + self.velocity * STEP + Vec3::Y * (0.5 * p.wall_ride_gravity * STEP * STEP);
+        self.velocity.y += p.wall_ride_gravity * STEP;
+        // Something across the way ahead: off, for the air to deal with.
+        if let Some(direction) = (target - from).try_normalize() {
+            let ahead = target + lift + direction * p.forward_collision_length;
+            if world
+                .ray(from + lift, ahead)
+                .is_some_and(|hit| hit.normal.dot(direction) < -0.5)
+            {
+                self.leave_wall(self.velocity);
+                return;
+            }
+        }
+        // Ground just below: off, and the air step lands on it (from just
+        // above it, so the step down meets it even at the wall's foot).
+        let below = world
+            .ray_past(
+                from.with_y(from.y.max(target.y)) + Vec3::Y * p.ground_snap_up,
+                target - Vec3::Y * 10.0,
+                |hit| !is_wall(hit, p) && hit.normal.y > 0.0,
+            )
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.0);
+        if let Some(ground) = below {
+            self.position = ground.point + ground.normal;
+            self.leave_wall(self.velocity);
+            return;
+        }
+        // The wall still there (and still a wall), a unit off it.
+        let probe = target + lift;
+        let on = world
+            .ray(probe + wall.normal * 4.0, probe - wall.normal * 12.0)
+            .filter(|hit| self.wall_ridable(hit, p) && hit.normal.dot(wall.normal) > 0.5);
+        let Some(hit) = on else {
+            // `GroundGone`: the wall's ended.
+            self.position = target;
+            self.leave_wall(self.velocity + push);
+            return;
+        };
+        wall.normal = hit.normal;
+        target = off_wall(hit.point, hit.normal, p.forward_collision_height);
+        // (Or there, held off the wall, at the edge of a floor.)
+        if let Some(ground) = world
+            .ray_past(
+                target + Vec3::Y * p.ground_snap_up,
+                target - Vec3::Y * 10.0,
+                |hit| !is_wall(hit, p) && hit.normal.y > 0.0,
+            )
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.0)
+        {
+            self.position = ground.point + ground.normal;
+            self.leave_wall(self.velocity);
+            return;
+        }
+        self.velocity -= hit.normal * self.velocity.dot(hit.normal);
+        self.position = target;
+        self.wall = Some(wall);
+        self.ride_wall_pose();
+        self.set_action(Action::WallRide);
+    }
+
+    fn leave_wall(&mut self, velocity: Vec3) {
+        self.wall = None;
+        self.velocity = velocity;
+        self.on_ground = false;
+        self.ollied = false;
+        self.up = Vec3::Y;
+        self.set_action(Action::Air);
+    }
+
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
+        // (A spin tap's half turn stops on landing.)
+        self.tap_spin = 0.0;
         // `Handbrake`: braking for 1.4 seconds steps off the board (rolling
         // friction 100: it stops); up or crouch steps back on.
         self.brake_time = if input.brake && !self.manual {
@@ -1682,7 +2372,17 @@ impl Skater {
                 if trick.is_some() && !(self.manual && same) {
                     self.start_manual(trick, !self.manual, p);
                 }
-            } else if !self.manual && pressed_pair {
+            } else if !self.manual
+                && (pressed_pair
+                    || self.simplified
+                        && circle
+                        && self
+                            .presses
+                            .iter()
+                            .filter(|&&(p, t)| p == Press::Flip && self.clock - t <= 0.23 + 1e-4)
+                            .count()
+                            >= 2)
+            {
                 let trick = TrickBook::balance_trick(&self.tricks.manuals, None);
                 self.start_manual(trick, true, p);
             }
@@ -1702,6 +2402,9 @@ impl Skater {
             }
         }
         if self.manual {
+            if self.perfect_manual {
+                self.balance.steady();
+            }
             match self
                 .balance
                 .update(input.push, input.brake, &p.manual_balance, STEP)
@@ -1748,6 +2451,27 @@ impl Skater {
             rate *= self.turn_time / 0.6;
         }
         self.heading -= input.turn * rate * STEP;
+        // Slow on steep ground (0x800F3564: under `max_sloped_turn_speed`,
+        // the ground's normal under `max_sloped_turn_cosine` high), the
+        // board turns towards straight downhill at `slow_turn_on_slopes`
+        // (about the ground's normal: a turn of the heading), never past
+        // it: crawling up a quarter pipe, the skater turns round.
+        let speed_now = self.velocity.length();
+        if speed_now < p.max_sloped_turn_speed && self.up.y < p.max_sloped_turn_cosine {
+            let up = self.up.normalize_or(Vec3::Y);
+            let down = (-Vec3::Y + up * up.y).normalize_or_zero();
+            let board = Quat::from_rotation_arc(Vec3::Y, up) * self.forward();
+            let way = if speed_now < 0.001 {
+                board
+            } else {
+                self.velocity / speed_now
+            };
+            if down != Vec3::ZERO {
+                let angle = up.dot(way.cross(down)).atan2(way.dot(down));
+                let step = p.slow_turn_on_slopes * STEP;
+                self.heading += angle.clamp(-step, step);
+            }
+        }
         let up = self.up;
         // Forward along the surface.
         let flat = self.forward();
@@ -1791,22 +2515,22 @@ impl Skater {
         }
         self.pushing = self.push_left > 0.0;
         self.push_left = (self.push_left - STEP).max(0.0);
+        let (top, accel, friction) = if input.crouch {
+            (
+                p.max_crouched_kick_speed,
+                p.crouched_acceleration,
+                p.crouched_air_friction,
+            )
+        } else {
+            (
+                p.max_standing_kick_speed,
+                p.standing_acceleration,
+                p.standing_air_friction,
+            )
+        };
         if push {
-            let (top, accel, friction) = if input.crouch {
-                (
-                    p.max_crouched_kick_speed,
-                    p.crouched_acceleration,
-                    p.crouched_air_friction,
-                )
-            } else {
-                (
-                    p.max_standing_kick_speed,
-                    p.standing_acceleration,
-                    p.standing_air_friction,
-                )
-            };
             // Push along the current velocity while under the kick speed
-            // (0x800F43F0, 0x800F44CC), with drag (0x800F4CF0).
+            // (0x800F43F0, 0x800F44CC).
             if self.pushing && velocity.length() <= top {
                 // From (nearly) standing, the way the board faces: a slope
                 // creeping it backwards mustn't make it push backwards.
@@ -1817,7 +2541,18 @@ impl Skater {
                 };
                 velocity += direction * accel * STEP;
             }
+        }
+        // Drag (0x800F4CF0, each frame on the ground) with AutoKick on
+        // (`+0x3A38`), in a bail (`InBail`, `+0x36C4`) or with the
+        // scripts' friction set, pushing or not; then that friction.
+        if self.auto_kick || bailing || self.rolling_friction.is_some() {
             velocity = drag(velocity, friction);
+        }
+        if !matches!(self.action, Action::Revert { .. }) {
+            self.rolling_friction = None;
+        }
+        if let Some(friction) = self.rolling_friction {
+            velocity = rolling_friction(velocity, friction);
         }
         if input.brake {
             // Braking (0x800F418C): slow along the velocity, stopping
@@ -1834,6 +2569,40 @@ impl Skater {
                 }
             }
         }
+        // A bail's slide (`GeneralBail`'s `SetRollingFriction`, applied by
+        // 0x800F4C9C): down on the ground, `HeavyFriction` (100) for 3
+        // frames, then `Friction` (1) to 30% of the fall, `Friction2` (20)
+        // after; `SpeedCheckStop` at half way, three quarters, the end and
+        // getting up stops it (100) if it's under 300. Into a wall
+        // (`BailSmack`), 15.
+        if bailing {
+            let fall = match self.action {
+                Action::BailManual => "BailManual",
+                Action::BailGrind => "BailGrind",
+                _ => self.bail_anims.0,
+            };
+            let fall = match self.anim_length(fall) {
+                length if length > 0.0 => length,
+                _ => BAIL_TIME / 2.0,
+            };
+            let (now, before) = (self.action_time, self.action_time - STEP);
+            let checked = [0.5, 0.75, 1.0]
+                .iter()
+                .any(|&at| before < fall * at && now >= fall * at);
+            if checked && velocity.length() < 300.0 {
+                self.bail_stopping = true;
+            }
+            let friction = if self.smacked {
+                15.0
+            } else if now < 3.0 * STEP || self.bail_stopping {
+                100.0
+            } else if now < fall * 0.3 {
+                1.0
+            } else {
+                20.0
+            };
+            velocity = rolling_friction(velocity, friction);
+        }
         // Along the board, keeping the sign: it can roll backwards
         // (0x800F4D5C).
         let sign = if velocity.dot(forward) < 0.0 {
@@ -1843,7 +2612,7 @@ impl Skater {
         };
         velocity = forward * velocity.length() * sign;
         // Speed limits, on the horizontal speed (0x800F4834).
-        velocity = limit_speed(velocity, p);
+        velocity = limit_speed(velocity, self.limits.unwrap_or(Limits::of(p)));
         let mut speed = velocity.dot(forward);
 
         // Jump when letting go of a crouch.
@@ -1880,6 +2649,7 @@ impl Skater {
         let mut forward = forward;
         let mut target = self.position + forward * speed * STEP;
         let mut flailed = None;
+        let last_wall = self.last_wall.take();
         let lift = up * p.forward_collision_height;
         if let Some(direction) = (target - self.position).try_normalize() {
             let from = self.position + lift;
@@ -1895,8 +2665,21 @@ impl Skater {
                     // it off one wall then the other, frame after frame.
                     speed = 0.0;
                     target = self.position;
+                } else if let Some(previous) = last_wall.filter(|w| {
+                    let n = Vec3::new(hit.normal.x, 0.0, hit.normal.z).normalize_or_zero();
+                    let (turn, _) = wall_bounce(forward, up, hit.normal, p);
+                    let away = Quat::from_rotation_y(turn) * forward;
+                    w.dot(n) < 0.95 && away.with_y(0.0).dot(*w) < 0.0
+                }) {
+                    // Into a corner: bounced off one wall last step, this
+                    // one would turn it back into that (and the next step
+                    // back here, frame after frame). Stopped in it.
+                    self.last_wall = Some(previous);
+                    speed = 0.0;
+                    target = self.position;
                 } else {
                     let (turn, angle) = wall_bounce(forward, up, hit.normal, p);
+                    self.last_wall = Vec3::new(hit.normal.x, 0.0, hit.normal.z).try_normalize();
                     self.heading += turn;
                     let flat = self.forward();
                     forward = (flat - up * flat.dot(up)).normalize_or(flat);
@@ -1906,6 +2689,9 @@ impl Skater {
                         speed *= 1.0 - (angle.abs() - dont_slow) / (FRAC_PI_2 - dont_slow);
                     }
                     if before > p.wall_bounce_dont_flail_speed {
+                        self.sounds.push(SkateSound::Bonk {
+                            terrain: hit.terrain,
+                        });
                         flailed = Some(if turn > 0.0 {
                             Action::FlailLeft
                         } else {
@@ -1922,6 +2708,14 @@ impl Skater {
                     let out = (target + lift - hit.point).dot(normal);
                     if out < 6.0 {
                         target += normal * (6.0 - out);
+                    }
+                    // (A wall leaning back, a bank too steep to ride up,
+                    // would still have the feet inside it.)
+                    if hit.normal.y > 0.0 {
+                        let feet = (target - hit.point).dot(hit.normal);
+                        if feet < 1.0 {
+                            target += hit.normal * (1.0 - feet);
+                        }
                     }
                 }
             }
@@ -1986,7 +2780,17 @@ impl Skater {
                 self.last_ground = hit.point;
                 self.ground_flags = hit.flags;
                 self.terrain = hit.terrain;
-                self.up = hit.normal;
+                // Rocking between two faces in a gutter (this step's the
+                // one before last's, the last the other): along the crease
+                // between them, not tipped from one to the other each step.
+                let rocking =
+                    hit.normal.dot(self.up_before) > 0.999 && hit.normal.dot(self.up) < 0.95;
+                self.up_before = self.up;
+                self.up = if rocking {
+                    (hit.normal + self.up).normalize_or(hit.normal)
+                } else {
+                    hit.normal
+                };
                 self.velocity = forward * speed;
                 self.follow_slope(input.crouch);
             }
@@ -2006,7 +2810,17 @@ impl Skater {
                     );
                 }
                 // The ground is gone: off an edge, or over the lip of a
-                // kicker (the game's `GroundGone`).
+                // kicker (the game's `GroundGone`). (This crate's
+                // safeguard: not inside the wall the line down met, a wall
+                // leaning back where a slope steepens, below the
+                // knee-height check; the air would start inside it.)
+                let mut target = target;
+                if let Some(wall) = world.ray(from, to).filter(|hit| is_wall(hit, p)) {
+                    let inside = (target - wall.point).dot(wall.normal);
+                    if inside < 1.0 {
+                        target += wall.normal * (1.0 - inside);
+                    }
+                }
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
@@ -2119,6 +2933,23 @@ impl Skater {
             out,
             offset: self.position.dot(out),
         });
+        // The autoturn (0x800F12A4 keeps the facing with its height
+        // negated; 0x800EE4CC turns to it): going up the ramp at an angle,
+        // more than `skater_autoturn_vert_angle` off straight up, the
+        // skater turns round in the air to come back down facing down the
+        // ramp, the other way across. Here, with the skater upright in
+        // vert air, that's the heading mirrored across the ramp.
+        // (The board's way on the ramp, the heading tilted onto it as the
+        // skater's drawn, against straight up the ramp: the game's
+        // forward against straight up, on a face that's vertical.)
+        let forward = self.forward();
+        let up = self.up.normalize_or(Vec3::Y);
+        let board = Quat::from_rotation_arc(Vec3::Y, up) * forward;
+        let ascent = (Vec3::Y - up * up.y).normalize_or(Vec3::Y);
+        if board.dot(ascent).clamp(-1.0, 1.0).acos() >= p.autoturn_vert_angle.to_radians() {
+            let mirrored = forward - out * 2.0 * forward.dot(out);
+            self.autoturn = Some(mirrored.x.atan2(mirrored.z));
+        }
     }
 
     /// A spine transfer (main.dol 0x800F1CD8, in the vert takeoff): the
@@ -2178,7 +3009,7 @@ impl Skater {
             self.velocity
         };
         // Up and back to this height, frame by frame.
-        let gravity = p.air_gravity / p.air_hang.max(0.01);
+        let gravity = p.air_gravity / p.vert_hang.max(0.01);
         let (mut height, mut rise, mut time) = (1e-6f32, velocity.y, 0.0f32);
         loop {
             height += rise * STEP + 0.5 * gravity * STEP * STEP;
@@ -2262,7 +3093,46 @@ impl Skater {
         self.air_tricks(input);
         // Spinning at the air rotation stat (0x800EE4CC); the turn counts
         // towards the latest trick's spin.
-        let turn = input.turn * p.air_rotation * STEP;
+        let mut turn = input.turn * p.air_rotation * STEP;
+        if self.spin_taps {
+            if self.pressed_within(Press::Revert, 0.0) {
+                let way = if input.turn != 0.0 {
+                    input.turn.signum()
+                } else {
+                    -self.air_spin_sign
+                };
+                self.tap_spin += PI * way;
+            }
+            if self.tap_spin != 0.0 {
+                let step = self.tap_spin.abs().min(p.air_tap_turn_speed * STEP);
+                let step = step * self.tap_spin.signum();
+                self.tap_spin -= step;
+                turn = step;
+            }
+        }
+        // The autoturn (0x800EE4CC), towards the heading it's after at
+        // `Skater_autoturn_speed`, unless the skater's turning: a turn held
+        // `skater_autoturn_cancel_time` ends it. (It doesn't count as
+        // spin.)
+        if self.vert.is_none() {
+            self.autoturn = None;
+        }
+        if let Some(target) = self.autoturn {
+            if input.turn != 0.0 {
+                if self.turn_time > p.autoturn_cancel_time {
+                    self.autoturn = None;
+                }
+            } else if turn == 0.0 {
+                let left = (target - self.heading + PI).rem_euclid(TAU) - PI;
+                let step = p.autoturn_speed * STEP;
+                if left.abs() <= step {
+                    self.heading = target;
+                    self.autoturn = None;
+                } else {
+                    self.heading += step * left.signum();
+                }
+            }
+        }
         self.heading -= turn;
         self.air_spin += turn.to_degrees();
         if turn != 0.0 {
@@ -2272,7 +3142,17 @@ impl Skater {
         self.combo_tricks.spin(self.air_spin);
         // As the game does (0x800FC7F8): gravity, divided by the hang-time
         // stat, and the exact step of a thrown body.
-        let gravity = p.air_gravity / p.air_hang.max(0.01);
+        let hang = if self.vert.is_some() {
+            p.vert_hang
+        } else {
+            p.air_hang
+        };
+        let gravity = p.air_gravity / hang.max(0.01);
+        // (Overridden limits: their gravity while rising, 0x800FB4F0.)
+        let gravity = match self.limits {
+            Some(l) if self.velocity.y > 0.0 => l.gravity,
+            _ => gravity,
+        };
         let from = self.position;
         let mut target = from + self.velocity * STEP + Vec3::Y * (0.5 * gravity * STEP * STEP);
         self.velocity.y += gravity * STEP;
@@ -2292,7 +3172,21 @@ impl Skater {
                     !is_wall(&hit, p) && (hit.normal.dot(self.up) >= 0.8 || hit.normal.y >= 0.5);
                 // In vert air the ramp is for landing on.
                 let ramp = self.vert.is_some() && hit.flags & ngc_collision::face_flags::VERT != 0;
+                if !ground && !ramp && self.start_wallride(&hit, input, p, world) {
+                    return;
+                }
                 if !ground && !ramp {
+                    if self.trace {
+                        eprintln!(
+                            "air bounce off {:#010x} at {:?} (normal {:?})",
+                            hit.object, hit.point, hit.normal
+                        );
+                    }
+                    if self.velocity.with_y(0.0).length() > p.wall_bounce_dont_flail_speed {
+                        self.sounds.push(SkateSound::Bonk {
+                            terrain: hit.terrain,
+                        });
+                    }
                     self.air_bounce(hit.normal);
                     // Out of the wall across, flat, as far as needed; the
                     // rise or fall carries on (a wall leaning over the
@@ -2302,6 +3196,14 @@ impl Skater {
                     let out = (target + lift - hit.point).dot(normal);
                     if out < p.min_distance_to_wall {
                         target += normal * (p.min_distance_to_wall - out);
+                    }
+                    // A wall leaning back (a bank too steep to ride up)
+                    // would still have the feet inside it.
+                    if hit.normal.y > 0.0 {
+                        let feet = (target - hit.point).dot(hit.normal);
+                        if feet < 1.0 {
+                            target += hit.normal * (1.0 - feet);
+                        }
                     }
                 }
             }
@@ -2332,6 +3234,8 @@ impl Skater {
                 self.landing_soon = false;
                 self.sounds.push(SkateSound::Land);
                 let from_vert = self.vert.is_some();
+                // (Down from a lip's way out: `LipLand`.)
+                let from_lip = self.lip_out.is_some();
                 self.vert = None;
                 self.lip_out = None;
                 self.crouched = input.crouch;
@@ -2380,7 +3284,12 @@ impl Skater {
                 // Landing sideways at speed: `YawBail` (faster than 500,
                 // 60 to 120 degrees off).
                 let yaw_bail = flat.length() > 500.0 && yaw >= 60.0;
-                // Landing mid-trick (`BailOn`): a bail.
+                // Landing mid-trick (`BailOn`): a bail; with the simplified
+                // controls, the combo lost instead (`ClearPanel_Bailed`).
+                if self.simplified && self.bail_on() && !yaw_bail {
+                    self.trick = None;
+                    self.end_combo(false);
+                }
                 if self.bail_on() || yaw_bail {
                     self.trick = None;
                     self.end_combo(false);
@@ -2418,7 +3327,12 @@ impl Skater {
                         self.revert();
                         return;
                     }
-                    self.revert_window = REVERT_AFTER;
+                    // (`LipLand` allows 20 frames.)
+                    self.revert_window = if from_lip {
+                        SKATE_IN_REVERT
+                    } else {
+                        REVERT_AFTER
+                    };
                 } else {
                     self.end_combo(true);
                 }
@@ -2432,7 +3346,11 @@ impl Skater {
             if facing.x != 0.0 || facing.z != 0.0 {
                 self.heading = facing.x.atan2(facing.z);
             }
-            self.position = hit.point + hit.normal * (1.0 + p.min_distance_to_wall);
+            // (Out across: a wall leaning over would push the feet down
+            // under the floor.)
+            let out = Vec3::new(hit.normal.x, 0.0, hit.normal.z).normalize_or(hit.normal);
+            let out = if hit.normal.y < 0.0 { out } else { hit.normal };
+            self.position = hit.point + out * (1.0 + p.min_distance_to_wall);
             return;
         }
         self.position = target;
@@ -2468,6 +3386,8 @@ impl Skater {
     /// Standing at rest on the ground at `position` (or under it), facing
     /// `heading`, out of any trick and with the combo lost.
     pub fn place(&mut self, position: Vec3, heading: f32, p: &Physics, world: &World) {
+        // (`SkaterInit`: `overridelimits ... time = 0`, back to its own.)
+        self.limits = None;
         let ground = world
             .ray(position + Vec3::Y * 100.0, position - Vec3::Y * 1000.0)
             .filter(|hit| !is_wall(hit, p));
@@ -2475,6 +3395,7 @@ impl Skater {
         self.heading = heading;
         self.vert = None;
         self.grind = None;
+        self.wall = None;
         self.lip = None;
         self.lip_out = None;
         self.manual = false;
@@ -2559,6 +3480,10 @@ fn along_keeping_length(v: Vec3, normal: Vec3) -> Vec3 {
 /// Whether a face the skater ran into is a wall (main.dol 0x800F66F0):
 /// skatable and vert faces never are, not-skatable and wall-ridable ones
 /// always are, and the rest by their slope.
+/// How far up the line along a rail looks for a wall in the way
+/// (`grind_blocked`): about the skater's shins.
+const GRIND_BLOCK_HEIGHT: f32 = 12.0;
+
 fn is_wall(hit: &Hit, p: &Physics) -> bool {
     use ngc_collision::face_flags as f;
     if hit.flags & (f::SKATABLE | f::VERT) != 0 {
@@ -2602,6 +3527,18 @@ fn wall_bounce(forward: Vec3, up: Vec3, normal: Vec3, p: &Physics) -> (f32, f32)
     (turn, angle)
 }
 
+/// Linear friction (0x800F4AC0): `friction` off the speed a 60th of a
+/// second, stopping it rather than reversing it.
+fn rolling_friction(v: Vec3, friction: f32) -> Vec3 {
+    let length = v.length();
+    let slow = friction * 60.0 * STEP;
+    if length <= 1e-4 || slow >= length {
+        Vec3::ZERO
+    } else {
+        v - v / length * slow
+    }
+}
+
 /// Quadratic drag: `v -= v * |v| * k * 60 * step` (0x800F46C4).
 fn drag(v: Vec3, k: f32) -> Vec3 {
     if v.length_squared() <= 1e-5 {
@@ -2610,18 +3547,59 @@ fn drag(v: Vec3, k: f32) -> Vec3 {
     v - v * v.length() * k * 60.0 * STEP
 }
 
-/// The game's speed limits on horizontal speed: a hard cap at
-/// `max_max_speed`, and heavy drag above `max_speed` (0x800F4834).
-fn limit_speed(v: Vec3, p: &Physics) -> Vec3 {
+/// The speed limits (0x800F4834), as the physics has them or as the
+/// scripts override them for a while (`OverrideLimits max = .. max_max =
+/// .. friction = .. time = .. gravity = ..`, 0x80118BE8: `max_max` as
+/// `max` unless given).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    /// Seconds left (the physics' own: forever).
+    pub time: f32,
+    pub max: f32,
+    pub max_max: f32,
+    /// The drag above `max`.
+    pub friction: f32,
+    /// Gravity in the air while rising.
+    pub gravity: f32,
+}
+
+impl Limits {
+    fn of(p: &Physics) -> Self {
+        Limits {
+            time: f32::INFINITY,
+            max: p.max_speed,
+            max_max: p.max_max_speed,
+            friction: p.heavy_air_friction,
+            gravity: p.air_gravity,
+        }
+    }
+}
+
+/// The game's speed limits on horizontal speed: a hard cap at `max_max`,
+/// and heavy drag above `max` (0x800F4834).
+fn limit_speed(v: Vec3, l: Limits) -> Vec3 {
     let mut flat = Vec3::new(v.x, 0.0, v.z);
     let speed = flat.length();
-    if speed > p.max_max_speed {
-        flat *= p.max_max_speed / speed;
+    if speed > l.max_max {
+        flat *= l.max_max / speed;
     }
-    if flat.length() > p.max_speed {
-        flat = drag(flat, p.heavy_air_friction);
+    if flat.length() > l.max {
+        flat = drag(flat, l.friction);
     }
     Vec3::new(flat.x, v.y, flat.z)
+}
+
+/// Where the skater rides a wall it touched at knee height (`hit`, `lift`
+/// above the feet): a unit off it, the feet too on a wall that leans back
+/// (a bank's slope would otherwise have them inside it).
+fn off_wall(hit: Vec3, normal: Vec3, lift: f32) -> Vec3 {
+    let at = hit + normal - Vec3::Y * lift;
+    let off = (at - hit).dot(normal);
+    if off < 1.0 {
+        at + normal * (1.0 - off)
+    } else {
+        at
+    }
 }
 
 #[cfg(test)]
@@ -2644,10 +3622,10 @@ mod tests {
     #[test]
     fn speed_is_capped_horizontally_only() {
         let p = physics();
-        let v = limit_speed(Vec3::new(3000.0, -500.0, 0.0), &p);
+        let v = limit_speed(Vec3::new(3000.0, -500.0, 0.0), Limits::of(&p));
         assert!(v.x <= p.max_max_speed);
         assert_eq!(v.y, -500.0);
-        let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), &p);
+        let v = limit_speed(Vec3::new(p.max_speed - 1.0, 0.0, 0.0), Limits::of(&p));
         assert_eq!(v.x, p.max_speed - 1.0, "below top speed nothing changes");
     }
 
@@ -2729,6 +3707,38 @@ mod tests {
             skater.update(Input::default(), &p, &world, STEP);
         }
         assert!(skater.grind.unwrap().speed <= p.max_max_speed + 1.0);
+    }
+
+    #[test]
+    fn a_spin_tap_turns_half_round() {
+        let p = physics();
+        let empty = ngc_collision::Collision {
+            objects: Vec::new(),
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        };
+        let world = World::new(empty);
+        let mut skater = Skater::new(Vec3::new(0.0, 50_000.0, 0.0), 0.0);
+        skater.on_ground = false;
+        skater.spin_taps = true;
+        let tap = Input {
+            revert: true,
+            ..Input::default()
+        };
+        skater.update(tap, &p, &world, STEP);
+        for _ in 0..120 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        assert!(
+            (skater.heading.abs() - PI).abs() < 1e-3,
+            "{}",
+            skater.heading
+        );
+        // Without them a tap does nothing in the air.
+        let mut skater = Skater::new(Vec3::new(0.0, 50_000.0, 0.0), 0.0);
+        skater.on_ground = false;
+        skater.update(tap, &p, &world, STEP);
+        assert_eq!(skater.heading, 0.0);
     }
 
     #[test]
@@ -2836,5 +3846,245 @@ mod tests {
             -s * forward.x + c * forward.z,
         );
         assert!(after.x < 0.0 && after.z > 0.9);
+    }
+
+    /// A floor at y 0 and a wall along z at x 0, facing +x.
+    fn floor_and_wall() -> World {
+        floor_and_wall_flagged(0)
+    }
+
+    /// The floor, and a wall with these face flags.
+    fn floor_and_wall_flagged(wall_flags: u16) -> World {
+        use ngc_collision::{BspNode, BspTree, Collision, CollisionObject, Face};
+        let face = |indices: [u16; 3]| Face {
+            flags: if indices[0] >= 4 { wall_flags } else { 0 },
+            terrain: 0,
+            indices,
+        };
+        World::new(Collision {
+            objects: vec![CollisionObject {
+                checksum: 1,
+                flags: 0,
+                bbox: [-2000.0, 0.0, -2000.0, 2000.0, 400.0, 2000.0],
+                vertices: vec![
+                    [-2000.0, 0.0, -2000.0],
+                    [2000.0, 0.0, -2000.0],
+                    [2000.0, 0.0, 2000.0],
+                    [-2000.0, 0.0, 2000.0],
+                    [0.0, 0.0, -1000.0],
+                    [0.0, 400.0, -1000.0],
+                    [0.0, 400.0, 1000.0],
+                    [0.0, 0.0, 1000.0],
+                ],
+                intensities: Vec::new(),
+                faces: vec![
+                    face([0, 1, 2]),
+                    face([0, 2, 3]),
+                    face([4, 5, 6]),
+                    face([4, 6, 7]),
+                ],
+                skipped_faces: 0,
+                bsp: BspTree {
+                    nodes: vec![BspNode::Leaf { first: 0, count: 4 }],
+                    faces: vec![0, 1, 2, 3],
+                },
+            }],
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        })
+    }
+
+    #[test]
+    fn rides_a_wall_jumped_at_holding_grind_and_comes_down() {
+        let p = physics();
+        let world = floor_and_wall();
+        let jump = |grind: bool| {
+            let mut skater = Skater::new(Vec3::new(60.0, 150.0, -600.0), 0.0);
+            skater.on_ground = false;
+            skater.velocity = Vec3::new(-150.0, 450.0, 600.0);
+            let mut rode = 0;
+            for _ in 0..240 {
+                let input = Input {
+                    grind,
+                    ..Input::default()
+                };
+                skater.update(input, &p, &world, STEP);
+                if skater.wall.is_some() {
+                    rode += 1;
+                    assert!(skater.position.x > 0.5 && skater.position.x < 2.0);
+                }
+                if skater.on_ground && rode > 0 {
+                    break;
+                }
+            }
+            (skater, rode)
+        };
+        let (skater, rode) = jump(true);
+        assert!(rode > 10, "rode the wall for {rode} frames");
+        assert!(skater.on_ground, "came down onto the floor");
+        let named = |s: &Skater, name: &str| {
+            s.combo_tricks.tricks.iter().any(|t| t.name.contains(name)) || s.last_combo.is_some()
+        };
+        assert!(named(&skater, "Wallride"));
+        // Without the button it's a bounce off the wall.
+        let (_, rode) = jump(false);
+        assert_eq!(rode, 0);
+    }
+
+    #[test]
+    fn lips_only_facing_up_the_ramp() {
+        let p = physics();
+        // A ramp facing +X: straight up it the skater faces -X.
+        let vert = VertAir {
+            out: Vec3::X,
+            offset: 0.0,
+        };
+        let facing = |degrees: f32| {
+            let mut skater = Skater::new(Vec3::ZERO, 0.0);
+            let way = Quat::from_rotation_y(degrees.to_radians()) * -Vec3::X;
+            skater.heading = way.x.atan2(way.z);
+            skater.lip_allowed(vert, &p)
+        };
+        assert!(facing(0.0));
+        assert!(facing(30.0) && facing(-30.0));
+        // Past `LipAllowAngle` (35), along the coping, or fakie: no.
+        assert!(!facing(40.0) && !facing(90.0) && !facing(180.0));
+    }
+
+    #[test]
+    fn a_lip_leant_off_the_top_goes_over_a_spine_only() {
+        let lip = Lip {
+            trick: LipTrick {
+                name: "Lip".into(),
+                score: 100,
+                init: None,
+                range: 0,
+                out: None,
+                no_ollie: true,
+                flip_after: false,
+            },
+            out: Vec3::X,
+            time: 1.0,
+        };
+        // A vert face just behind the coping (the wall at x = 0, 400 high):
+        // over it, into its vert air facing the other way.
+        let spine = floor_and_wall_flagged(ngc_collision::face_flags::VERT);
+        let mut skater = Skater::new(Vec3::new(12.0, 390.0, 0.0), 0.0);
+        skater.lip = Some(lip.clone());
+        assert!(skater.lip_over(&lip, &spine));
+        assert!(skater.lip.is_none());
+        assert_eq!(skater.vert.map(|v| v.out), Some(-Vec3::X));
+        assert!((skater.position.x + 12.0).abs() < 0.01);
+        assert!(skater.combo_tricks.tricks.iter().any(|t| t.name == "Spine Transfer"));
+        // A deck (the floor) or a plain wall behind: `LipBail` instead.
+        let deck = floor_and_wall();
+        let mut skater = Skater::new(Vec3::new(500.0, 10.0, 0.0), 0.0);
+        assert!(!skater.lip_over(&lip, &deck));
+        let mut skater = Skater::new(Vec3::new(12.0, 390.0, 0.0), 0.0);
+        assert!(!skater.lip_over(&lip, &deck));
+    }
+
+    #[test]
+    fn a_bail_slides_to_a_stop() {
+        let p = physics();
+        let world = floor_and_wall();
+        let mut skater = Skater::new(Vec3::new(500.0, 1.0, -500.0), 0.0);
+        skater.velocity = Vec3::new(0.0, 0.0, 600.0);
+        skater.update(Input::default(), &p, &world, STEP);
+        assert!(skater.on_ground);
+        skater.start_bail(Action::Bail, false);
+        let start = skater.position;
+        for _ in 0..60 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        // `HeavyFriction` takes 300 off in 3 frames, `Friction2` and the
+        // speed check the rest: stopped within a second, not far on.
+        assert!(skater.velocity.length() < 1.0, "{:?}", skater.velocity);
+        assert!(skater.position.distance(start) < 150.0);
+    }
+
+    #[test]
+    fn reverts_in_a_combo_add_friction() {
+        let mut skater = Skater::new(Vec3::ZERO, 0.0);
+        let mut after = Vec::new();
+        for _ in 0..7 {
+            skater.revert();
+            after.push(skater.rolling_friction.unwrap());
+        }
+        assert_eq!(after, [0.0, 10.0, 15.0, 20.0, 30.0, 50.0, 50.0]);
+        // A new combo starts the list again.
+        skater.end_combo(true);
+        skater.revert();
+        assert_eq!(skater.rolling_friction, Some(0.0));
+    }
+
+    #[test]
+    fn slow_on_a_steep_wall_turns_downhill() {
+        let p = physics();
+        let world = floor_and_wall();
+        // On the wall at x = 0 (facing +X), going slowly up it and along.
+        let mut skater = Skater::new(Vec3::new(1.0, 200.0, 0.0), -FRAC_PI_2);
+        skater.on_ground = true;
+        skater.up = Vec3::X;
+        skater.velocity = Vec3::new(0.0, 100.0, 50.0);
+        let before = skater.heading;
+        skater.update(Input::default(), &p, &world, STEP);
+        // Turned (by at most `Skater_Slow_Turn_on_slopes` a frame).
+        let turned = (skater.heading - before).abs();
+        assert!(turned > 0.0 && turned <= p.slow_turn_on_slopes * STEP + 1e-4);
+        // Not when fast.
+        let mut fast = Skater::new(Vec3::new(1.0, 200.0, 0.0), -FRAC_PI_2);
+        fast.on_ground = true;
+        fast.up = Vec3::X;
+        fast.velocity = Vec3::new(0.0, 500.0, 200.0);
+        fast.update(Input::default(), &p, &world, STEP);
+        assert_eq!(fast.heading, -FRAC_PI_2);
+    }
+
+    #[test]
+    fn free_skating_does_not_degrade_repeats() {
+        let combo = |degrade: bool| {
+            let mut skater = Skater::new(Vec3::ZERO, 0.0);
+            skater.degrade = degrade;
+            for _ in 0..3 {
+                skater.credit(Some(("Kickflip".into(), 100)), false);
+            }
+            skater.combo_tricks.points()
+        };
+        // 100 + 90 + 80 in a session or goal; all 300 skating freely.
+        assert_eq!(combo(true), 270);
+        assert_eq!(combo(false), 300);
+    }
+
+    #[test]
+    fn ollies_off_a_wall() {
+        let p = physics();
+        let world = floor_and_wall();
+        let mut skater = Skater::new(Vec3::new(60.0, 100.0, -600.0), 0.0);
+        skater.on_ground = false;
+        skater.velocity = Vec3::new(-150.0, 250.0, 600.0);
+        let hold = Input {
+            grind: true,
+            crouch: true,
+            ..Input::default()
+        };
+        for _ in 0..60 {
+            skater.update(hold, &p, &world, STEP);
+            if skater.wall.is_some() {
+                break;
+            }
+        }
+        assert!(skater.wall.is_some());
+        skater.update(hold, &p, &world, STEP);
+        skater.update(Input::default(), &p, &world, STEP);
+        assert!(skater.wall.is_none());
+        assert!(skater.velocity.x > 0.0 && skater.velocity.y > 300.0);
+        assert!(
+            skater
+                .combo_tricks
+                .tricks
+                .iter()
+                .any(|t| t.name == "Wallie")
+        );
     }
 }

@@ -136,6 +136,12 @@ impl Balance {
         self.cheese = p.cheese;
     }
 
+    /// Level and still (the Perfect cheats): it can't fall.
+    pub fn steady(&mut self) {
+        self.angle = 0.0;
+        self.speed = 0.0;
+    }
+
     /// One update (0x800CAD30), `dt` seconds: the game scales each change
     /// by the frame's length in 60ths of a second. `a` and `b` are the
     /// balance buttons (up and down for a manual, right and left on a

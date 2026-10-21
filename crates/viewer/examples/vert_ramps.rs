@@ -70,7 +70,13 @@ fn main() {
         if ground.normal.y < 0.9 {
             continue;
         }
-        let into = -out;
+        // With ANGLE=degrees, up the ramp that far off straight on (the
+        // autoturn's case: it should come down facing down the ramp).
+        let angle: f32 = std::env::var("ANGLE")
+            .ok()
+            .and_then(|a| a.parse().ok())
+            .unwrap_or(0.0);
+        let into = glam::Quat::from_rotation_y(angle.to_radians()) * -out;
         let mut skater = Skater::new(ground.point, into.x.atan2(into.z));
         if std::env::var("STARTS").is_ok() {
             println!(
@@ -92,6 +98,8 @@ fn main() {
         // With LIPS set, press grind at the lip: a lip trick on the coping.
         let lips = std::env::var("LIPS").is_ok();
         let mut lipped = None;
+        let mut air_facing = Vec3::ZERO;
+        let mut went_vert = false;
         let mut top = ground.point.y;
         let mut airborne = false;
         let mut landed_at = None;
@@ -132,7 +140,20 @@ fn main() {
             }
             // With SPINE set, the spine button held all the way.
             let spine = std::env::var("SPINE").is_ok();
-            let input = if lips && !skater.on_ground {
+            // With LIP_TURN=1 or -1, that way held on the lip: off the
+            // meter one way or the other.
+            let lip_turn: f32 = std::env::var("LIP_TURN")
+                .ok()
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0.0);
+            // (After half a second: a button held from the start does
+            // nothing till it's let go.)
+            let input = if lips && skater.lip.as_ref().is_some_and(|l| l.time > 0.5) {
+                Input {
+                    turn: lip_turn,
+                    ..Input::default()
+                }
+            } else if lips && !skater.on_ground {
                 Input {
                     grind: true,
                     ..Input::default()
@@ -165,6 +186,10 @@ fn main() {
                     skater.vert.is_some()
                 );
             }
+            if !skater.on_ground {
+                air_facing = skater.forward();
+                went_vert |= skater.vert.is_some();
+            }
             top = top.max(skater.position.y);
             if !skater.on_ground {
                 airborne = true;
@@ -175,7 +200,7 @@ fn main() {
                 break;
             }
         }
-        if std::env::var("SPINE").is_ok() {
+        if std::env::var("SPINE").is_ok() || std::env::var("LIP_TURN").is_ok() {
             let transferred = skater
                 .combo_tricks
                 .tricks
@@ -188,6 +213,16 @@ fn main() {
             );
         }
         // In front of the ramp's face, or behind it (the deck)?
+        if std::env::var("ANGLE").is_ok() {
+            // Facing down the ramp (out) coming down, or still up it
+            // (fakie)?
+            let facing = air_facing.dot(out);
+            println!(
+                "  landed facing {}{}",
+                if facing > 0.0 { "down the ramp" } else { "up the ramp" },
+                if went_vert { " from vert air" } else { "" },
+            );
+        }
         let side = landed_at.map(|p| (p - *centre).dot(out));
         let verdict = match side {
             Some(s) if s > -20.0 => {

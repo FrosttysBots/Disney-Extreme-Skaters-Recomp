@@ -23,7 +23,7 @@ use glam::{Mat4, Quat, Vec3};
 use ngc_anim::{Animation, KeyTables, Skeleton, pose};
 use ngc_model::Scene;
 
-use crate::level::{Level, Vertex};
+use crate::level::{Level, TextureData, Vertex};
 use crate::source::CharacterFiles;
 
 pub struct Character {
@@ -44,6 +44,13 @@ pub struct Character {
     /// `None` for characters without blink frames (Tantor, Tarzan, Woody
     /// and Zurg).
     pub blink: Option<Blink>,
+    /// How much bigger or smaller than its model it's shown (its
+    /// appearance's `scale`: Jessie 1.12, the kid 0.85; 1 for most).
+    pub scale: f32,
+    /// Bones scaled, and what hangs off them (the created kid's body
+    /// shape: `cak_scale_info`'s `head = (0.9, 0.9, 0.9)`), by bone; empty
+    /// for none.
+    pub bone_scales: Vec<Vec3>,
 }
 
 impl Character {
@@ -65,15 +72,45 @@ impl Character {
             .map(|(_, a)| pose::model_space(&skeleton, &a.sample(0.0)))
             .context("the character has no default animation (its rest pose)")?;
 
-        let mut mesh = Level::from_bytes(&files.skin, files.textures.as_deref())
+        // (Textures from elsewhere: any its own files haven't, and the
+        // created kid's swapped colours.)
+        let extra: Vec<TextureData> = files
+            .extra_textures
+            .iter()
+            .filter_map(|(checksum, bytes)| {
+                let file = ngc_texture::img::ImgFile::parse(bytes).ok()?;
+                let image = file.decode().ok()?.cropped(file.width, file.height);
+                Some(TextureData {
+                    checksum: *checksum,
+                    width: image.width,
+                    height: image.height,
+                    levels: vec![image.rgba],
+                })
+            })
+            .collect();
+        let mut mesh = Level::from_bytes_with_extra(&files.skin, files.textures.as_deref(), &extra)
             .context("could not load the model")?;
         let mut influences = influences(&files.skin)?;
         if let Some((board, textures)) = &files.board {
             mesh.append(
-                Level::from_bytes(board, textures.as_deref())
+                Level::from_bytes_with_extra(board, textures.as_deref(), &extra)
                     .context("could not load the board")?,
             );
             influences.extend(self::influences(board)?);
+        }
+        for (i, (part, textures)) in files.parts.iter().enumerate() {
+            let mut piece = Level::from_bytes_with_extra(part, textures.as_deref(), &extra)
+                .context("could not load a part")?;
+            // In the colour picked for it (128 as it is).
+            if let Some(tint) = files.part_tints.get(i).copied().flatten() {
+                for v in &mut piece.vertices {
+                    for (c, t) in v.color.iter_mut().zip(tint) {
+                        *c = (u32::from(*c) * u32::from(t) / 128).min(255) as u8;
+                    }
+                }
+            }
+            mesh.append(piece);
+            influences.extend(self::influences(part)?);
         }
         if influences.len() != mesh.vertices.len() {
             bail!(
@@ -90,6 +127,8 @@ impl Character {
             .collect();
         Ok(Self {
             blink: Blink::find(&mesh),
+            scale: 1.0,
+            bone_scales: Vec::new(),
             partner,
             mesh,
             influences,
@@ -97,6 +136,25 @@ impl Character {
             rest,
             animations,
         })
+    }
+
+    /// Scales the bones named in `shape` (a body shape: `head = (0.9, 0.9,
+    /// 0.9)`, by the bones' names), and what hangs off them.
+    pub fn set_body_shape(&mut self, shape: &[(u32, Vec3)]) {
+        self.bone_scales = self
+            .skeleton
+            .bones
+            .iter()
+            .map(|b| {
+                shape
+                    .iter()
+                    .find(|(name, _)| *name == b.name)
+                    .map_or(Vec3::ONE, |&(_, s)| s)
+            })
+            .collect();
+        if self.bone_scales.iter().all(|s| *s == Vec3::ONE) {
+            self.bone_scales.clear();
+        }
     }
 
     pub fn animation(&self, name: &str) -> Option<usize> {
@@ -134,7 +192,7 @@ impl Character {
         placement: Mat4,
         mirrored: bool,
     ) -> Vec<Vertex> {
-        let posed = pose::model_space(&self.skeleton, local);
+        let posed = pose::model_space_scaled(&self.skeleton, local, &self.bone_scales);
         let skin = pose::skinning(&self.rest, &posed);
         let skin = if mirrored {
             let flip = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
@@ -145,7 +203,8 @@ impl Character {
         } else {
             skin
         };
-        let matrices: Vec<Mat4> = skin.into_iter().map(|m| placement * m).collect();
+        let scaled = placement * Mat4::from_scale(Vec3::splat(self.scale));
+        let matrices: Vec<Mat4> = skin.into_iter().map(|m| scaled * m).collect();
         self.mesh
             .vertices
             .iter()

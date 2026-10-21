@@ -60,8 +60,18 @@ impl Stats {
 
 /// The skater profile whose `Name` is `character` (in `disneytricks.q`):
 /// stats, trick mapping and more.
-pub(crate) fn profile<'a>(program: &'a Program, character: &str) -> Option<&'a Value> {
-    let name = checksum(character);
+/// (The created kid as a girl, `kid_girl`, is the kid's profile.)
+pub fn profile<'a>(program: &'a Program, character: &str) -> Option<&'a Value> {
+    let character = if character == "kid_girl" {
+        "kid"
+    } else {
+        character
+    };
+    profile_named(program, checksum(character))
+}
+
+/// A character's profile by its name's checksum (`Name = jessie`).
+pub fn profile_named(program: &Program, name: u32) -> Option<&Value> {
     let mut found = None;
     for (_, value) in program.values() {
         find_profile(value, name, &mut found);
@@ -112,6 +122,16 @@ pub struct Physics {
     /// seconds (main.dol 0x800F62C4).
     pub jump_speed: f32,
     pub jump_speed_min: f32,
+    /// The ollie's speeds off a vert face (main.dol 0x800F62C4, with the
+    /// ground's vert flag `+0x3650` set): `Physics_air_Jump_Speed_stat`.
+    pub air_jump_speed: f32,
+    pub air_jump_speed_min: f32,
+    /// Turning downhill on steep ground when slow (main.dol 0x800F3564):
+    /// under this speed, on ground whose normal's height is under the
+    /// cosine, at this rate (radians a second).
+    pub max_sloped_turn_speed: f32,
+    pub max_sloped_turn_cosine: f32,
+    pub slow_turn_on_slopes: f32,
     pub max_tense_time: f32,
     /// Gravity in the air, before dividing by `air_hang` (the game does
     /// that: `main.dol` at 0x800FC634).
@@ -119,6 +139,19 @@ pub struct Physics {
     /// The hang-time stat's divisor for air gravity (1.0 at every stat on
     /// the US disc; vert air uses `Physics_Vert_hang_Stat`, 1.0-1.1).
     pub air_hang: f32,
+    /// The same in vert air (main.dol 0x800FC634 divides by this one
+    /// there).
+    pub vert_hang: f32,
+    /// How far off straight up the ramp a lip can start, in degrees
+    /// (`LipAllowAngle`).
+    pub lip_allow_angle: f32,
+    /// Vert air's autoturn: how fast (radians a second), how long a turn
+    /// held cancels it, and how near straight up a take-off goes without
+    /// one (degrees) (`Skater_autoturn_speed`,
+    /// `skater_autoturn_cancel_time`, `skater_autoturn_vert_angle`).
+    pub autoturn_speed: f32,
+    pub autoturn_cancel_time: f32,
+    pub autoturn_vert_angle: f32,
     pub ground_gravity: f32,
     pub brake_acceleration: f32,
     pub rolling_friction: f32,
@@ -132,6 +165,8 @@ pub struct Physics {
     pub ground_rotation: f32,
     pub ground_sharp_rotation: f32,
     pub air_rotation: f32,
+    /// How fast a 180 spin tap turns, radians a second.
+    pub air_tap_turn_speed: f32,
     pub ground_snap_up: f32,
     /// How far up a ledge the skater can be popped onto from the air
     /// (main.dol 0x800F81A8).
@@ -171,12 +206,35 @@ pub struct Physics {
     pub rail_corner_leave_angle: f32,
     pub rail_jump_angle: f32,
     pub regrind_time: f32,
+    /// Wallriding (`Wall_Ride_*`, main.dol 0x800FDB6C and 0x800FE664):
+    /// gravity on the wall, the slowest along it, the widest angle onto it
+    /// and the furthest overhang (degrees), how long after the grind
+    /// button it still catches and how soon after one another starts
+    /// (seconds), and the push off it, out and up. An ollie off it with
+    /// up held is a wallplant, at the boneless jump speed.
+    pub wall_ride_gravity: f32,
+    pub wall_ride_min_speed: f32,
+    pub wall_ride_max_incident_angle: f32,
+    pub wall_ride_upside_down_angle: f32,
+    pub wall_ride_triangle_window: f32,
+    pub wall_ride_delay: f32,
+    pub wall_ride_jump_out_speed: f32,
+    pub wall_ride_jump_up_speed: f32,
+    pub boneless_jump_speed: f32,
     /// Balancing manuals (`ManualParams`, by the manual stat) and grinds
     /// (`GrindParams`, by the rail balance stat).
     pub manual_balance: BalanceParams,
     pub grind_balance: BalanceParams,
     /// Balancing lip tricks (`LipParams`, by the lip balance stat).
     pub lip_balance: BalanceParams,
+    /// Skitching (`SkitchParams`): balancing on the car, how far behind a
+    /// car it can start (`Skitch_Max_Distance`), how far behind its back
+    /// the skater hangs (`Skitch_Offset`), and how long up has to be held
+    /// (`skitch_hold_time`, seconds).
+    pub skitch_balance: BalanceParams,
+    pub skitch_max_distance: f32,
+    pub skitch_offset: f32,
+    pub skitch_hold_time: f32,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -233,9 +291,19 @@ impl Physics {
             max_max_speed: scaled("Skater_Max_Max_Speed_Stat", 1000.0),
             jump_speed: scaled("Physics_Jump_Speed_Stat", 425.0),
             jump_speed_min: scaled("Physics_Jump_Speed_min_Stat", 350.0),
+            air_jump_speed: scaled("Physics_Air_Jump_Speed_Stat", 247.5),
+            air_jump_speed_min: scaled("Physics_Air_Jump_Speed_min_Stat", 100.0),
+            max_sloped_turn_speed: plain("Skater_max_sloped_turn_speed", 300.0),
+            max_sloped_turn_cosine: plain("Skater_max_sloped_turn_cosine", 0.5),
+            slow_turn_on_slopes: plain("Skater_Slow_Turn_on_slopes", 3.0),
             max_tense_time: plain("Skater_max_tense_time", 200.0) / 1000.0,
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
+            vert_hang: scaled("Physics_Vert_hang_Stat", 1.0),
+            lip_allow_angle: plain("LipAllowAngle", 35.0),
+            autoturn_speed: plain("Skater_autoturn_speed", 3.0),
+            autoturn_cancel_time: plain("skater_autoturn_cancel_time", 300.0) / 1000.0,
+            autoturn_vert_angle: plain("skater_autoturn_vert_angle", 5.0),
             ground_gravity: plain("Physics_Ground_Gravity", -1000.0),
             brake_acceleration: plain("Physics_Brake_Acceleration", 900.0),
             rolling_friction: plain("Physics_Rolling_Friction", 0.00001),
@@ -245,6 +313,7 @@ impl Physics {
             ground_rotation: plain("Physics_Ground_Rotation", 1.8),
             ground_sharp_rotation: plain("Physics_Ground_Sharp_Rotation", 3.6),
             air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
+            air_tap_turn_speed: scaled("Physics_air_tap_turn_speed_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
@@ -264,9 +333,22 @@ impl Physics {
             rail_corner_leave_angle: plain("Rail_Corner_Leave_Angle", 50.0),
             rail_jump_angle: plain("Rail_Jump_Angle", 15.0),
             regrind_time: plain("Skater_regrind_time", 500.0) / 1000.0,
+            wall_ride_gravity: plain("Wall_Ride_Gravity", -969.0),
+            wall_ride_min_speed: plain("Wall_Ride_Min_Speed", 200.0),
+            wall_ride_max_incident_angle: plain("Wall_Ride_Max_Incident_Angle", 60.0),
+            wall_ride_upside_down_angle: plain("Wall_Ride_Upside_Down_Angle", 53.0),
+            wall_ride_triangle_window: plain("Wall_Ride_Triangle_Window", 0.333),
+            wall_ride_delay: plain("Wall_Ride_Delay", 0.666),
+            wall_ride_jump_out_speed: plain("Wall_Ride_Jump_Out_Speed", 40.0),
+            wall_ride_jump_up_speed: plain("Wall_Ride_Jump_Up_Speed", 80.0),
+            boneless_jump_speed: scaled("Physics_Boneless_Jump_Speed_Stat", 500.0),
             manual_balance: BalanceParams::new(program, "ManualParams", stats),
             grind_balance: BalanceParams::new(program, "GrindParams", stats),
             lip_balance: BalanceParams::new(program, "LipParams", stats),
+            skitch_balance: BalanceParams::new(program, "SkitchParams", stats),
+            skitch_max_distance: plain("Skitch_Max_Distance", 120.0),
+            skitch_offset: plain("Skitch_Offset", 27.0),
+            skitch_hold_time: plain("skitch_hold_time", 200.0) / 1000.0,
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),
@@ -283,6 +365,61 @@ impl Physics {
             camera_grind_zoom: camera_value("grind_zoom", 1.0),
             camera_lip_trick_zoom: camera_value("lip_trick_zoom", 1.25),
         }
+    }
+}
+
+impl Physics {
+    /// The game's chase cameras the player picks between
+    /// (`Skater_Camera_Array` after the undefined one, up to the replay
+    /// cameras: near, standard, far and standard LTG, the pause menu's
+    /// "Camera Angle 1" to "4"): each one's name and setting.
+    pub fn camera_choices(program: &Program) -> Vec<(String, u32)> {
+        let Some(Value::Array(cameras)) = program.value(checksum("Skater_Camera_Array")) else {
+            return Vec::new();
+        };
+        cameras
+            .iter()
+            .skip(1)
+            .take(4)
+            .filter_map(Value::as_name)
+            .filter_map(|setting| {
+                let name = match program.value(setting)?.get(checksum("Name"))? {
+                    Value::String(s) | Value::LocalString(s) => s.clone(),
+                    _ => return None,
+                };
+                Some((name, setting))
+            })
+            .collect()
+    }
+
+    /// Follows the skater with another of the game's camera settings
+    /// (`Skater_Camera_Standard_Far`...): what it doesn't say stays.
+    pub fn set_camera(&mut self, program: &Program, setting: u32) {
+        let Some(camera) = program.value(setting) else {
+            return;
+        };
+        let get = |key: &str, now: f32| {
+            camera
+                .get(checksum(key))
+                .and_then(Value::as_f32)
+                .unwrap_or(now)
+        };
+        self.camera_behind = get("behind", self.camera_behind);
+        self.camera_above = get("above", self.camera_above);
+        self.camera_fov = get("horiz_fov", self.camera_fov);
+        self.camera_tilt = get("Tilt", self.camera_tilt);
+        self.camera_slerp = get("slerp", self.camera_slerp);
+        self.camera_vert_air_slerp = get("vert_air_slerp", self.camera_vert_air_slerp);
+        self.camera_lerp_xz = get("lerp_xz", self.camera_lerp_xz);
+        self.camera_lerp_y = get("lerp_y", self.camera_lerp_y);
+        self.camera_vert_air_lerp_xz = get("vert_air_lerp_xz", self.camera_vert_air_lerp_xz);
+        self.camera_vert_air_lerp_y = get("vert_air_lerp_y", self.camera_vert_air_lerp_y);
+        self.camera_vert_air_landed_slerp =
+            get("vert_air_landed_slerp", self.camera_vert_air_landed_slerp);
+        self.camera_zoom_lerp = get("zoom_lerp", self.camera_zoom_lerp);
+        self.camera_big_air_trick_zoom = get("big_air_trick_zoom", self.camera_big_air_trick_zoom);
+        self.camera_grind_zoom = get("grind_zoom", self.camera_grind_zoom);
+        self.camera_lip_trick_zoom = get("lip_trick_zoom", self.camera_lip_trick_zoom);
     }
 }
 
