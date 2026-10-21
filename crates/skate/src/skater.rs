@@ -258,8 +258,6 @@ const GRIND_TWEAK: u32 = 7;
 const SKITCH_SCORE: u32 = 500;
 const SKITCH_TWEAK: u32 = 5;
 
-/// How long a press of the grind button keeps looking for a rail.
-const GRIND_WINDOW: f32 = 0.5;
 const MANUAL_TWEAK: u32 = 1;
 const SPECIAL_MANUAL_TWEAK: u32 = 5;
 /// Points a frame on a lip (`LipMacro2`'s `TweakTrick 10`).
@@ -1186,9 +1184,11 @@ impl Skater {
             // Onto a rail met on the way (main.dol 0x801078A8), only from
             // the air (the main update asks with 0, which skips it on the
             // ground), and not too soon after leaving one.
-            // The button held, or pressed within the last half second
-            // (`{ Press, Triangle, 500 }` in the game's `GrindTricks`).
-            let armed = input.grind || self.since_grind <= GRIND_WINDOW;
+            // The button held (main.dol 0x80108558: Triangle with the pro
+            // controls); with the simplified controls, any trick button
+            // held or pressed within `Skater_regrind_time` (0x80108568).
+            let armed =
+                input.grind || (self.simplified && self.since_grind <= p.regrind_time);
             let falling_bail = matches!(self.action, Action::BailFall { .. });
             if armed && !self.on_ground && !falling_bail && self.since_rail >= p.regrind_time {
                 if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {

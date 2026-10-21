@@ -108,9 +108,9 @@ frames.
 **Skate** puts the character on the level (an alpha: see
 [docs/alpha-testing.md](docs/alpha-testing.md) for how to test it and the
 full controls): W pushes, S brakes, A/D steer,
-holding Space crouches and letting go ollies, E grinds (ollie at a rail and
-press E: like the game, grinds start in the air, within half a second of the
-press),
+holding Space crouches and letting go ollies, E grinds (ollie at a rail
+holding E: like the game, grinds start in the air, with the button held;
+with the simplified controls a press within half a second does),
 tapping W then S starts a manual, Q flips and F grabs in the air (with a
 direction: W, S, A, D), and Esc stops. Manuals balance with W and S, grinds
 with A and D, on a meter at the bottom of the screen; the combo and the

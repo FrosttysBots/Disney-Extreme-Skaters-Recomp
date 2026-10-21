@@ -244,8 +244,10 @@ on-ground update switches on.
   (`OffRail`).
   Ported: all of the above for level rails, without balance, bails, the
   side check, moving objects' rails, lip tricks and the events. The
-  grind button is the viewer's guess (the game's call on the ground
-  depends on an argument not yet traced).
+  grind button (0x80108558): with the pro controls (`+0x3A3C`, what
+  `HawkControlsIsOff` reads), Triangle held; with the simplified ones,
+  Square, Triangle or Circle held or pressed within
+  `Skater_regrind_time`. Ported.
 
 - **Vert air.** State 2 (0x800FE664) is wall riding (`Wall_Ride_*`),
   not vert: vert air is the air state with a flag at `+0x36E8`. It's set

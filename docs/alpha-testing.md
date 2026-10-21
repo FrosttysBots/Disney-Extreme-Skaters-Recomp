@@ -29,7 +29,7 @@ for Jessie; the panel's level list goes anywhere).
 | Space (hold, let go) | A | Crouch, then ollie |
 | Q (+ direction) | X | Flip trick in the air |
 | F (+ direction) | B | Grab in the air (hold to keep grabbing) |
-| E (+ direction) | Y | Grind: ollie at a rail, then press it |
+| E (+ direction) | Y | Grind: ollie at a rail holding it |
 | Direction then E on a rail or lip | Direction then Y | Switch to that direction's grind or lip trick (another trick in the combo) |
 | W then S | Up then down | Manual (balance with W / S) |
 | F + direction | B + direction | Manuals 2 to 5, on the ground or from a manual |
