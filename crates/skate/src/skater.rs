@@ -1168,7 +1168,7 @@ impl Skater {
         if self.skitch.is_some() {
             self.skitch_step(input, p, world);
         } else if self.lip.is_some() {
-            self.lip_step(input, p);
+            self.lip_step(input, p, world);
         } else if self.grind.is_some() {
             self.grind_step(input, p, world);
         } else if self.wall.is_some() {
@@ -1551,7 +1551,7 @@ impl Skater {
     /// (`LipParams`), 10 points a frame; ollying drops back in (or ollies
     /// out), and off the meter it drops back in one way and bails the
     /// other.
-    fn lip_step(&mut self, input: Input, p: &Physics) {
+    fn lip_step(&mut self, input: Input, p: &Physics, world: &World) {
         let Some(mut lip) = self.lip.clone() else {
             return;
         };
@@ -1582,10 +1582,13 @@ impl Skater {
         match lean {
             // `LipOut`: back into the ramp.
             Lean::OffBottom => self.leave_lip(&lip, 0.0),
-            // `LipBail` (no skating in onto the deck yet).
+            // Over onto the deck when it's there (`SkateInAble Lip`:
+            // `LipOut spine y = -24`), else `LipBail`.
             Lean::OffTop => {
-                self.bail_on_landing = true;
-                self.leave_lip(&lip, 0.0);
+                if !self.lip_over(&lip, p, world) {
+                    self.bail_on_landing = true;
+                    self.leave_lip(&lip, 0.0);
+                }
             }
             Lean::Balanced if ollie => {
                 // `OllieLipOut` ollies out; `NoOllie` lips just drop in.
@@ -1598,6 +1601,36 @@ impl Skater {
             }
             Lean::Balanced => self.lip = Some(lip),
         }
+    }
+
+    /// Off the lip the other way, onto the deck behind the coping
+    /// (`LipOut spine y = -24`): `SkateInAble_LipHorizOffset` (24) back,
+    /// ground found below (approximated as on rails), the skater moves
+    /// there turned round (`Rotate z = 180`, `Flip`) for a "Spine
+    /// Transfer" of `TRANSFER_POINTS`, to come down onto it.
+    fn lip_over(&mut self, lip: &Lip, p: &Physics, world: &World) -> bool {
+        let behind = self.position - lip.out * 24.0;
+        let lift = Vec3::Y * 10.0;
+        let ground = world
+            .ray(behind + lift, behind - Vec3::Y * 30.0)
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.7)
+            .filter(|hit| world.ray(self.position + lift, hit.point + lift).is_none());
+        if ground.is_none() {
+            return false;
+        }
+        self.lip = None;
+        self.since_rail = 0.0;
+        self.position = behind + Vec3::Y;
+        self.velocity = Vec3::ZERO;
+        self.heading = lip.out.x.atan2(lip.out.z);
+        self.up = Vec3::Y;
+        self.vert = None;
+        self.flipped = !self.flipped;
+        self.credit(Some(("Spine Transfer".into(), TRANSFER_POINTS)), true);
+        self.ollied = false;
+        self.air_time = 0.0;
+        self.set_action(Action::Air);
+        true
     }
 
     /// Off the coping, back into the ramp (`LipOut`: a unit up and out,

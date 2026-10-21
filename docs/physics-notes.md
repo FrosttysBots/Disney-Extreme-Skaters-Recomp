@@ -394,10 +394,14 @@ on-ground update switches on.
   air at level coping rails, rising and facing within `LipAllowAngle`
   of straight up the ramp (the skater stays upright in our vert air, so
   the other two angle tests always pass; the override isn't read), the
-  trick choice, balance, tweaks and the ways off,
-  without spine transfers (the unsafe side bails) and lip combos. On the
-  Hub, every quarter pipe with a coping rail lips
-  (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`).
+  trick choice, balance, tweaks and the ways off: off the top over
+  onto the deck (`LipOut spine`, a "Spine Transfer"; `SkateInAble Lip`
+  approximated as ground 24 behind the coping) or `LipBail` without one;
+  not lip combos or the reversed camera's swap. On the Hub, every quarter
+  pipe with a coping rail lips
+  (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`;
+  `LIP_TURN=-1` leans off the top: 10 of the 13 go over onto the deck,
+  the other 3 have none and bail).
 - **Animations and landing rules** (`TRICKS.q`). `OnGroundAI` plays
   `StandTurnLeft`/`Right` then their `...Idle` loops while steering
   (`CrouchTurn...` crouched), `CrouchIdle` crouched, and otherwise

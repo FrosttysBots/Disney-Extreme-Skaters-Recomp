@@ -132,7 +132,20 @@ fn main() {
             }
             // With SPINE set, the spine button held all the way.
             let spine = std::env::var("SPINE").is_ok();
-            let input = if lips && !skater.on_ground {
+            // With LIP_TURN=1 or -1, that way held on the lip: off the
+            // meter one way or the other.
+            let lip_turn: f32 = std::env::var("LIP_TURN")
+                .ok()
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0.0);
+            // (After half a second: a button held from the start does
+            // nothing till it's let go.)
+            let input = if lips && skater.lip.as_ref().is_some_and(|l| l.time > 0.5) {
+                Input {
+                    turn: lip_turn,
+                    ..Input::default()
+                }
+            } else if lips && !skater.on_ground {
                 Input {
                     grind: true,
                     ..Input::default()
@@ -175,7 +188,7 @@ fn main() {
                 break;
             }
         }
-        if std::env::var("SPINE").is_ok() {
+        if std::env::var("SPINE").is_ok() || std::env::var("LIP_TURN").is_ok() {
             let transferred = skater
                 .combo_tricks
                 .tricks
