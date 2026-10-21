@@ -1683,6 +1683,12 @@ impl Host for Commands<'_> {
             if state.path.top_speed == 0.0 {
                 state.path.top_speed = 10.0 * MPH;
             }
+        } else if name == c("Obj_StopAlongPath") {
+            // (A counter goal's dock tourist, clocked: stops where it is to
+            // jump.)
+            let path = &mut b.states[object].path;
+            path.target = None;
+            path.speed = 0.0;
         } else if name == c("Obj_SetPathVelocity") {
             if let Some(v) = Self::speed(args) {
                 b.states[object].path.top_speed = v;
