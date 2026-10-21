@@ -1754,7 +1754,15 @@ impl Skater {
     /// to the max tense time.
     fn jump_speed(&self, p: &Physics) -> f32 {
         let tense = (self.crouch_time / p.max_tense_time).min(1.0);
-        p.jump_speed_min + (p.jump_speed - p.jump_speed_min) * tense
+        // (Off a vert face, the air jump speeds: 0x800F62C4.)
+        let on_vert =
+            self.on_ground && self.ground_flags & ngc_collision::face_flags::VERT != 0;
+        let (top, min) = if on_vert {
+            (p.air_jump_speed, p.air_jump_speed_min)
+        } else {
+            (p.jump_speed, p.jump_speed_min)
+        };
+        min + (top - min) * tense
     }
 
     /// On rail segment `segment` (grinding onto it, along to it, or lip

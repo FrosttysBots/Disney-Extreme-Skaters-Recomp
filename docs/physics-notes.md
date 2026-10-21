@@ -73,6 +73,13 @@ on-ground update switches on.
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
   velocity * dt, at skater `+0x39A8`) for the collision checks.
+- **The ollie's speed** (0x800F62C4): the tense time (crouched, up to
+  `skater_max_tense_time`) takes it from the `_min` stat to the full one:
+  `Physics_Jump_Speed_stat`, or `Physics_air_Jump_Speed_stat` (220 to
+  275, min 100) while the ground is a vert face (`+0x3650`, the ground
+  following's copy of the face's vert flag) or in vert air (`+0x3634`),
+  and the `Boneless` ones for a boneless (`BonelessHeight`). Ported, but
+  for the boneless in vert.
 - **Drag and friction** (0x800F4CF0, every frame on the ground): with
   AutoKick on (skater `+0x3A38`, what `AutoKickIsOff` reads), or in a
   bail (`+0x36C4`, `InBail`/`NotInBail`), or the friction at `+0x3A58` other than
