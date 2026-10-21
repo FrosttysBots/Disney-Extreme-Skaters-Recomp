@@ -314,6 +314,9 @@ const REVERT_SCORE: u32 = 100;
 /// How long after a revert a manual still carries the combo on (about the
 /// revert animation).
 const REVERT_LINGER: f32 = 0.6;
+/// How long after skating in off a coping a revert keeps the combo going
+/// (`SkateInOrBail`'s `Reverts duration = 20`).
+const SKATE_IN_REVERT: f32 = 20.0 / 60.0;
 
 /// The window for the manual's up-down press (`{ inorder, Up, Down, 400 }`
 /// in the game's `manualtricks.q`).
@@ -1939,7 +1942,11 @@ impl Skater {
                 self.heading += turn;
                 self.velocity = self.forward() * grind.speed;
                 self.on_ground = true;
-                self.end_combo(true);
+                // Landed from vert (`SetLandedFromVert`): a revert within
+                // 20 frames carries the combo on (`SetExtraTricks tricks =
+                // Reverts duration = 20`), else it's banked.
+                self.reverted = false;
+                self.revert_window = SKATE_IN_REVERT;
                 self.set_action(Action::Landing);
                 return;
             }

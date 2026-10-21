@@ -361,7 +361,8 @@ on-ground update switches on.
   Right and Left for grinds and lips) and what falling off does: a
   manual bails off the top (`BailManual`) and sets down off the bottom
   (`ManualLand`); a grind falls to that side (`SkateInOrBail`), skating
-  in (turning 30 degrees, `SetLandedFromVert`) where `SkateInAble`
+  in (turning 30 degrees, `SetLandedFromVert`, a revert within 20
+  frames keeping the combo going) where `SkateInAble`
   (0x80117E68: a line across under the rail, 7 below it and 30 out each
   side, meeting a vert face) finds a coping, and bailing otherwise
   (`FiftyFiftyFall`). Manuals start
