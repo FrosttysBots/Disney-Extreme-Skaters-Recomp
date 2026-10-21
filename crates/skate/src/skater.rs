@@ -463,7 +463,8 @@ pub struct Skater {
     bail_stopping: bool,
     /// The friction the scripts set (`SetRollingFriction`, skater
     /// `+0x3A58`) when it isn't `Physics_Rolling_Friction`: a revert's
-    /// (`SetSpecialFriction`), kept until the next or the end of a bail.
+    /// (`SetSpecialFriction`), for as long as it plays (`Revert` goes
+    /// back to `Default` with `OnGroundExceptions` after its animation).
     rolling_friction: Option<f32>,
     /// How many reverts the combo has had, for the next one's friction.
     reverts: usize,
@@ -1152,8 +1153,6 @@ impl Skater {
             if self.action_time < self.bail_time() {
                 Input::default()
             } else {
-                // `Baildone`: `SetRollingFriction Default`.
-                self.rolling_friction = None;
                 self.set_action(Action::Standing);
                 input
             }
@@ -1468,8 +1467,8 @@ impl Skater {
         self.revert_window = REVERT_LINGER;
         self.reverted = true;
         // `SetSpecialFriction [ 0, 10, 15, 20, 30, 50 ]` (0x80116698): each
-        // revert in a combo the next of these, the last from then on,
-        // kept as the rolling friction after it.
+        // revert in a combo the next of these, the last from then on, as
+        // the rolling friction while it plays.
         const REVERT_FRICTION: [f32; 6] = [0.0, 10.0, 15.0, 20.0, 30.0, 50.0];
         self.rolling_friction = Some(REVERT_FRICTION[self.reverts.min(REVERT_FRICTION.len() - 1)]);
         self.reverts += 1;
@@ -2466,7 +2465,10 @@ impl Skater {
         if self.auto_kick || bailing || self.rolling_friction.is_some() {
             velocity = drag(velocity, friction);
         }
-        if let Some(friction) = self.rolling_friction.filter(|_| !bailing) {
+        if !matches!(self.action, Action::Revert { .. }) {
+            self.rolling_friction = None;
+        }
+        if let Some(friction) = self.rolling_friction {
             velocity = rolling_friction(velocity, friction);
         }
         if input.brake {
@@ -3911,9 +3913,8 @@ mod tests {
             after.push(skater.rolling_friction.unwrap());
         }
         assert_eq!(after, [0.0, 10.0, 15.0, 20.0, 30.0, 50.0, 50.0]);
-        // A new combo starts the list again; the friction stays till then.
+        // A new combo starts the list again.
         skater.end_combo(true);
-        assert_eq!(skater.rolling_friction, Some(50.0));
         skater.revert();
         assert_eq!(skater.rolling_friction, Some(0.0));
     }

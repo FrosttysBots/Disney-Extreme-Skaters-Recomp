@@ -76,8 +76,9 @@ on-ground update switches on.
   50 ]`), takes the next value of its array each call, the last from
   then on; `ClearPanel_Landed` and `ClearPanel_Bailed` start it again
   (`+0x3A5C`), so each revert in a combo after the first slows the
-  skater more, and the friction stays until the next revert or a bail's
-  end. `GeneralBail` slides a bail to a stop with
+  skater more while it plays (`OnGroundExceptions` after its animation,
+  like `InAirExceptions` and `OnGroundAI`, sets `Default` again).
+  `GeneralBail` slides a bail to a stop with
   it (`HeavyFriction` 100 for 3 frames, `Friction` to 30% of the fall,
   `Friction2` after, 100 from a `SpeedCheckStop` under 300; 15 into a
   wall), and the Hub's warps and ringtone hold the skater with 10000.
