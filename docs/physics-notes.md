@@ -58,9 +58,9 @@ on-ground update switches on.
 - **On-ground update** (0x800FB3E4, 1,172 instructions): builds gravity
   (0, `Physics_Ground_Gravity`, 0), removes its component into the ground
   (0x80009AC0 with the ground normal), adds the rest times the frame time
-  to the velocity, then by state brakes (0x800F418C) or pushes. So slope
-  gravity acts along the whole ground plane, sideways too; the port only
-  applies it along the facing so far. It calls about 35 helpers still to
+  to the velocity, then by state brakes (0x800F418C) or pushes, then
+  drag and friction (0x800F4CF0). So slope gravity acts along the whole
+  ground plane, sideways too. Ported. It calls about 35 helpers still to
   be read. Next in it, behind a debug flag (`WalkTest`, `skitch_speed_match`
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
