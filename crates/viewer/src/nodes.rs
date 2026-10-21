@@ -453,7 +453,8 @@ impl LevelNodes {
     }
 
     /// The spawn a level starts at: the first `Player1` restart, otherwise
-    /// the first restart.
+    /// the first restart, as the game picks one for a single player
+    /// (main.dol 0x800B5644).
     pub fn start(&self) -> Option<&Spawn> {
         self.spawns
             .iter()

@@ -209,8 +209,6 @@ skater is and what it's doing.
   against it, ground is found across hairline cracks in the levels'
   collision, and the skater is put back at the nearest spawn when it
   falls out of a level (the game uses out-of-bounds triggers).
-- Skating starts from the character's spot rather than the game's level
-  start.
 
 ## Reporting a problem
 
