@@ -2484,9 +2484,7 @@ impl Skater {
             }
             let friction = if self.smacked {
                 15.0
-            } else if now < 3.0 * STEP {
-                100.0
-            } else if self.bail_stopping {
+            } else if now < 3.0 * STEP || self.bail_stopping {
                 100.0
             } else if now < fall * 0.3 {
                 1.0
