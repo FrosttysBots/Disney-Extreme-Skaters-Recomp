@@ -204,6 +204,8 @@ skater is and what it's doing.
 - Not yet: Zurg's UFO launch, and two players. Every character can be
   picked, and every part of the kid's wardrobe, where the career unlocks
   some as goals are won.
+- Warps work for every character; in the game only the Kid's career
+  has them (`HubWarp` checks `SkaterIsNamed kid`).
 - Wallrides have no animation of their own (the characters on the disc
   have none): the skater leans off the wall instead.
 - Approximations of our own: the camera follows the game's camera
