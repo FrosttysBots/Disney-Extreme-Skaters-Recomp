@@ -73,6 +73,13 @@ on-ground update switches on.
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
   velocity * dt, at skater `+0x39A8`) for the collision checks.
+- **Turning downhill when slow** (0x800F3564, ahead of the friction):
+  under `Skater_max_sloped_turn_speed` (300) on ground whose normal's
+  height is under `Skater_max_sloped_turn_cosine` (0.5), the skater
+  turns about the ground's normal from the way it's going (its facing
+  when stopped) towards straight downhill at `Skater_Slow_Turn_on_slopes`
+  (3 radians a second), never past it, and the friction's skipped that
+  frame. Crawling up a quarter pipe, the skater turns round. Ported.
 - **The ollie's speed** (0x800F62C4): the tense time (crouched, up to
   `skater_max_tense_time`) takes it from the `_min` stat to the full one:
   `Physics_Jump_Speed_stat`, or `Physics_air_Jump_Speed_stat` (220 to

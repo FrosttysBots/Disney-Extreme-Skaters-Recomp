@@ -2451,6 +2451,27 @@ impl Skater {
             rate *= self.turn_time / 0.6;
         }
         self.heading -= input.turn * rate * STEP;
+        // Slow on steep ground (0x800F3564: under `max_sloped_turn_speed`,
+        // the ground's normal under `max_sloped_turn_cosine` high), the
+        // board turns towards straight downhill at `slow_turn_on_slopes`
+        // (about the ground's normal: a turn of the heading), never past
+        // it: crawling up a quarter pipe, the skater turns round.
+        let speed_now = self.velocity.length();
+        if speed_now < p.max_sloped_turn_speed && self.up.y < p.max_sloped_turn_cosine {
+            let up = self.up.normalize_or(Vec3::Y);
+            let down = (-Vec3::Y + up * up.y).normalize_or_zero();
+            let board = Quat::from_rotation_arc(Vec3::Y, up) * self.forward();
+            let way = if speed_now < 0.001 {
+                board
+            } else {
+                self.velocity / speed_now
+            };
+            if down != Vec3::ZERO {
+                let angle = up.dot(way.cross(down)).atan2(way.dot(down));
+                let step = p.slow_turn_on_slopes * STEP;
+                self.heading += angle.clamp(-step, step);
+            }
+        }
         let up = self.up;
         // Forward along the surface.
         let flat = self.forward();
@@ -3995,6 +4016,29 @@ mod tests {
         skater.end_combo(true);
         skater.revert();
         assert_eq!(skater.rolling_friction, Some(0.0));
+    }
+
+    #[test]
+    fn slow_on_a_steep_wall_turns_downhill() {
+        let p = physics();
+        let world = floor_and_wall();
+        // On the wall at x = 0 (facing +X), going slowly up it and along.
+        let mut skater = Skater::new(Vec3::new(1.0, 200.0, 0.0), -FRAC_PI_2);
+        skater.on_ground = true;
+        skater.up = Vec3::X;
+        skater.velocity = Vec3::new(0.0, 100.0, 50.0);
+        let before = skater.heading;
+        skater.update(Input::default(), &p, &world, STEP);
+        // Turned (by at most `Skater_Slow_Turn_on_slopes` a frame).
+        let turned = (skater.heading - before).abs();
+        assert!(turned > 0.0 && turned <= p.slow_turn_on_slopes * STEP + 1e-4);
+        // Not when fast.
+        let mut fast = Skater::new(Vec3::new(1.0, 200.0, 0.0), -FRAC_PI_2);
+        fast.on_ground = true;
+        fast.up = Vec3::X;
+        fast.velocity = Vec3::new(0.0, 500.0, 200.0);
+        fast.update(Input::default(), &p, &world, STEP);
+        assert_eq!(fast.heading, -FRAC_PI_2);
     }
 
     #[test]

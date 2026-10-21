@@ -126,6 +126,12 @@ pub struct Physics {
     /// ground's vert flag `+0x3650` set): `Physics_air_Jump_Speed_stat`.
     pub air_jump_speed: f32,
     pub air_jump_speed_min: f32,
+    /// Turning downhill on steep ground when slow (main.dol 0x800F3564):
+    /// under this speed, on ground whose normal's height is under the
+    /// cosine, at this rate (radians a second).
+    pub max_sloped_turn_speed: f32,
+    pub max_sloped_turn_cosine: f32,
+    pub slow_turn_on_slopes: f32,
     pub max_tense_time: f32,
     /// Gravity in the air, before dividing by `air_hang` (the game does
     /// that: `main.dol` at 0x800FC634).
@@ -287,6 +293,9 @@ impl Physics {
             jump_speed_min: scaled("Physics_Jump_Speed_min_Stat", 350.0),
             air_jump_speed: scaled("Physics_Air_Jump_Speed_Stat", 247.5),
             air_jump_speed_min: scaled("Physics_Air_Jump_Speed_min_Stat", 100.0),
+            max_sloped_turn_speed: plain("Skater_max_sloped_turn_speed", 300.0),
+            max_sloped_turn_cosine: plain("Skater_max_sloped_turn_cosine", 0.5),
+            slow_turn_on_slopes: plain("Skater_Slow_Turn_on_slopes", 3.0),
             max_tense_time: plain("Skater_max_tense_time", 200.0) / 1000.0,
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
