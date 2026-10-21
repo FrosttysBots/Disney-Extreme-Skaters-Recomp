@@ -431,7 +431,12 @@ on-ground update switches on.
   24 back to it, or else 2400 straight down from 13 back, meeting a vert
   face, `+0x395C` from the feeler 0x800F66F0) into the far ramp's vert
   air with `LipOut spine`'s "Spine Transfer", or `LipBail` (a deck
-  behind is no spine); not the reversed camera's swap. On the Hub, every
+  behind is no spine); not the reversed camera's swap. Lip combos and
+  ollying off a lip never happen on this disc: all 78 lip tricks are
+  `NoOllie`, so `OllieLipOut` (and `HandleLipOllieDirection`, 0x80113804:
+  Left held 300 ms jumps on at `Lip_side_jump_speed`, Up or Down 300 ms
+  along at `Lip_along_jump_speed`, L1 and R1 hop, otherwise
+  `SetUpLipCombo`) is left over from the engine. On the Hub, every
   quarter pipe with a coping rail lips
   (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`;
   `LIP_TURN=-1` leans off the top: one of the 13 has a vert face behind
