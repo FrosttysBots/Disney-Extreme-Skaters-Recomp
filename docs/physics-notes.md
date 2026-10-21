@@ -279,7 +279,15 @@ on-ground update switches on.
   then comes down in the far ramp's plane. Our own: the ramp being left
   is also looked for 3 and 6 out (a skater can leave a hair past the
   face).
-  Not ported: the spin axis, `skater_autoturn_vert_angle`.
+  Not ported: the spin axis and the autoturn. Taking off into vert air
+  (0x800F12A4) keeps the skater's facing with its height negated
+  (`+0x39B8`) and sets `+0x36B8`. The spin code (0x800EE4CC), with
+  neither turn held longer than `skater_autoturn_cancel_time` and that
+  flag still set, turns the skater about its up axis towards that
+  facing at `Skater_autoturn_speed`, stopping (and clearing the flag)
+  once the facing's angle (from its height, 0x8016305C) is under
+  `skater_autoturn_vert_angle` or the turn would overshoot. The port
+  keeps only a heading in vert air, so this isn't matched yet.
   Vert air falls by `Physics_Vert_hang_Stat` (0x800FC634). On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).
@@ -322,7 +330,8 @@ on-ground update switches on.
   with up then down (or down then up) within 400 ms (`ManualTricks`).
   Ported: all of that, the combo carrying the lean over until a landing
   without a manual; `SkateInAble` approximated, and bails lasting their
-  fall and get-up animations. Not ported: lips, the other control scheme, special manuals.
+  fall and get-up animations; lips (`LipMacro2`, balanced as a rail),
+  the simplified controls and special manuals too.
 - **Tricks** are scripts. `AirTricks` (`airtricks.q`) maps a button and a
   direction (`AirTrickLogic`, within 400 ms) to a slot (`Air_SquareD`);
   the profile's `default_trick_mapping` (`JessieTricks`) puts a trick in
