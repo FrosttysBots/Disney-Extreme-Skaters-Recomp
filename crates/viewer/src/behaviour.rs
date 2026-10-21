@@ -1561,6 +1561,24 @@ impl Host for Commands<'_> {
 
     /// The game's UI scripts go to its screen, whole.
     fn calling(&mut self, script: u32, args: &Value) -> bool {
+        // `TeleportSkaterToNode nodename = restart` (the levels'
+        // teleporters, a goal's cutscene ending): "On the Move!" (or its
+        // `message1`), and the skater there, for the viewer to put it.
+        if script == checksum("TeleportSkaterToNode") {
+            let node = args
+                .get(checksum("nodename"))
+                .or_else(|| args.get(checksum("node")))
+                .and_then(Value::as_name);
+            if node.is_some() {
+                let message = match args.get(checksum("message1")) {
+                    Some(Value::String(t) | Value::LocalString(t)) => t.clone(),
+                    _ => "On the Move!".to_string(),
+                };
+                self.behaviour.messages.push(message);
+                self.behaviour.skater_restart = node;
+            }
+            return true;
+        }
         if !UI_SCRIPTS.iter().any(|s| checksum(s) == script) {
             return false;
         }
@@ -1608,6 +1626,11 @@ impl Host for Commands<'_> {
         {
             self.behaviour.skater_hidden = name == checksum("Hide");
             return Outcome::Done(true);
+        }
+        // `skater:TeleportSkaterToNode nodename = restart` (out of a goal's
+        // cutscene, Hub's food runs): the script, as the skater.
+        if (about_skater || target.is_none()) && name == checksum("TeleportSkaterToNode") {
+            return Outcome::Done(self.calling(name, args));
         }
         if about_skater && name == checksum("KillSkater") {
             let node = args
