@@ -76,7 +76,9 @@ for the direction held, grinds and lips included, a trick button twice
 starts a manual, and landing in a trick loses the combo instead of
 bailing.
 
-On screen: the score and the special meter (top right), the combo and the
+On screen: the score (free skating, your best combo, as the game's free
+skate shows it; in a run or goal, all your combos added up) and the
+special meter (top right), the combo and the
 balance meter (bottom), and in the panel a status line with where the
 skater is and what it's doing.
 
