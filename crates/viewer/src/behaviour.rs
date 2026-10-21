@@ -1627,6 +1627,13 @@ impl Host for Commands<'_> {
             self.behaviour.skater_hidden = name == checksum("Hide");
             return Outcome::Done(true);
         }
+        // `skater:Obj_MoveToNode Name = node` (a goal's outro placing the
+        // skater for its show, Zurg's spine): put there.
+        if target == Some(checksum("skater")) && name == checksum("Obj_MoveToNode") {
+            let node = args.get(checksum("Name")).and_then(Value::as_name);
+            self.behaviour.skater_restart = node;
+            return Outcome::Done(node.is_some());
+        }
         // `skater:TeleportSkaterToNode nodename = restart` (out of a goal's
         // cutscene, Hub's food runs): the script, as the skater.
         if (about_skater || target.is_none()) && name == checksum("TeleportSkaterToNode") {

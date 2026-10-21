@@ -4043,10 +4043,27 @@ impl<'a> App<'a> {
         }
         // Sent back to a restart by them.
         if let Some(name) = level.behaviour.skater_restart.take() {
-            let spawn = level.nodes.spawns.iter().find(|s| s.name == name);
-            if let (Some(spawn), Some(world)) = (spawn, &level.world) {
-                let facing = spawn.facing();
-                skater.place(spawn.position, facing.x.atan2(facing.z), physics, world);
+            // A restart, or any node with a place (a goal's waypoint),
+            // facing its way.
+            let at = level
+                .nodes
+                .spawns
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| (s.position, s.facing()))
+                .or_else(|| {
+                    let node = level.nodes.nodes.iter().find(|n| n.name == name)?;
+                    let spawn = desa_viewer::nodes::Spawn {
+                        label: String::new(),
+                        position: node.position?,
+                        heading: node.heading,
+                        kind: String::new(),
+                        name,
+                    };
+                    Some((spawn.position, spawn.facing()))
+                });
+            if let (Some((position, facing)), Some(world)) = (at, &level.world) {
+                skater.place(position, facing.x.atan2(facing.z), physics, world);
                 *chase = ChaseCamera::behind(skater, physics);
             }
         }
