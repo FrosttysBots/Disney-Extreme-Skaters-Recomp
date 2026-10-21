@@ -644,8 +644,9 @@ Lip tricks stall on the coping of quarter pipes with a rail along it:
 press E (with a direction for other lips) as you launch off the lip, then
 balance with A and D. Holding R going up a quarter pipe spine-transfers
 to the ramp behind. Gaps score from the levels' trigger scripts, and
-teleporters (like the Hub's harbour water) put the skater back. Not yet:
-moving objects, and a frame-by-frame check against Dolphin.
+teleporters (like the Hub's harbour water) put the skater back. Moving
+level pieces carry their collision with them as their scripts move them.
+Not yet: a frame-by-frame check against Dolphin.
 Turning rates are radians a second (the steering code turns by the rate
 times the frame time), and the camera distances are feet (the camera
 code multiplies them by 12).
