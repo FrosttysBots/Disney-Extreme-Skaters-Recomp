@@ -1808,6 +1808,42 @@ const RUN_TIME: f32 = 120.0;
 /// A character's bones, each relative to its parent.
 type Pose = Vec<(Quat, Vec3)>;
 
+/// Where and how the skater's drawn `time` into going through a warp
+/// (`WarpAi`): at the warp, spinning ever faster (each `Rotate y = N
+/// duration = d` a quarter second after the last, until the 10080 over
+/// 5 seconds), and from 1.75 s shrinking to a tenth over 3 s
+/// (`calcEase`), then gone (`skater:Hide`).
+fn warp_spin_placement(at: Vec3, time: f32, stood: Mat4) -> Mat4 {
+    // (Start, degrees a second.)
+    const SPINS: [(f32, f32); 7] = [
+        (0.0, 360.0),
+        (0.25, 540.0),
+        (0.5, 720.0),
+        (0.75, 1080.0),
+        (1.0, 1440.0),
+        (1.25, 1800.0),
+        (1.75, 2016.0),
+    ];
+    let mut degrees = 0.0;
+    for (i, &(start, rate)) in SPINS.iter().enumerate() {
+        let end = SPINS.get(i + 1).map_or(start + 5.0, |next| next.0);
+        degrees += rate * (time.min(end) - start).max(0.0);
+    }
+    let shrink = ((time - 1.75) / 3.0).clamp(0.0, 1.0);
+    let left = 1.0 - shrink * 0.9;
+    let scale = if time > 4.75 {
+        1e-4
+    } else {
+        left * left * (3.0 - 2.0 * left)
+    };
+    let (stood_scale, rotation, _) = stood.to_scale_rotation_translation();
+    Mat4::from_scale_rotation_translation(
+        stood_scale * scale,
+        Quat::from_rotation_y(degrees.to_radians()) * rotation,
+        at,
+    )
+}
+
 fn placement_at(spawn: &Spawn) -> Mat4 {
     Mat4::from_rotation_translation(
         Quat::from_rotation_arc(Vec3::Z, spawn.facing()),
@@ -1967,6 +2003,9 @@ struct App<'a> {
     /// those as last kept by the menus.
     kid_shape: Vec<(u32, Vec3)>,
     kid_scale: Option<f32>,
+    /// Going through a warp (`WarpAi`, `WarpAIHub`): where it stands, how
+    /// long since, and how the skater stood, for its spin and shrink.
+    warp_spin: Option<(Vec3, f32, Mat4)>,
     kid_shape_kept: Option<(KidShape, Option<f32>)>,
     /// An appearance for the other kid (boy or girl), put on once it's
     /// shown.
@@ -2243,6 +2282,7 @@ impl<'a> App<'a> {
             kid_from_menus: false,
             kid_shape: Vec::new(),
             kid_scale: None,
+            warp_spin: None,
             kid_shape_kept: None,
             kid_pending: None,
             kid_pending_slot: None,
@@ -2302,6 +2342,7 @@ impl<'a> App<'a> {
     }
 
     fn start_load(&mut self, index: usize) {
+        self.warp_spin = None;
         if let Some(info) = self.model.levels.get(index) {
             self.model.loading = Some(info.title.clone());
             self.pending = Some((index, 0));
@@ -3559,6 +3600,9 @@ impl<'a> App<'a> {
             .position(|info| qb::checksum(&format!("load_{}", info.id)) == level);
         if let Some(index) = index {
             self.skate_on_load = true;
+            // (The skater spins away at the warp while its camera plays.)
+            let at = self.level.as_ref().and_then(|l| l.portals.get(i)).map(|p| p.warp.position);
+            self.warp_spin = at.map(|at| (at, 0.0, self.placement));
             // The warp's own camera path first, then the level.
             match camera {
                 Some(camera) => {
@@ -5927,6 +5971,10 @@ impl<'a> App<'a> {
         {
             // (The pad's still read, for Start.)
             let _ = self.pad_input();
+            if let Some((at, time, stood)) = &mut self.warp_spin {
+                *time += dt;
+                self.placement = warp_spin_placement(*at, *time, *stood);
+            }
             return;
         }
         let pad = self.pad_input();
@@ -8009,5 +8057,24 @@ fn skater_state(s: &Skater) -> desa_viewer::behaviour::SkaterState {
         doing_trick: s.trick.is_some() || on_rail || s.manual || s.lip.is_some(),
         speed: s.velocity.length(),
         heading: s.heading,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_warp_spins_faster_then_shrinks_away() {
+        let at = Vec3::new(10.0, 0.0, 5.0);
+        let stood = Mat4::IDENTITY;
+        let size = |t: f32| warp_spin_placement(at, t, stood).to_scale_rotation_translation().0.x;
+        // Full size while it spins up, there at the warp.
+        assert_eq!(size(1.0), 1.0);
+        let moved = warp_spin_placement(Vec3::ZERO, 1.0, Mat4::from_translation(Vec3::X));
+        assert_eq!(moved.to_scale_rotation_translation().2, Vec3::ZERO);
+        // Shrinking from 1.75 s, gone by 4.75 s.
+        assert!(size(3.0) < 1.0 && size(3.0) > size(4.5));
+        assert!(size(5.0) < 0.001);
     }
 }
