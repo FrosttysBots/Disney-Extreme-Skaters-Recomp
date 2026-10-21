@@ -36,8 +36,10 @@ finds the code; useful hits:
 ## The skater object
 
 `r3` in these functions is the skater. Its physics component is the
-pointer at `+0x698`; in that component, `+0x34` is the velocity (x, y, z,
-w), `+0x64` the facing vectors, and `+0xE4` the frame time. The ground
+pointer at `+0x698`; in that component, `+0x04` is the position, `+0x34`
+the velocity (x, y, z, w), `+0x44`, `+0x54` and `+0x64` the orientation's
+rows (right, up, forward: the lip checks read `+0x48`, `+0x58` and
+`+0x68` as their heights), and `+0xE4` the frame time. The ground
 normal is at skater `+0x3A10`; `+0x28CC` holds a state checksum the
 on-ground update switches on.
 
