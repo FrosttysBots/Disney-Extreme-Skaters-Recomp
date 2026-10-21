@@ -135,6 +135,13 @@ pub struct Physics {
     /// How far off straight up the ramp a lip can start, in degrees
     /// (`LipAllowAngle`).
     pub lip_allow_angle: f32,
+    /// Vert air's autoturn: how fast (radians a second), how long a turn
+    /// held cancels it, and how near straight up a take-off goes without
+    /// one (degrees) (`Skater_autoturn_speed`,
+    /// `skater_autoturn_cancel_time`, `skater_autoturn_vert_angle`).
+    pub autoturn_speed: f32,
+    pub autoturn_cancel_time: f32,
+    pub autoturn_vert_angle: f32,
     pub ground_gravity: f32,
     pub brake_acceleration: f32,
     pub rolling_friction: f32,
@@ -279,6 +286,9 @@ impl Physics {
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
             vert_hang: scaled("Physics_Vert_hang_Stat", 1.0),
             lip_allow_angle: plain("LipAllowAngle", 35.0),
+            autoturn_speed: plain("Skater_autoturn_speed", 3.0),
+            autoturn_cancel_time: plain("skater_autoturn_cancel_time", 300.0) / 1000.0,
+            autoturn_vert_angle: plain("skater_autoturn_vert_angle", 5.0),
             ground_gravity: plain("Physics_Ground_Gravity", -1000.0),
             brake_acceleration: plain("Physics_Brake_Acceleration", 900.0),
             rolling_friction: plain("Physics_Rolling_Friction", 0.00001),

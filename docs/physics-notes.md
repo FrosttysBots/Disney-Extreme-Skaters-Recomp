@@ -279,15 +279,20 @@ on-ground update switches on.
   then comes down in the far ramp's plane. Our own: the ramp being left
   is also looked for 3 and 6 out (a skater can leave a hair past the
   face).
-  Not ported: the spin axis and the autoturn. Taking off into vert air
+  Not ported: the spin axis. The autoturn: taking off into vert air
   (0x800F12A4) keeps the skater's facing with its height negated
   (`+0x39B8`) and sets `+0x36B8`. The spin code (0x800EE4CC), with
-  neither turn held longer than `skater_autoturn_cancel_time` and that
-  flag still set, turns the skater about its up axis towards that
-  facing at `Skater_autoturn_speed`, stopping (and clearing the flag)
-  once the facing's angle (from its height, 0x8016305C) is under
-  `skater_autoturn_vert_angle` or the turn would overshoot. The port
-  keeps only a heading in vert air, so this isn't matched yet.
+  neither turn held longer than `skater_autoturn_cancel_time` (300 ms)
+  and the flag still set, turns the skater about its up axis towards
+  that facing at `Skater_autoturn_speed` (3 radians a second), stopping
+  (and clearing the flag) on reaching it, or at once when the facing is
+  within `skater_autoturn_vert_angle` (5 degrees, `acosf` at 0x8016305C)
+  of straight up. So an air off a quarter pipe at an angle comes back
+  down facing down the ramp; straight up, fakie. Ported, with the
+  skater upright in our vert air: the heading turns to its mirror across
+  the ramp, the angle taken within the ramp's face (our lips are not
+  quite vertical), not counted as spin (`ANGLE=20 cargo run --release
+  -p desa_viewer --example vert_ramps`).
   Vert air falls by `Physics_Vert_hang_Stat` (0x800FC634). On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).

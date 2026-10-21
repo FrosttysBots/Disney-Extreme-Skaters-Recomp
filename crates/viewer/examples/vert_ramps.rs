@@ -70,7 +70,13 @@ fn main() {
         if ground.normal.y < 0.9 {
             continue;
         }
-        let into = -out;
+        // With ANGLE=degrees, up the ramp that far off straight on (the
+        // autoturn's case: it should come down facing down the ramp).
+        let angle: f32 = std::env::var("ANGLE")
+            .ok()
+            .and_then(|a| a.parse().ok())
+            .unwrap_or(0.0);
+        let into = glam::Quat::from_rotation_y(angle.to_radians()) * -out;
         let mut skater = Skater::new(ground.point, into.x.atan2(into.z));
         if std::env::var("STARTS").is_ok() {
             println!(
@@ -92,6 +98,8 @@ fn main() {
         // With LIPS set, press grind at the lip: a lip trick on the coping.
         let lips = std::env::var("LIPS").is_ok();
         let mut lipped = None;
+        let mut air_facing = Vec3::ZERO;
+        let mut went_vert = false;
         let mut top = ground.point.y;
         let mut airborne = false;
         let mut landed_at = None;
@@ -178,6 +186,10 @@ fn main() {
                     skater.vert.is_some()
                 );
             }
+            if !skater.on_ground {
+                air_facing = skater.forward();
+                went_vert |= skater.vert.is_some();
+            }
             top = top.max(skater.position.y);
             if !skater.on_ground {
                 airborne = true;
@@ -201,6 +213,16 @@ fn main() {
             );
         }
         // In front of the ramp's face, or behind it (the deck)?
+        if std::env::var("ANGLE").is_ok() {
+            // Facing down the ramp (out) coming down, or still up it
+            // (fakie)?
+            let facing = air_facing.dot(out);
+            println!(
+                "  landed facing {}{}",
+                if facing > 0.0 { "down the ramp" } else { "up the ramp" },
+                if went_vert { " from vert air" } else { "" },
+            );
+        }
         let side = landed_at.map(|p| (p - *centre).dot(out));
         let verdict = match side {
             Some(s) if s > -20.0 => {

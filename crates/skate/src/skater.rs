@@ -39,7 +39,7 @@
 //!   out; skatable ground ahead (a ramp's curve) is stepped onto.
 
 use std::collections::HashMap;
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use glam::{Mat4, Quat, Vec3};
 
@@ -511,6 +511,8 @@ pub struct Skater {
     pub lip: Option<Lip>,
     /// The lip trick's way out, playing in the air after it.
     pub lip_out: Option<(u32, f32)>,
+    /// Vert air's autoturn: the heading it's turning the skater to.
+    autoturn: Option<f32>,
     /// Recent presses, for the specials' three-press combinations, with
     /// the clock they're timed by.
     presses: Vec<(Press, f32)>,
@@ -616,6 +618,7 @@ impl Skater {
             balance_time: 0.0,
             lip: None,
             lip_out: None,
+            autoturn: None,
             presses: Vec::new(),
             clock: 0.0,
             score: 0,
@@ -2781,6 +2784,23 @@ impl Skater {
             out,
             offset: self.position.dot(out),
         });
+        // The autoturn (0x800F12A4 keeps the facing with its height
+        // negated; 0x800EE4CC turns to it): going up the ramp at an angle,
+        // more than `skater_autoturn_vert_angle` off straight up, the
+        // skater turns round in the air to come back down facing down the
+        // ramp, the other way across. Here, with the skater upright in
+        // vert air, that's the heading mirrored across the ramp.
+        // (The board's way on the ramp, the heading tilted onto it as the
+        // skater's drawn, against straight up the ramp: the game's
+        // forward against straight up, on a face that's vertical.)
+        let forward = self.forward();
+        let up = self.up.normalize_or(Vec3::Y);
+        let board = Quat::from_rotation_arc(Vec3::Y, up) * forward;
+        let ascent = (Vec3::Y - up * up.y).normalize_or(Vec3::Y);
+        if board.dot(ascent).clamp(-1.0, 1.0).acos() >= p.autoturn_vert_angle.to_radians() {
+            let mirrored = forward - out * 2.0 * forward.dot(out);
+            self.autoturn = Some(mirrored.x.atan2(mirrored.z));
+        }
     }
 
     /// A spine transfer (main.dol 0x800F1CD8, in the vert takeoff): the
@@ -2939,6 +2959,29 @@ impl Skater {
                 let step = step * self.tap_spin.signum();
                 self.tap_spin -= step;
                 turn = step;
+            }
+        }
+        // The autoturn (0x800EE4CC), towards the heading it's after at
+        // `Skater_autoturn_speed`, unless the skater's turning: a turn held
+        // `skater_autoturn_cancel_time` ends it. (It doesn't count as
+        // spin.)
+        if self.vert.is_none() {
+            self.autoturn = None;
+        }
+        if let Some(target) = self.autoturn {
+            if input.turn != 0.0 {
+                if self.turn_time > p.autoturn_cancel_time {
+                    self.autoturn = None;
+                }
+            } else if turn == 0.0 {
+                let left = (target - self.heading + PI).rem_euclid(TAU) - PI;
+                let step = p.autoturn_speed * STEP;
+                if left.abs() <= step {
+                    self.heading = target;
+                    self.autoturn = None;
+                } else {
+                    self.heading += step * left.signum();
+                }
             }
         }
         self.heading -= turn;
