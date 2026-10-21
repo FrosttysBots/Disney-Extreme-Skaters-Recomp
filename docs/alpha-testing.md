@@ -90,6 +90,11 @@ skater is and what it's doing.
 - Manuals and branching between them, chaining grind → manual → grind.
 - Quarter pipes: vert air, lips on copings that have a rail, reverts,
   and spine transfers (hold R going up; Camp's half pipes have spines).
+  Going up at an angle you turn round in the air to come down forwards
+  (straight up, you come down fakie); too slow on a steep ramp, you turn
+  round to roll back down. Lean a lip off the top over a spine for a
+  spine transfer (with a deck behind, you bail), and fall off a coping
+  rail to skate back in.
 - Filling the special meter and doing your character's specials.
 - Gaps: jumps, grinds and lines the levels name and score (shown in the
   combo), like the Hub's Chain Link Gap or Camp's Tent Gap.
