@@ -363,6 +363,11 @@ pub struct Skater {
     /// wall-ridable (main.dol 0x800F66F0 sets the flag it checks), and
     /// only Canyon has any, 11; with this off, so does this.
     pub wallride_anywhere: bool,
+    /// Repeated tricks in a combo score less (the game mode's
+    /// `degrade_score`: on in a single session, the career and goals,
+    /// which `goal_start` sets with `SetScoreDegradation 1`; off in free
+    /// skate, 0x800B0854).
+    pub degrade: bool,
     /// Skitching: the vehicle (in [`World::vehicles`]) towing the skater,
     /// and how long up has been held behind one.
     pub skitch: Option<usize>,
@@ -558,6 +563,7 @@ impl Skater {
             wall: None,
             since_wallride: f32::MAX,
             wallride_anywhere: true,
+            degrade: true,
             since_rail: f32::MAX,
             last_ground: position,
             spawns: Vec::new(),
@@ -675,6 +681,11 @@ impl Skater {
             self.gap_scripts
                 .extend(self.gaps.trick_done(&name, surface));
             self.combo_tricks.add(&name, score, block_spin);
+            if !self.degrade {
+                if let Some(last) = self.combo_tricks.tricks.last_mut() {
+                    last.repeats = 0;
+                }
+            }
         }
         if block_spin {
             self.air_spin = 0.0;
@@ -3917,6 +3928,21 @@ mod tests {
         skater.end_combo(true);
         skater.revert();
         assert_eq!(skater.rolling_friction, Some(0.0));
+    }
+
+    #[test]
+    fn free_skating_does_not_degrade_repeats() {
+        let combo = |degrade: bool| {
+            let mut skater = Skater::new(Vec3::ZERO, 0.0);
+            skater.degrade = degrade;
+            for _ in 0..3 {
+                skater.credit(Some(("Kickflip".into(), 100)), false);
+            }
+            skater.combo_tricks.points()
+        };
+        // 100 + 90 + 80 in a session or goal; all 300 skating freely.
+        assert_eq!(combo(true), 270);
+        assert_eq!(combo(false), 300);
     }
 
     #[test]

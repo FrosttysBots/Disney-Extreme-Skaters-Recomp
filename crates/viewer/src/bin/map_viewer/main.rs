@@ -6041,6 +6041,12 @@ impl<'a> App<'a> {
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
         skater.wallride_anywhere = self.model.character.wallride_anywhere;
+        // Repeats lose points in a run or a goal, as the game's single
+        // session and goals have it, not in free skating.
+        skater.degrade = self.run.is_some()
+            || self.letters.is_some()
+            || self.racing.is_some()
+            || self.goal_run.is_some();
         // The cheats.
         let cheats = self.model.character.cheats;
         skater.perfect_manual = cheats.perfect_manual;
