@@ -482,8 +482,10 @@ on-ground update switches on.
   `REQUIRE_LIP`). Ported: teleporters and gaps, the scripts read without
   running them (`desa_viewer::triggers`). Our own rules: gaps fire on
   crossing a trigger, ends before starts, and only after 50 units across
-  (start and end pads lie together for gaps that go both ways). Not yet:
-  the other trigger scripts (breakables, goals, sounds).
+  (start and end pads lie together for gaps that go both ways).
+  Breakables are read the same way (`triggers::breakables`); the other
+  trigger scripts (a goal's things, rail nodes' like Tarzan's bowsprit)
+  run in the script engine as the skater touches them.
 - **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
   the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
   none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left
