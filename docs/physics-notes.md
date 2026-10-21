@@ -353,11 +353,14 @@ on-ground update switches on.
   Right and Left for grinds and lips) and what falling off does: a
   manual bails off the top (`BailManual`) and sets down off the bottom
   (`ManualLand`); a grind falls to that side (`SkateInOrBail`), skating
-  in onto ground beside the rail if there is any (`SkateInAble`, turning
-  30 degrees) and bailing otherwise (`FiftyFiftyFall`). Manuals start
+  in (turning 30 degrees, `SetLandedFromVert`) where `SkateInAble`
+  (0x80117E68: a line across under the rail, 7 below it and 30 out each
+  side, meeting a vert face) finds a coping, and bailing otherwise
+  (`FiftyFiftyFall`). Manuals start
   with up then down (or down then up) within 400 ms (`ManualTricks`).
   Ported: all of that, the combo carrying the lean over until a landing
-  without a manual; `SkateInAble` approximated, and bails lasting their
+  without a manual; `SkateInAble` (the ground to skate in onto found 20
+  out, our own), and bails lasting their
   fall and get-up animations; lips (`LipMacro2`, balanced as a rail),
   the simplified controls and special manuals too.
 - **Tricks** are scripts. `AirTricks` (`airtricks.q`) maps a button and a

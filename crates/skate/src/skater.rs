@@ -1914,12 +1914,21 @@ impl Skater {
             } else {
                 (right, -30f32.to_radians())
             };
-            // Ground just beside the rail (`SkateInAble`, approximated):
-            // skate in onto it, turned 30 degrees that way, no bail.
+            // `SkateInAble Right`/`Left` (main.dol 0x80117E68): a line
+            // across under the rail, `SkateInAble_DownOffset` (7) below it
+            // and `SkateInAble_HorizOffset` (30) out each side, meets a vert
+            // face: a coping. Then skate in onto the ground that way,
+            // turned 30 degrees, no bail; elsewhere `FiftyFiftyFall`.
+            use ngc_collision::face_flags::VERT;
+            let under = self.position - Vec3::Y * 7.0;
+            let coping = world
+                .ray(under - side * 30.0, under + side * 30.0)
+                .is_some_and(|hit| hit.flags & VERT != 0);
             let beside = self.position + side * 20.0;
             let lift = Vec3::Y * 10.0;
             let ground = world
                 .ray(beside + lift, beside - Vec3::Y * 30.0)
+                .filter(|_| coping)
                 .filter(|hit| !is_wall(hit, p))
                 .filter(|hit| world.ray(self.position + lift, hit.point + lift).is_none());
             if let Some(hit) = ground {
