@@ -179,7 +179,8 @@ on-ground update switches on.
   ground. A face that isn't a wall and is close to the last ground's
   normal (dot at least 0.8) or faces up (Y at least 0.5) is left for
   landing. A skatable face otherwise is tried as a ledge: up by
-  `Physics_Air_Snap_Up`, then back down 2 at a time (not ported). With
+  `Physics_Air_Snap_Up`, then back down 2 at a time (ported as one line
+  down from that height, `air_snap_up`, with the landing). With
   `+0x3638` set (vert air, perhaps) the skater is put
   `Skater_Min_Distance_To_Wall` out from the wall and its velocity
   flattened against it. Otherwise, after 0x800FDB6C (which may start a
@@ -195,7 +196,9 @@ on-ground update switches on.
   - the skater is put at the hit, back down to its feet, plus
     `Skater_Min_Distance_To_Wall` (8) along the normal; a moving
     object's motion is added.
-  Ported: the last case, without the event, sound or moving objects.
+  Ported: the last case and the bonk's sound, without the event or
+  moving objects; this crate also keeps the feet out of a wall leaning
+  back.
 
 - **Landing** (the end of 0x800FC7F8): a line from last frame's position
   to this one's (plus a moving object's motion). If it hits and the
