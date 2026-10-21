@@ -368,6 +368,10 @@ pub struct Skater {
     /// which `goal_start` sets with `SetScoreDegradation 1`; off in free
     /// skate, 0x800B0854).
     pub degrade: bool,
+    /// Landed combos add up into the score (`accumulate_score`, on in the
+    /// same modes); off, as in free skate, the score is the best combo
+    /// (`track_trick_score`, 0x800B0EA8).
+    pub accumulate: bool,
     /// Skitching: the vehicle (in [`World::vehicles`]) towing the skater,
     /// and how long up has been held behind one.
     pub skitch: Option<usize>,
@@ -564,6 +568,7 @@ impl Skater {
             since_wallride: f32::MAX,
             wallride_anywhere: true,
             degrade: true,
+            accumulate: true,
             since_rail: f32::MAX,
             last_ground: position,
             spawns: Vec::new(),
@@ -715,7 +720,11 @@ impl Skater {
         }
         let combo = std::mem::take(&mut self.combo_tricks);
         let total = if landed { combo.total() } else { 0 };
-        self.score += total;
+        if self.accumulate {
+            self.score += total;
+        } else {
+            self.score = self.score.max(total);
+        }
         self.last_combo = Some(Landed {
             combo,
             total,

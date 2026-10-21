@@ -631,7 +631,8 @@ units high and grinds the Hub's long rails.
 [docs/physics-notes.md](docs/physics-notes.md) maps every function read,
 with addresses. Combos score as the game does: repeats degrade (100% down
 to 50%) in a 2 minute run or a goal, as in the game's single session and
-career (free skating doesn't degrade them), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
+career (free skating doesn't degrade them, and its score is the best
+combo rather than their sum, as the game's free skate has it), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
 earn points every frame, and the total is the points times the number of
 tricks. The special meter fills with points; full, each character's
 special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a

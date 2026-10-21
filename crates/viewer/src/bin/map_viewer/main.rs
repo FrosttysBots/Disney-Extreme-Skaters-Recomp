@@ -6041,12 +6041,14 @@ impl<'a> App<'a> {
         };
         skater.auto_kick = self.model.character.auto_kick && !ended;
         skater.wallride_anywhere = self.model.character.wallride_anywhere;
-        // Repeats lose points in a run or a goal, as the game's single
-        // session and goals have it, not in free skating.
+        // Repeats lose points, and combos add up, in a run or a goal, as
+        // the game's single session and goals have it; free skating keeps
+        // its best combo as the score.
         skater.degrade = self.run.is_some()
             || self.letters.is_some()
             || self.racing.is_some()
             || self.goal_run.is_some();
+        skater.accumulate = skater.degrade;
         // The cheats.
         let cheats = self.model.character.cheats;
         skater.perfect_manual = cheats.perfect_manual;
