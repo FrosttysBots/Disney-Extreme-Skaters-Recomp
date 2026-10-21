@@ -2129,9 +2129,9 @@ impl Skater {
             .ray_past(
                 from.with_y(from.y.max(target.y)) + Vec3::Y * p.ground_snap_up,
                 target - Vec3::Y * 10.0,
-                |hit| !is_wall(hit, p) && hit.normal.y > 0.5,
+                |hit| !is_wall(hit, p) && hit.normal.y > 0.0,
             )
-            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.5);
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.0);
         if let Some(ground) = below {
             self.position = ground.point + ground.normal;
             self.leave_wall(self.velocity);
@@ -2155,9 +2155,9 @@ impl Skater {
             .ray_past(
                 target + Vec3::Y * p.ground_snap_up,
                 target - Vec3::Y * 10.0,
-                |hit| !is_wall(hit, p) && hit.normal.y > 0.5,
+                |hit| !is_wall(hit, p) && hit.normal.y > 0.0,
             )
-            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.5)
+            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.0)
         {
             self.position = ground.point + ground.normal;
             self.leave_wall(self.velocity);
@@ -2658,7 +2658,17 @@ impl Skater {
                     );
                 }
                 // The ground is gone: off an edge, or over the lip of a
-                // kicker (the game's `GroundGone`).
+                // kicker (the game's `GroundGone`). (This crate's
+                // safeguard: not inside the wall the line down met, a wall
+                // leaning back where a slope steepens, below the
+                // knee-height check; the air would start inside it.)
+                let mut target = target;
+                if let Some(wall) = world.ray(from, to).filter(|hit| is_wall(hit, p)) {
+                    let inside = (target - wall.point).dot(wall.normal);
+                    if inside < 1.0 {
+                        target += wall.normal * (1.0 - inside);
+                    }
+                }
                 self.position = target;
                 self.velocity = forward * speed;
                 self.on_ground = false;
