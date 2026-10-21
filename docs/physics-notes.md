@@ -467,7 +467,11 @@ on-ground update switches on.
 - **Grind and manual variety.** `GrindTricks` (`disneytricks.q`) picks
   the grind by the direction with Triangle (`AirTrickLogic`, 500 ms):
   none `Grind1`, up `Grind2`, right `Grind3`, down `Grind4`, left
-  `Grind5` (`Grind1_180`... when turning 180 onto the rail, not ported).
+  `Grind5`. (The `Grind1_180`... grinds, `Grind_180` with
+  `FlipAndRotate`, are never reached on this disc: their slots appear
+  only in `ExtraGrindTricks_180`, which only they use, and main.dol
+  holds neither a `_180` name nor those slots' checksums; nor are
+  `grindlist.q`'s `Template` tables read.)
   `ManualTricks` and `GroundManualTrickBranches` (`manualtricks.q`) start
   or branch to `Manual2` to `5` with Circle and a direction (400 ms);
   up-down is `Manual1`. Each trick names its in and range animations
