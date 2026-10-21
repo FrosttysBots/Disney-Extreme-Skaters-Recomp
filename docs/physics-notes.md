@@ -21,6 +21,14 @@ finds the code; useful hits:
 | `Physics_Ground_Rotation` | 0x800ED8AC, 0x800ED8F8 (steering) |
 | `Physics_Air_Rotation_stat` | 0x800EE654 and three more (air spins) |
 
+The scripts' global commands are a table of (name string, function)
+pairs, about 880 of them, around file offset 0x1F44F0 (`Wait` first;
+`SetScoreDegradation` is 0x801413F0). Commands on an object, the
+skater's among them, are found by checksum in long compare chains
+instead (the skater's from about 0x80110F00 to 0x80113500, so a
+command's checksum as a `lis`/`ori` pair leads to its code:
+`HawkControlsIsOff` at 0x80111194).
+
 ## Helpers
 
 | Address | What it does |
