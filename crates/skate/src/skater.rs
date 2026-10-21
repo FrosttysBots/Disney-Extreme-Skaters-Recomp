@@ -3716,6 +3716,55 @@ mod tests {
     }
 
     #[test]
+    fn lips_only_facing_up_the_ramp() {
+        let p = physics();
+        // A ramp facing +X: straight up it the skater faces -X.
+        let vert = VertAir {
+            out: Vec3::X,
+            offset: 0.0,
+        };
+        let facing = |degrees: f32| {
+            let mut skater = Skater::new(Vec3::ZERO, 0.0);
+            let way = Quat::from_rotation_y(degrees.to_radians()) * -Vec3::X;
+            skater.heading = way.x.atan2(way.z);
+            skater.lip_allowed(vert, &p)
+        };
+        assert!(facing(0.0));
+        assert!(facing(30.0) && facing(-30.0));
+        // Past `LipAllowAngle` (35), along the coping, or fakie: no.
+        assert!(!facing(40.0) && !facing(90.0) && !facing(180.0));
+    }
+
+    #[test]
+    fn a_lip_leant_off_the_top_goes_over_onto_a_deck() {
+        let p = physics();
+        let world = floor_and_wall();
+        let lip = Lip {
+            trick: LipTrick {
+                name: "Lip".into(),
+                score: 100,
+                init: None,
+                range: 0,
+                out: None,
+                no_ollie: true,
+                flip_after: false,
+            },
+            out: Vec3::X,
+            time: 1.0,
+        };
+        // The floor 10 below, 24 behind the coping: over onto it.
+        let mut skater = Skater::new(Vec3::new(500.0, 10.0, 0.0), 0.0);
+        skater.lip = Some(lip.clone());
+        assert!(skater.lip_over(&lip, &p, &world));
+        assert!(skater.lip.is_none() && skater.vert.is_none());
+        assert!((skater.position.x - 476.0).abs() < 0.01);
+        assert!(skater.combo_tricks.tricks.iter().any(|t| t.name == "Spine Transfer"));
+        // Nothing within reach below: `LipBail` instead.
+        let mut skater = Skater::new(Vec3::new(500.0, 100.0, 0.0), 0.0);
+        assert!(!skater.lip_over(&lip, &p, &world));
+    }
+
+    #[test]
     fn ollies_off_a_wall() {
         let p = physics();
         let world = floor_and_wall();
