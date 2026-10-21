@@ -262,8 +262,9 @@ on-ground update switches on.
   a rail dips into it, a wall) puts the skater back at the old position,
   1 higher, with its velocity flattened against what it hit, in the air
   (`OffRail`).
-  Ported: all of the above for level rails, without balance, bails, the
-  side check, moving objects' rails, lip tricks and the events. The
+  Ported: all of the above for level rails, with balance, bails and lip
+  tricks (below), without the side check, moving objects' rails and the
+  events. The
   grind button (0x80108558): with the pro controls (`+0x3A3C`, what
   `HawkControlsIsOff` reads), Triangle held; with the simplified ones,
   Square, Triangle or Circle held or pressed within
