@@ -1626,10 +1626,10 @@ impl Skater {
         match lean {
             // `LipOut`: back into the ramp.
             Lean::OffBottom => self.leave_lip(&lip, 0.0),
-            // Over onto the deck when it's there (`SkateInAble Lip`:
-            // `LipOut spine y = -24`), else `LipBail`.
+            // Over a spine when there's one (`SkateInAble Lip`: `LipOut
+            // spine y = -24`), else `LipBail`.
             Lean::OffTop => {
-                if !self.lip_over(&lip, p, world) {
+                if !self.lip_over(&lip, world) {
                     self.bail_on_landing = true;
                     self.leave_lip(&lip, 0.0);
                 }
@@ -1647,28 +1647,45 @@ impl Skater {
         }
     }
 
-    /// Off the lip the other way, onto the deck behind the coping
-    /// (`LipOut spine y = -24`): `SkateInAble_LipHorizOffset` (24) back,
-    /// ground found below (approximated as on rails), the skater moves
-    /// there turned round (`Rotate z = 180`, `Flip`) for a "Spine
-    /// Transfer" of `TRANSFER_POINTS`, to come down onto it.
-    fn lip_over(&mut self, lip: &Lip, p: &Physics, world: &World) -> bool {
-        let behind = self.position - lip.out * 24.0;
-        let lift = Vec3::Y * 10.0;
-        let ground = world
-            .ray(behind + lift, behind - Vec3::Y * 30.0)
-            .filter(|hit| !is_wall(hit, p) && hit.normal.y > 0.7)
-            .filter(|hit| world.ray(self.position + lift, hit.point + lift).is_none());
-        if ground.is_none() {
+    /// Off the lip the other way, over a spine (`SkateInAble Lip`,
+    /// main.dol 0x80117BC8, then `LipOut spine y = -24`): a line 7 below
+    /// the coping from `SkateInAble_LipHorizOffset` (24) back to it, or
+    /// else one `SkateInAble_LipExtraCheckDownOffset` (2400) straight
+    /// down from `SkateInAble_LipExtraCheckHorizOffset` (13) back, must
+    /// meet a vert face (`+0x395C`, from the feeler 0x800F66F0): the
+    /// ramp on the far side. The skater moves 24 over, turned round
+    /// (`Rotate z = 180`, `Flip`), into that ramp's vert air for a "Spine
+    /// Transfer" of `TRANSFER_POINTS`. A deck behind is a `LipBail`.
+    fn lip_over(&mut self, lip: &Lip, world: &World) -> bool {
+        use ngc_collision::face_flags::VERT;
+        let below = self.position - Vec3::Y * 7.0;
+        let back = below - lip.out * 24.0;
+        let top = self.position - lip.out * 13.0;
+        let far = world
+            .ray(back, below)
+            .or_else(|| world.ray(top, top - Vec3::Y * 2400.0))
+            .filter(|hit| hit.flags & VERT != 0);
+        let Some(far) = far else {
             return false;
+        };
+        let mut out = Vec3::new(far.normal.x, 0.0, far.normal.z).normalize_or_zero();
+        // (Lines meet faces from either side: the far ramp faces away.)
+        if out.dot(lip.out) > 0.0 {
+            out = -out;
+        }
+        if out == Vec3::ZERO {
+            out = -lip.out;
         }
         self.lip = None;
         self.since_rail = 0.0;
-        self.position = behind + Vec3::Y;
+        self.position += Vec3::Y - lip.out * 24.0;
         self.velocity = Vec3::ZERO;
-        self.heading = lip.out.x.atan2(lip.out.z);
+        self.heading = out.x.atan2(out.z);
         self.up = Vec3::Y;
-        self.vert = None;
+        self.vert = Some(VertAir {
+            out,
+            offset: self.position.dot(out),
+        });
         self.flipped = !self.flipped;
         self.credit(Some(("Spine Transfer".into(), TRANSFER_POINTS)), true);
         self.ollied = false;
@@ -3780,9 +3797,14 @@ mod tests {
 
     /// A floor at y 0 and a wall along z at x 0, facing +x.
     fn floor_and_wall() -> World {
+        floor_and_wall_flagged(0)
+    }
+
+    /// The floor, and a wall with these face flags.
+    fn floor_and_wall_flagged(wall_flags: u16) -> World {
         use ngc_collision::{BspNode, BspTree, Collision, CollisionObject, Face};
-        let face = |indices| Face {
-            flags: 0,
+        let face = |indices: [u16; 3]| Face {
+            flags: if indices[0] >= 4 { wall_flags } else { 0 },
             terrain: 0,
             indices,
         };
@@ -3877,9 +3899,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lip_leant_off_the_top_goes_over_onto_a_deck() {
-        let p = physics();
-        let world = floor_and_wall();
+    fn a_lip_leant_off_the_top_goes_over_a_spine_only() {
         let lip = Lip {
             trick: LipTrick {
                 name: "Lip".into(),
@@ -3893,16 +3913,22 @@ mod tests {
             out: Vec3::X,
             time: 1.0,
         };
-        // The floor 10 below, 24 behind the coping: over onto it.
-        let mut skater = Skater::new(Vec3::new(500.0, 10.0, 0.0), 0.0);
+        // A vert face just behind the coping (the wall at x = 0, 400 high):
+        // over it, into its vert air facing the other way.
+        let spine = floor_and_wall_flagged(ngc_collision::face_flags::VERT);
+        let mut skater = Skater::new(Vec3::new(12.0, 390.0, 0.0), 0.0);
         skater.lip = Some(lip.clone());
-        assert!(skater.lip_over(&lip, &p, &world));
-        assert!(skater.lip.is_none() && skater.vert.is_none());
-        assert!((skater.position.x - 476.0).abs() < 0.01);
+        assert!(skater.lip_over(&lip, &spine));
+        assert!(skater.lip.is_none());
+        assert_eq!(skater.vert.map(|v| v.out), Some(-Vec3::X));
+        assert!((skater.position.x + 12.0).abs() < 0.01);
         assert!(skater.combo_tricks.tricks.iter().any(|t| t.name == "Spine Transfer"));
-        // Nothing within reach below: `LipBail` instead.
-        let mut skater = Skater::new(Vec3::new(500.0, 100.0, 0.0), 0.0);
-        assert!(!skater.lip_over(&lip, &p, &world));
+        // A deck (the floor) or a plain wall behind: `LipBail` instead.
+        let deck = floor_and_wall();
+        let mut skater = Skater::new(Vec3::new(500.0, 10.0, 0.0), 0.0);
+        assert!(!skater.lip_over(&lip, &deck));
+        let mut skater = Skater::new(Vec3::new(12.0, 390.0, 0.0), 0.0);
+        assert!(!skater.lip_over(&lip, &deck));
     }
 
     #[test]
