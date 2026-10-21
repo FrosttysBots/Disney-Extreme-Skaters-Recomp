@@ -71,13 +71,19 @@ on-ground update switches on.
   (0x800F49B8), then linear friction, that much off the speed a 60th of
   a second, stopping rather than reversing (0x800F4C9C, 0x800F4AC0;
   unless 0x800F3564 says otherwise). `+0x3A58` is the scripts'
-  `SetRollingFriction` (a value, or `Default`; `SetSpecialFriction`
-  steps through an array): `GeneralBail` slides a bail to a stop with
+  `SetRollingFriction` (a value, or `Default`; reset only by a skater
+  reset). `SetSpecialFriction`, only in `Revert` (`[ 0, 10, 15, 20, 30,
+  50 ]`), takes the next value of its array each call, the last from
+  then on; `ClearPanel_Landed` and `ClearPanel_Bailed` start it again
+  (`+0x3A5C`), so each revert in a combo after the first slows the
+  skater more, and the friction stays until the next revert or a bail's
+  end. `GeneralBail` slides a bail to a stop with
   it (`HeavyFriction` 100 for 3 frames, `Friction` to 30% of the fall,
   `Friction2` after, 100 from a `SpeedCheckStop` under 300; 15 into a
   wall), and the Hub's warps and ringtone hold the skater with 10000.
-  Ported: all of it for the bails (the Hub's hold isn't needed: the
-  viewer stops the skater itself).
+  Ported: all of it for the bails and reverts (the Hub's hold isn't
+  needed: the viewer stops the skater itself), and no braking in a
+  bail (`DisablePlayerInput`).
 - **Along the board** (0x800F4D5C): the velocity is turned to the facing,
   keeping its length and its sign, so the skater can roll backwards.
   Ported.

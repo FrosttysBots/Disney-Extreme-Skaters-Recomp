@@ -461,6 +461,12 @@ pub struct Skater {
     /// In a bail, slow enough at one of `GeneralBail`'s `SpeedCheckStop`s
     /// to be stopped (`SetRollingFriction 100`).
     bail_stopping: bool,
+    /// The friction the scripts set (`SetRollingFriction`, skater
+    /// `+0x3A58`) when it isn't `Physics_Rolling_Friction`: a revert's
+    /// (`SetSpecialFriction`), kept until the next or the end of a bail.
+    rolling_friction: Option<f32>,
+    /// How many reverts the combo has had, for the next one's friction.
+    reverts: usize,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -594,6 +600,8 @@ impl Skater {
             bail_anims: ("Bail1", "BailGetUp1"),
             smacked: false,
             bail_stopping: false,
+            rolling_friction: None,
+            reverts: 0,
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -676,6 +684,9 @@ impl Skater {
     /// `score`), lost in a bail.
     fn end_combo(&mut self, landed: bool) {
         self.combo = false;
+        // (`ClearPanel_Landed` and `ClearPanel_Bailed`: the next revert's
+        // friction from the start again.)
+        self.reverts = 0;
         if !landed {
             self.gaps.clear();
         }
@@ -1137,12 +1148,12 @@ impl Skater {
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
         ) {
+            // (`DisablePlayerInput`: the bail's friction stops it.)
             if self.action_time < self.bail_time() {
-                Input {
-                    brake: true,
-                    ..Input::default()
-                }
+                Input::default()
             } else {
+                // `Baildone`: `SetRollingFriction Default`.
+                self.rolling_friction = None;
                 self.set_action(Action::Standing);
                 input
             }
@@ -1456,6 +1467,12 @@ impl Skater {
         // or it lands.
         self.revert_window = REVERT_LINGER;
         self.reverted = true;
+        // `SetSpecialFriction [ 0, 10, 15, 20, 30, 50 ]` (0x80116698): each
+        // revert in a combo the next of these, the last from then on,
+        // kept as the rolling friction after it.
+        const REVERT_FRICTION: [f32; 6] = [0.0, 10.0, 15.0, 20.0, 30.0, 50.0];
+        self.rolling_friction = Some(REVERT_FRICTION[self.reverts.min(REVERT_FRICTION.len() - 1)]);
+        self.reverts += 1;
         self.combo = true;
         let frontside = self.air_spin_sign >= 0.0;
         let name = if frontside { "FS Revert" } else { "BS Revert" };
@@ -2444,9 +2461,13 @@ impl Skater {
             }
         }
         // Drag (0x800F4CF0, each frame on the ground) with AutoKick on
-        // (`+0x3A38`) or in a bail (`InBail`, `+0x36C4`), pushing or not.
-        if self.auto_kick || bailing {
+        // (`+0x3A38`), in a bail (`InBail`, `+0x36C4`) or with the
+        // scripts' friction set, pushing or not; then that friction.
+        if self.auto_kick || bailing || self.rolling_friction.is_some() {
             velocity = drag(velocity, friction);
+        }
+        if let Some(friction) = self.rolling_friction.filter(|_| !bailing) {
+            velocity = rolling_friction(velocity, friction);
         }
         if input.brake {
             // Braking (0x800F418C): slow along the velocity, stopping
@@ -3879,6 +3900,22 @@ mod tests {
         // speed check the rest: stopped within a second, not far on.
         assert!(skater.velocity.length() < 1.0, "{:?}", skater.velocity);
         assert!(skater.position.distance(start) < 150.0);
+    }
+
+    #[test]
+    fn reverts_in_a_combo_add_friction() {
+        let mut skater = Skater::new(Vec3::ZERO, 0.0);
+        let mut after = Vec::new();
+        for _ in 0..7 {
+            skater.revert();
+            after.push(skater.rolling_friction.unwrap());
+        }
+        assert_eq!(after, [0.0, 10.0, 15.0, 20.0, 30.0, 50.0, 50.0]);
+        // A new combo starts the list again; the friction stays till then.
+        skater.end_combo(true);
+        assert_eq!(skater.rolling_friction, Some(50.0));
+        skater.revert();
+        assert_eq!(skater.rolling_friction, Some(0.0));
     }
 
     #[test]
