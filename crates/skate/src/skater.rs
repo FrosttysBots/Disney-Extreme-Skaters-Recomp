@@ -2416,22 +2416,22 @@ impl Skater {
         }
         self.pushing = self.push_left > 0.0;
         self.push_left = (self.push_left - STEP).max(0.0);
+        let (top, accel, friction) = if input.crouch {
+            (
+                p.max_crouched_kick_speed,
+                p.crouched_acceleration,
+                p.crouched_air_friction,
+            )
+        } else {
+            (
+                p.max_standing_kick_speed,
+                p.standing_acceleration,
+                p.standing_air_friction,
+            )
+        };
         if push {
-            let (top, accel, friction) = if input.crouch {
-                (
-                    p.max_crouched_kick_speed,
-                    p.crouched_acceleration,
-                    p.crouched_air_friction,
-                )
-            } else {
-                (
-                    p.max_standing_kick_speed,
-                    p.standing_acceleration,
-                    p.standing_air_friction,
-                )
-            };
             // Push along the current velocity while under the kick speed
-            // (0x800F43F0, 0x800F44CC), with drag (0x800F4CF0).
+            // (0x800F43F0, 0x800F44CC).
             if self.pushing && velocity.length() <= top {
                 // From (nearly) standing, the way the board faces: a slope
                 // creeping it backwards mustn't make it push backwards.
@@ -2442,6 +2442,10 @@ impl Skater {
                 };
                 velocity += direction * accel * STEP;
             }
+        }
+        // Drag (0x800F4CF0, each frame on the ground) with AutoKick on
+        // (`+0x3A38`) or in a bail (`InBail`, `+0x36C4`), pushing or not.
+        if self.auto_kick || bailing {
             velocity = drag(velocity, friction);
         }
         if input.brake {
