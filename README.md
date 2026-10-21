@@ -23,7 +23,9 @@ to that engine family too.
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
 | Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay, menus, audio | Not started yet |
+| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), 2-minute runs, gaps, collectibles, warps, cheats, records |
+| Menus | The game's own screens run from its scripts: main menu, skater and level select, the Skate Shop's Create-A-Skater, pause menu, options |
+| Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
 Every format is checked against every file on the US disc (`GEXE52`):
 69 archives (5,616 files), 3,364 textures and 48 loading screens, 408
