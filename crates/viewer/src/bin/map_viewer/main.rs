@@ -1,5 +1,8 @@
 // No console window in release builds; the panel shows any errors.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// (Help texts name placeholders like `<x>` and options like `[,speed]`,
+// which rustdoc takes for HTML and links.)
+#![allow(rustdoc::invalid_html_tags, rustdoc::broken_intra_doc_links)]
 
 //! DESA Map Viewer: pick a level from your disc image and fly around it.
 //!

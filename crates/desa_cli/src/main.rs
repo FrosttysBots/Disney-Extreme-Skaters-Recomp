@@ -1,3 +1,7 @@
+// (Help texts name placeholders like `<OUT>`, which rustdoc takes for
+// HTML.)
+#![allow(rustdoc::invalid_html_tags)]
+
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
