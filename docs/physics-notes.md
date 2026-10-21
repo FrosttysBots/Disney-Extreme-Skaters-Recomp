@@ -391,8 +391,10 @@ on-ground update switches on.
   way `LipOut`, the other a spine transfer if the deck's skateable or
   `LipBail`. `LipOut` plays the way out and puts the skater back in the
   air a unit up and out, turned to drop back in. Ported: lips from vert
-  air at coping rails (the angle tests approximated by vert air rising
-  at a level rail), the trick choice, balance, tweaks and the ways off,
+  air at level coping rails, rising and facing within `LipAllowAngle`
+  of straight up the ramp (the skater stays upright in our vert air, so
+  the other two angle tests always pass; the override isn't read), the
+  trick choice, balance, tweaks and the ways off,
   without spine transfers (the unsafe side bails) and lip combos. On the
   Hub, every quarter pipe with a coping rail lips
   (`LIPS=1 cargo run --release -p desa_viewer --example vert_ramps`).

@@ -1194,7 +1194,7 @@ impl Skater {
                     // flat against a steep ramp, facing up and rising).
                     let level = world.rails.segments[hit.segment].direction().y.abs() < 0.3;
                     match self.vert {
-                        Some(vert) if self.velocity.y > 0.0 && level => {
+                        Some(vert) if self.velocity.y > 0.0 && level && self.lip_allowed(vert, p) => {
                             self.start_lip(hit.point, vert.out, p);
                             if self.lip.is_some() {
                                 self.rail_node = None;
@@ -1484,6 +1484,18 @@ impl Skater {
         recent
             .windows(3)
             .any(|w| w == [Press::Dir(first), Press::Dir(second), button])
+    }
+
+    /// Whether the game would take this coping as a lip (0x80108638):
+    /// rising, facing up the ramp (not fakie) and within `LipAllowAngle`
+    /// of straight up it, the side of the board level enough. (Its other
+    /// two, the skater upright against the wall within
+    /// `LipPlayerHorizontalAngle` and the ramp steeper than
+    /// `LipRampVertAngle`, hold on every vert face here; the rails' own
+    /// `LipAllowAngle_Override` isn't read.)
+    fn lip_allowed(&self, vert: VertAir, p: &Physics) -> bool {
+        let into = -Vec3::new(vert.out.x, 0.0, vert.out.z).normalize_or_zero();
+        self.forward().dot(into) > p.lip_allow_angle.to_radians().cos()
     }
 
     /// Onto the coping (the `LipTrick` script): the special lip if its
