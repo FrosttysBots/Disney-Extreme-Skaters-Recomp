@@ -129,6 +129,9 @@ pub struct Physics {
     /// The hang-time stat's divisor for air gravity (1.0 at every stat on
     /// the US disc; vert air uses `Physics_Vert_hang_Stat`, 1.0-1.1).
     pub air_hang: f32,
+    /// The same in vert air (main.dol 0x800FC634 divides by this one
+    /// there).
+    pub vert_hang: f32,
     pub ground_gravity: f32,
     pub brake_acceleration: f32,
     pub rolling_friction: f32,
@@ -271,6 +274,7 @@ impl Physics {
             max_tense_time: plain("Skater_max_tense_time", 200.0) / 1000.0,
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
+            vert_hang: scaled("Physics_Vert_hang_Stat", 1.0),
             ground_gravity: plain("Physics_Ground_Gravity", -1000.0),
             brake_acceleration: plain("Physics_Brake_Acceleration", 900.0),
             rolling_friction: plain("Physics_Rolling_Friction", 0.00001),

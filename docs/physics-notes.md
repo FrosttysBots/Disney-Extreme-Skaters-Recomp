@@ -279,8 +279,8 @@ on-ground update switches on.
   then comes down in the far ramp's plane. Our own: the ramp being left
   is also looked for 3 and 6 out (a skater can leave a hair past the
   face).
-  Not ported: the spin axis, `skater_autoturn_vert_angle`,
-  `Physics_Vert_hang_Stat`. On the Hub's quarter pipes
+  Not ported: the spin axis, `skater_autoturn_vert_angle`.
+  Vert air falls by `Physics_Vert_hang_Stat` (0x800FC634). On the Hub's quarter pipes
   (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
   25 runs that leave the lip come back down onto the ramp (4 before).
 - **Wall rides** (state 2, 0x800FE664; started by 0x800FDB6C from the

@@ -2785,7 +2785,7 @@ impl Skater {
             self.velocity
         };
         // Up and back to this height, frame by frame.
-        let gravity = p.air_gravity / p.air_hang.max(0.01);
+        let gravity = p.air_gravity / p.vert_hang.max(0.01);
         let (mut height, mut rise, mut time) = (1e-6f32, velocity.y, 0.0f32);
         loop {
             height += rise * STEP + 0.5 * gravity * STEP * STEP;
@@ -2895,7 +2895,12 @@ impl Skater {
         self.combo_tricks.spin(self.air_spin);
         // As the game does (0x800FC7F8): gravity, divided by the hang-time
         // stat, and the exact step of a thrown body.
-        let gravity = p.air_gravity / p.air_hang.max(0.01);
+        let hang = if self.vert.is_some() {
+            p.vert_hang
+        } else {
+            p.air_hang
+        };
+        let gravity = p.air_gravity / hang.max(0.01);
         // (Overridden limits: their gravity while rising, 0x800FB4F0.)
         let gravity = match self.limits {
             Some(l) if self.velocity.y > 0.0 => l.gravity,
