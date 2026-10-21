@@ -63,13 +63,20 @@ on-ground update switches on.
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
   velocity * dt, at skater `+0x39A8`) for the collision checks.
-- **Drag and friction** (0x800F4CF0): while the push button is held (skater
-  `+0x3A38`), or another flag is set, or a friction value at `+0x3A58`
-  differs from `Physics_Rolling_Friction`: quadratic drag with
+- **Drag and friction** (0x800F4CF0, every frame on the ground): with
+  AutoKick on (skater `+0x3A38`, what `AutoKickIsOff` reads), or a flag
+  at `+0x36C8`, or the friction at `+0x3A58` other than
+  `Physics_Rolling_Friction`: quadratic drag with
   `Physics_Crouched_Air_Friction` or `Physics_Standing_Air_Friction`
-  (0x800F49B8), then linear friction with the `+0x3A58` value times 60
-  (0x800F4C9C, unless 0x800F3564 says otherwise). Ported: the drag while
-  pushing. Not yet: when `+0x3A58` changes (terrain, perhaps).
+  (0x800F49B8), then linear friction, that much off the speed a 60th of
+  a second, stopping rather than reversing (0x800F4C9C, 0x800F4AC0;
+  unless 0x800F3564 says otherwise). `+0x3A58` is the scripts'
+  `SetRollingFriction` (a value, or `Default`; `SetSpecialFriction`
+  steps through an array): `GeneralBail` slides a bail to a stop with
+  it (`HeavyFriction` 100 for 3 frames, `Friction` to 30% of the fall,
+  `Friction2` after, 100 from a `SpeedCheckStop` under 300; 15 into a
+  wall), and the Hub's warps and ringtone hold the skater with 10000.
+  Ported: the drag while pushing, and the bails' friction.
 - **Along the board** (0x800F4D5C): the velocity is turned to the facing,
   keeping its length and its sign, so the skater can roll backwards.
   Ported.

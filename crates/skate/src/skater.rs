@@ -458,6 +458,9 @@ pub struct Skater {
     pub bail_anims: (&'static str, &'static str),
     /// Smacked into a wall in this bail already (`BailSmack`).
     smacked: bool,
+    /// In a bail, slow enough at one of `GeneralBail`'s `SpeedCheckStop`s
+    /// to be stopped (`SetRollingFriction 100`).
+    bail_stopping: bool,
     /// The flags of the face it stands on.
     ground_flags: u16,
     /// In vert air: launched off a vert ramp, held in the ramp's vertical
@@ -590,6 +593,7 @@ impl Skater {
             anim_lengths: HashMap::new(),
             bail_anims: ("Bail1", "BailGetUp1"),
             smacked: false,
+            bail_stopping: false,
             ground_flags: 0,
             vert: None,
             balance: Balance::default(),
@@ -927,6 +931,7 @@ impl Skater {
     /// (`BailBackward`), as `DoingTrickBail` and `YawBail` pick.
     fn start_bail(&mut self, action: Action, backwards: bool) {
         self.smacked = false;
+        self.bail_stopping = false;
         self.sounds.push(SkateSound::Bail);
         let flat = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
         if flat.length() > 10.0 {
@@ -2454,6 +2459,42 @@ impl Skater {
                 }
             }
         }
+        // A bail's slide (`GeneralBail`'s `SetRollingFriction`, applied by
+        // 0x800F4C9C): down on the ground, `HeavyFriction` (100) for 3
+        // frames, then `Friction` (1) to 30% of the fall, `Friction2` (20)
+        // after; `SpeedCheckStop` at half way, three quarters, the end and
+        // getting up stops it (100) if it's under 300. Into a wall
+        // (`BailSmack`), 15.
+        if bailing {
+            let fall = match self.action {
+                Action::BailManual => "BailManual",
+                Action::BailGrind => "BailGrind",
+                _ => self.bail_anims.0,
+            };
+            let fall = match self.anim_length(fall) {
+                length if length > 0.0 => length,
+                _ => BAIL_TIME / 2.0,
+            };
+            let (now, before) = (self.action_time, self.action_time - STEP);
+            let checked = [0.5, 0.75, 1.0]
+                .iter()
+                .any(|&at| before < fall * at && now >= fall * at);
+            if checked && velocity.length() < 300.0 {
+                self.bail_stopping = true;
+            }
+            let friction = if self.smacked {
+                15.0
+            } else if now < 3.0 * STEP {
+                100.0
+            } else if self.bail_stopping {
+                100.0
+            } else if now < fall * 0.3 {
+                1.0
+            } else {
+                20.0
+            };
+            velocity = rolling_friction(velocity, friction);
+        }
         // Along the board, keeping the sign: it can roll backwards
         // (0x800F4D5C).
         let sign = if velocity.dot(forward) < 0.0 {
@@ -3371,6 +3412,18 @@ fn wall_bounce(forward: Vec3, up: Vec3, normal: Vec3, p: &Physics) -> (f32, f32)
     (turn, angle)
 }
 
+/// Linear friction (0x800F4AC0): `friction` off the speed a 60th of a
+/// second, stopping it rather than reversing it.
+fn rolling_friction(v: Vec3, friction: f32) -> Vec3 {
+    let length = v.length();
+    let slow = friction * 60.0 * STEP;
+    if length <= 1e-4 || slow >= length {
+        Vec3::ZERO
+    } else {
+        v - v / length * slow
+    }
+}
+
 /// Quadratic drag: `v -= v * |v| * k * 60 * step` (0x800F46C4).
 fn drag(v: Vec3, k: f32) -> Vec3 {
     if v.length_squared() <= 1e-5 {
@@ -3805,6 +3858,25 @@ mod tests {
         // Nothing within reach below: `LipBail` instead.
         let mut skater = Skater::new(Vec3::new(500.0, 100.0, 0.0), 0.0);
         assert!(!skater.lip_over(&lip, &p, &world));
+    }
+
+    #[test]
+    fn a_bail_slides_to_a_stop() {
+        let p = physics();
+        let world = floor_and_wall();
+        let mut skater = Skater::new(Vec3::new(500.0, 1.0, -500.0), 0.0);
+        skater.velocity = Vec3::new(0.0, 0.0, 600.0);
+        skater.update(Input::default(), &p, &world, STEP);
+        assert!(skater.on_ground);
+        skater.start_bail(Action::Bail, false);
+        let start = skater.position;
+        for _ in 0..60 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        // `HeavyFriction` takes 300 off in 3 frames, `Friction2` and the
+        // speed check the rest: stopped within a second, not far on.
+        assert!(skater.velocity.length() < 1.0, "{:?}", skater.velocity);
+        assert!(skater.position.distance(start) < 150.0);
     }
 
     #[test]
