@@ -262,7 +262,7 @@ on-ground update switches on.
   - a wall: the velocity and the facing are turned along it keeping
     their length (0x80009B3C), and the skater moves out a further
     `Skater_Min_Distance_To_Wall`.
-  Ported, without the events, sounds and moving objects.
+  Ported, with the landing sound, without the events and moving objects.
 
 - **Finding a rail** (0x800E52C4, called from 0x801078A8 with the move
   from last frame's position to this one's): every rail node with a next
