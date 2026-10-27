@@ -389,6 +389,9 @@ pub struct Screen {
     /// The music and streams paused or going on again (`PauseMusic 1`,
     /// `PauseStream 0`: the pause menu's), for whoever plays them.
     pub music_paused: Option<bool>,
+    /// The level's screen movie paused or on again (`PauseMovie 1`/`0`,
+    /// with the game's pause menu).
+    pub movie_paused: Option<bool>,
     /// The created kid's parts as worn (each list's name and the choice's
     /// `desc_id`), for the Edit Skater menus to ask after; and the parts
     /// they change (`EditPlayerAppearance target = SetPart`, `ClearPart`:
@@ -466,6 +469,7 @@ impl Screen {
             vibrations: Vec::new(),
             music: None,
             music_paused: None,
+            movie_paused: None,
             kid_appearance: Vec::new(),
             skater_node: None,
             appearance_edits: Vec::new(),
@@ -2497,6 +2501,15 @@ impl Host for Ui<'_> {
                 _ => None,
             };
             s.music_paused = Some(on.unwrap_or(true));
+        } else if name == c("PauseMovie") {
+            let on = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(n)) => Some(*n != 0),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            s.movie_paused = Some(on.unwrap_or(true));
         } else if name == c("LocalSkaterExists") {
             return Outcome::Done(true);
         } else if [

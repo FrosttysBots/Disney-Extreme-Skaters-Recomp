@@ -2043,6 +2043,8 @@ struct App<'a> {
     /// The movie last asked for on the level's screen, to loop it, and
     /// one a teleporter asked for (or stopped) for it.
     screen_movie_name: Option<String>,
+    /// When the level's screen movie was paused (`PauseMovie`).
+    screen_movie_paused: Option<Instant>,
     teleport_movie: Option<Option<(String, bool)>>,
     /// Whether the camera path playing is one the level's scripts asked
     /// for (theirs to stop).
@@ -2262,6 +2264,7 @@ impl<'a> App<'a> {
             stage_turn: 0.0,
             menu_track: None,
             screen_movie_name: None,
+            screen_movie_paused: None,
             teleport_movie: None,
             script_cutscene: false,
             cutscene_request: None,
@@ -5231,9 +5234,23 @@ impl<'a> App<'a> {
                 self.screen_movie_name = Some(name);
             }
         }
+        // Paused with the game (`PauseMovie`): held where it is, and on
+        // from there after.
+        let pause = self.screen.as_mut().and_then(|s| s.screen.movie_paused.take());
         let Some((movie, started, looping)) = &mut level.screen_movie else {
             return;
         };
+        match (pause, self.screen_movie_paused) {
+            (Some(true), None) => self.screen_movie_paused = Some(Instant::now()),
+            (Some(false), Some(at)) => {
+                *started += at.elapsed();
+                self.screen_movie_paused = None;
+            }
+            _ => {}
+        }
+        if self.screen_movie_paused.is_some() {
+            return;
+        }
         let seconds = started.elapsed().as_secs_f64();
         let (width, height) = (movie.info.width, movie.info.height);
         if let Some((frame, true)) = movie.frame_at(seconds) {
