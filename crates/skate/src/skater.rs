@@ -2795,7 +2795,13 @@ impl Skater {
         }
 
         // Ground following (main.dol 0x800F52AC): down the skater's up from
-        // `ground_snap_up` above the new spot.
+        // `ground_snap_up` above the new spot; holding up, it holds over a
+        // sharper break (0x800F56B8).
+        let stick_angle = if input.push {
+            p.ground_stick_angle_forward
+        } else {
+            p.ground_stick_angle
+        };
         let flat_ground = up.y > 0.7;
         let from = target + up * p.ground_snap_up;
         let to = target - up * 200.0;
@@ -2806,7 +2812,7 @@ impl Skater {
                 !is_wall(hit, p) || up.dot(hit.point - target) <= 0.0
             })
             .filter(|hit| !is_wall(hit, p))
-            .filter(|hit| sticks(hit, self.position, target, forward, up, p))
+            .filter(|hit| sticks_at(hit, self.position, target, forward, up, p, stick_angle))
             // This crate's safeguard: a wall bounce can leave the new spot
             // just inside a block whose top the tilted line misses (it
             // goes in through the side); ground straight above the feet,
@@ -2879,7 +2885,7 @@ impl Skater {
                         from,
                         first.map(|h| (h.point, h.normal, is_wall(&h, p))),
                         past.map(|h| (h.point, h.normal, is_wall(&h, p))),
-                        past.map(|h| sticks(&h, self.position, target, forward, up, p)),
+                        past.map(|h| sticks_at(&h, self.position, target, forward, up, p, stick_angle)),
                     );
                 }
                 // The ground is gone: off an edge, or over the lip of a
@@ -3495,7 +3501,22 @@ impl Skater {
 /// isn't followed; and it only snaps down as far as `ground_snap_down`, or
 /// further at a sharp change of slope (as far as moving on along the old
 /// slope would leave it above the new one).
+#[cfg(test)]
 fn sticks(hit: &Hit, from: Vec3, to: Vec3, facing: Vec3, up: Vec3, p: &Physics) -> bool {
+    sticks_at(hit, from, to, facing, up, p, p.ground_stick_angle)
+}
+
+/// `sticks`, with the break the ground holds over (`Ground_stick_angle`,
+/// or `Ground_stick_angle_forward` with up held).
+fn sticks_at(
+    hit: &Hit,
+    from: Vec3,
+    to: Vec3,
+    facing: Vec3,
+    up: Vec3,
+    p: &Physics,
+    stick_angle: f32,
+) -> bool {
     // Ground at or above where the skater is going isn't falling away,
     // whichever way it faces: at the foot of a slope the move along it
     // ends a little under the flat. (The game's test goes by the facing
@@ -3511,7 +3532,7 @@ fn sticks(hit: &Hit, from: Vec3, to: Vec3, facing: Vec3, up: Vec3, p: &Physics) 
     let on_new = along_keeping_length(facing, hit.normal);
     let on_old = along_keeping_length(facing, up);
     let cos = on_new.dot(on_old);
-    if falling_away && cos > 0.0 && cos < p.ground_stick_angle.to_radians().cos() {
+    if falling_away && cos > 0.0 && cos < stick_angle.to_radians().cos() {
         return false;
     }
     {

@@ -182,6 +182,9 @@ pub struct Physics {
     /// degrees of the one it stands on, when the ground falls away
     /// (main.dol 0x800F52AC); otherwise it leaves the ground.
     pub ground_stick_angle: f32,
+    /// The same with up held (main.dol 0x800F56B8:
+    /// `Ground_stick_angle_forward`).
+    pub ground_stick_angle_forward: f32,
     pub ground_snap_down: f32,
     pub min_distance_to_wall: f32,
     /// The wall check on the ground (main.dol 0x800F7D38): a line this
@@ -325,6 +328,7 @@ impl Physics {
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
             ground_stick_angle: plain("Ground_stick_angle", 30.0),
+            ground_stick_angle_forward: plain("Ground_stick_angle_forward", 60.0),
             ground_snap_down: plain("Physics_Ground_Snap_Down", 8.2),
             min_distance_to_wall: plain("Skater_Min_Distance_To_Wall", 8.0),
             forward_collision_height: plain("Skater_First_Forward_Collision_Height", 8.1),
