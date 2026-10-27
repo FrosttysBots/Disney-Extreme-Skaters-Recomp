@@ -3544,10 +3544,16 @@ impl<'a> App<'a> {
     /// on), and offering their goal when the skater rolls up.
     fn update_pros(&mut self) {
         let skating = self.skating.as_ref().map(|(s, ..)| s.position);
+        // (Nor while the level's start plays: `warpIn` has the skater's
+        // exceptions off.)
+        let starting = self.skating.as_ref().is_some_and(|(s, ..)| {
+            matches!(s.action, skate::Action::StartLevel | skate::Action::WarpIn)
+        });
         let busy = self.run.is_some()
             || self.letters.is_some()
             || self.racing.is_some()
-            || self.goal_run.is_some();
+            || self.goal_run.is_some()
+            || starting;
         let Some(level) = &mut self.level else { return };
         for (i, pro) in level.pros.iter_mut().enumerate() {
             let Some(at) = skating else {
