@@ -1581,6 +1581,48 @@ impl Skater {
         true
     }
 
+    /// Into a car (main.dol 0x8010D6F4), short of a car plant: lifted 5
+    /// and, if it's going faster than 100 or the skater's in the air,
+    /// thrown off it at 1.5 times its speed (100 at least) and up at 200
+    /// into a bail (`CarBail`, `NoseManualBail`); else pushed off at 1.5
+    /// times its speed plus 50, flailing (`FlailLeft`).
+    fn car_hit(&mut self, hit: &Hit, world: &World) -> bool {
+        if hit.object != crate::world::OBSTACLE || self.skitch.is_some() {
+            return false;
+        }
+        let Some(car) = world.vehicles.iter().find(|v| {
+            v.half_length < 60.0
+                && (hit.point - v.position).with_y(0.0).length() < v.half_length + 16.0
+        }) else {
+            return false;
+        };
+        // (From behind, where it's skitched on, it's only a bump.)
+        if (self.position - car.position).dot(car.forward) < -car.half_length * 0.5 {
+            return false;
+        }
+        let away = (self.position - car.position)
+            .with_y(0.0)
+            .normalize_or(-self.forward());
+        self.position.y += 5.0;
+        if car.speed > 100.0 || !self.on_ground {
+            self.velocity = away * car.speed.max(100.0) * 1.5 + Vec3::Y * 200.0;
+            self.on_ground = false;
+            self.up = Vec3::Y;
+            self.grind = None;
+            self.manual = false;
+            self.trick = None;
+            self.end_combo(false);
+            self.bail_on_landing = true;
+            self.sounds.push(SkateSound::Bail);
+            self.set_action(Action::Air);
+        } else {
+            self.velocity = away * (car.speed + 50.0) * 1.5;
+            self.heading = away.x.atan2(away.z);
+            self.set_action(Action::FlailLeft);
+        }
+        true
+    }
+
     /// Lets go of the car (`SkitchOut`): rolling on at its speed, and the
     /// combo lands.
     fn let_go_skitch(&mut self, velocity: Vec3) {
@@ -2787,6 +2829,10 @@ impl Skater {
             let from = self.position + lift;
             let to = target + lift + direction * p.forward_collision_length;
             if let Some(hit) = world.ray(from, to) {
+                // Into a car (0x8010D6F4).
+                if self.car_hit(&hit, world) {
+                    return;
+                }
                 if !is_wall(&hit, p) && hit.normal.dot(up).abs() >= 0.01 {
                     // Skatable ground ahead, like the curve of a ramp:
                     // step onto it.
@@ -3319,7 +3365,7 @@ impl Skater {
                 if !ground && !ramp && self.start_wallride(&hit, input, p, world) {
                     return;
                 }
-                if !ground && !ramp && self.car_plant(&hit, p, world) {
+                if !ground && !ramp && (self.car_plant(&hit, p, world) || self.car_hit(&hit, world)) {
                     return;
                 }
                 if !ground && !ramp {
@@ -4272,6 +4318,40 @@ mod tests {
         assert!(planted);
         assert!(skater.velocity.y >= p.car_plant_upward_boost - 1.0);
         assert!(skater.velocity.z > 400.0);
+    }
+
+    #[test]
+    fn a_fast_car_knocks_the_skater_over() {
+        let p = physics();
+        let mut world = floor_and_wall();
+        // A car crossing in front at 300, the skater rolling into its side.
+        world.vehicles = vec![crate::world::Vehicle {
+            position: Vec3::new(500.0, 0.0, 0.0),
+            forward: Vec3::X,
+            speed: 300.0,
+            half_length: 20.0,
+        }];
+        world.set_obstacles(vec![crate::world::Obstacle {
+            base: Vec3::new(500.0, -24.0, 0.0),
+            radius: 16.0,
+            height: 64.0,
+        }]);
+        let mut skater = Skater::new(Vec3::new(500.0, 0.0, -60.0), 0.0);
+        skater.velocity = Vec3::new(0.0, 0.0, 300.0);
+        skater.update(Input::default(), &p, &world, STEP);
+        let mut thrown = false;
+        for _ in 0..30 {
+            skater.update(Input::default(), &p, &world, STEP);
+            thrown |= !skater.on_ground && skater.velocity.y > 0.0;
+        }
+        assert!(thrown, "thrown up off the car");
+        // And down in a bail.
+        let mut bailed = false;
+        for _ in 0..120 {
+            skater.update(Input::default(), &p, &world, STEP);
+            bailed |= matches!(skater.action, Action::BailGrind | Action::Bail);
+        }
+        assert!(bailed);
     }
 
     #[test]

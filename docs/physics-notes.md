@@ -81,7 +81,11 @@ on-ground update switches on.
   under 10), again only after `CarSparks`' third of a second. Otherwise,
   by how fast they meet, `CarBail` or a flail. Ported: the car plant off
   the toy cars (their roofs taken 40 above where they go), with
-  `CarPlant_Forward_boost` (400) along; not the car bail.
+  `CarPlant_Forward_boost` (400) along. The rest too: lifted 5, a car
+  faster than 100 (or meeting it in the air) throws the skater off at
+  1.5 times its speed (100 at least) and up at 200 into `CarBail`
+  (`NoseManualBail`), a slower one pushes it off at 1.5 times its speed
+  plus 50, flailing; but from behind, where it's skitched on, a bump.
 - **Turning downhill when slow** (0x800F3564, ahead of the friction):
   under `Skater_max_sloped_turn_speed` (300) on ground whose normal's
   height is under `Skater_max_sloped_turn_cosine` (0.5), the skater
