@@ -1515,8 +1515,12 @@ impl Skater {
             carried + gap.normalize() * step
         };
         // On the ground there.
+        // (`Physics_Ground_Snap_*_Skitching`, 0x800F5818.)
         let ground = world
-            .ray(at.with_y(spot.y) + Vec3::Y * 50.0, at.with_y(spot.y) - Vec3::Y * 400.0)
+            .ray(
+                at.with_y(spot.y) + Vec3::Y * p.ground_snap_up_skitching,
+                at.with_y(spot.y) - Vec3::Y * p.ground_snap_down_skitching,
+            )
             .filter(|hit| !is_wall(hit, p));
         // No ground there (off the end of a ramp): off into the air at the
         // car's speed, the way the slope was going.

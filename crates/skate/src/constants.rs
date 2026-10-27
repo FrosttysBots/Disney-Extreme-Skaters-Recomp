@@ -246,6 +246,10 @@ pub struct Physics {
     /// How fast a skitching skater closes in on its spot behind
     /// (`skitch_suck_speed`).
     pub skitch_suck_speed: f32,
+    /// How far up and down the ground's looked for under a skitching
+    /// skater (`Physics_Ground_Snap_up_Skitching`, `..._Down_Skitching`).
+    pub ground_snap_up_skitching: f32,
+    pub ground_snap_down_skitching: f32,
     /// Planting off a car's roof in the air (`CarPlant`, main.dol
     /// 0x8010D7B0 and `DoCarPlantBoost`): how far below the roof the feet
     /// may be (falling, the second), and the boost up and along.
@@ -371,6 +375,8 @@ impl Physics {
             skitch_offset: plain("Skitch_Offset", 27.0),
             skitch_hold_time: plain("skitch_hold_time", 200.0) / 1000.0,
             skitch_suck_speed: plain("skitch_suck_speed", 200.0),
+            ground_snap_up_skitching: plain("Physics_Ground_Snap_up_Skitching", 50.0),
+            ground_snap_down_skitching: plain("Physics_Ground_Snap_Down_Skitching", 150.0),
             min_car_height_diff: plain("min_car_height_diff", 60.0),
             min_car_height_downwards: plain("min_car_height_downwards", 30.0),
             car_plant_upward_boost: plain("CarPlant_Upward_boost", 100.0),
