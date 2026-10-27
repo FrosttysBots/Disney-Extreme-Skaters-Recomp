@@ -119,6 +119,9 @@ pub enum Action {
     Air,
     /// Just landed.
     Landing,
+    /// Starting the level (`warpIn`: `PlayAnim anim = StartLevel`, input
+    /// off till it's done).
+    StartLevel,
     /// Bounced off a wall fast enough to flail (turning left or right).
     FlailLeft,
     FlailRight,
@@ -986,6 +989,12 @@ impl Skater {
         self.set_action(action);
     }
 
+    /// The level's start (`GameFlow_PlayRun`'s `warpIn`): the character's
+    /// `StartLevel` animation, with no control till it's played.
+    pub fn start_level(&mut self) {
+        self.set_action(Action::StartLevel);
+    }
+
     /// Knocked down (`PedKnockDown`: a heckler's swipe, a missile): off
     /// any rail, lip or manual and into a bail (`DoingTrickBail`), the
     /// combo lost; in the air, a bail on landing.
@@ -1169,6 +1178,13 @@ impl Skater {
         // Bailing: no control until it's over.
         let input = if matches!(self.action, Action::BailFall { .. }) {
             Input::default()
+        } else if self.action == Action::StartLevel {
+            if self.action_time < self.anim_length("StartLevel") {
+                Input::default()
+            } else {
+                self.set_action(Action::Standing);
+                input
+            }
         } else if matches!(
             self.action,
             Action::BailManual | Action::BailGrind | Action::Bail
@@ -2489,6 +2505,7 @@ impl Skater {
             Action::BailManual | Action::BailGrind | Action::Bail
         );
         let push = (input.push || self.auto_kick)
+            && self.action != Action::StartLevel
             && !input.brake
             && !self.manual
             && !bailing
@@ -2865,7 +2882,11 @@ impl Skater {
         }
         let action = if matches!(
             self.action,
-            Action::BailManual | Action::BailGrind | Action::Bail | Action::CessSlide { .. }
+            Action::BailManual
+                | Action::BailGrind
+                | Action::Bail
+                | Action::CessSlide { .. }
+                | Action::StartLevel
         ) || (matches!(self.action, Action::Revert { .. })
             && self.action_time < 0.6)
         {

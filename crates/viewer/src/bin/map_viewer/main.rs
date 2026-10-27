@@ -2949,6 +2949,11 @@ impl<'a> App<'a> {
             let heading = skater.heading;
             skater.place(position, heading, &physics, world);
         }
+        // Each run starts with the character's `StartLevel` (`warpIn`),
+        // but in the Skate Shop.
+        if !level.id.eq_ignore_ascii_case("SkateShop") {
+            skater.start_level();
+        }
         // Falling out of the level puts the skater back at the nearest
         // spawn point.
         skater.spawns = level

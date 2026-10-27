@@ -133,6 +133,7 @@ pub fn choose(skater: &Skater) -> Anim {
         }
         Action::Manual => Anim::into("ManualIn1", "ManualRange1", TRICK),
         Action::Lip => Anim::once("LipRange1", TRICK),
+        Action::StartLevel => Anim::into("StartLevel", "StandIdle", TRICK).committed(),
         Action::CessSlide { frontside: true } => Anim::once("CessSlide180_FS", LAND).committed(),
         Action::CessSlide { frontside: false } => Anim::once("CessSlide180_BS", LAND).committed(),
         // `Handbrake`: off the board, idling, and back on.
