@@ -122,7 +122,7 @@ struct Args {
     skate: f32,
     /// For --skate: keys pressed and let go at times, as "seconds:+Key" and
     /// "seconds:-Key" separated by commas (keys W A S D Space E Q F R J L,
-    /// and Enter: A on the game's screen);
+    /// and Enter: taking a warp or goal offered, or A on the game's screen);
     /// without it W is held throughout
     #[arg(long, requires = "screenshot")]
     skate_keys: Option<String>,
