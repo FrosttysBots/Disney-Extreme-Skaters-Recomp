@@ -86,6 +86,12 @@ on-ground update switches on.
   1.5 times its speed (100 at least) and up at 200 into `CarBail`
   (`NoseManualBail`), a slower one pushes it off at 1.5 times its speed
   plus 50, flailing; but from behind, where it's skitched on, a bump.
+- **Vehicles' own collision**: every `Vehicle` object's model has a
+  `.col` beside it, and the game moves it with the object. Ported: each
+  is loaded as a world object and placed at the object's position and
+  rotation every frame (moved away once it's gone), so the toy cars,
+  crane, airplane, UFOs, Zurg's platform and the lifeboat are solid in
+  their real shapes; the car plant takes a car's roof from its mesh.
 - **Turning downhill when slow** (0x800F3564, ahead of the friction):
   under `Skater_max_sloped_turn_speed` (300) on ground whose normal's
   height is under `Skater_max_sloped_turn_cosine` (0.5), the skater

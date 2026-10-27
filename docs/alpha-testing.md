@@ -114,6 +114,8 @@ skater is and what it's doing.
   each gate adding its seconds.
 - Toy cars (Andy's Room): jump into one near its roof for a "Car Plant"
   and a boost up and on; run into a fast one and it knocks you over.
+- Moving things are solid: the toy cars, the Hub's crane and airplane,
+  the UFOs, Zurg's platform and the lifeboat, in their real shapes.
 - Rails on things that move: grind the toy cars' roofs, the Treehouse's
   lifeboat, the Hub's crane and Zurg's platform, carried along with them.
 - Skitching (Andy's Room): roll up behind one of the toy cars and hold W
