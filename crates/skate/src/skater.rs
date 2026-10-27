@@ -1309,7 +1309,7 @@ impl Skater {
                     // flat against a steep ramp, facing up and rising).
                     let level = world.rails.segments[hit.segment].direction().y.abs() < 0.3;
                     match self.vert {
-                        Some(vert) if self.velocity.y > 0.0 && level && self.lip_allowed(vert, p) => {
+                        Some(vert) if self.velocity.y > 0.0 && level && self.lip_allowed(vert, world.rails.lip_override(hit.segment), p) => {
                             self.start_lip(hit.point, vert.out, p);
                             if self.lip.is_some() {
                                 self.rail_node = None;
@@ -1718,11 +1718,12 @@ impl Skater {
     /// of straight up it, the side of the board level enough. (Its other
     /// two, the skater upright against the wall within
     /// `LipPlayerHorizontalAngle` and the ramp steeper than
-    /// `LipRampVertAngle`, hold on every vert face here; the rails' own
-    /// `LipAllowAngle_Override` isn't read.)
-    fn lip_allowed(&self, vert: VertAir, p: &Physics) -> bool {
+    /// `LipRampVertAngle`, hold on every vert face here.) A rail node
+    /// flagged `LipOverride` allows `LipAllowAngle_Override` instead.
+    fn lip_allowed(&self, vert: VertAir, wide: bool, p: &Physics) -> bool {
         let into = -Vec3::new(vert.out.x, 0.0, vert.out.z).normalize_or_zero();
-        self.forward().dot(into) > p.lip_allow_angle.to_radians().cos()
+        let angle = if wide { p.lip_allow_angle_override } else { p.lip_allow_angle };
+        self.forward().dot(into) > angle.to_radians().cos()
     }
 
     /// Onto the coping (the `LipTrick` script): the special lip if its
@@ -4173,12 +4174,18 @@ mod tests {
             let mut skater = Skater::new(Vec3::ZERO, 0.0);
             let way = Quat::from_rotation_y(degrees.to_radians()) * -Vec3::X;
             skater.heading = way.x.atan2(way.z);
-            skater.lip_allowed(vert, &p)
+            (skater.lip_allowed(vert, false, &p), skater.lip_allowed(vert, true, &p))
         };
-        assert!(facing(0.0));
-        assert!(facing(30.0) && facing(-30.0));
-        // Past `LipAllowAngle` (35), along the coping, or fakie: no.
-        assert!(!facing(40.0) && !facing(90.0) && !facing(180.0));
+        assert_eq!(facing(0.0), (true, true));
+        assert_eq!(facing(30.0), (true, true));
+        assert_eq!(facing(-30.0), (true, true));
+        // Past `LipAllowAngle` (35), only off a `LipOverride` rail (60).
+        assert_eq!(facing(40.0), (false, true));
+        assert_eq!(facing(-55.0), (false, true));
+        // Along the coping, or fakie: no.
+        assert_eq!(facing(70.0), (false, false));
+        assert_eq!(facing(90.0), (false, false));
+        assert_eq!(facing(180.0), (false, false));
     }
 
     #[test]

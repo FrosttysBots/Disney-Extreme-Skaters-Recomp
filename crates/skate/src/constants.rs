@@ -148,8 +148,10 @@ pub struct Physics {
     /// there).
     pub vert_hang: f32,
     /// How far off straight up the ramp a lip can start, in degrees
-    /// (`LipAllowAngle`).
+    /// (`LipAllowAngle`), and off rail nodes flagged `LipOverride`
+    /// (`LipAllowAngle_Override`).
     pub lip_allow_angle: f32,
+    pub lip_allow_angle_override: f32,
     /// Vert air's autoturn: how fast (radians a second), how long a turn
     /// held cancels it, and how near straight up a take-off goes without
     /// one (degrees) (`Skater_autoturn_speed`,
@@ -325,6 +327,7 @@ impl Physics {
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
             vert_hang: scaled("Physics_Vert_hang_Stat", 1.0),
             lip_allow_angle: plain("LipAllowAngle", 35.0),
+            lip_allow_angle_override: plain("LipAllowAngle_Override", 60.0),
             autoturn_speed: plain("Skater_autoturn_speed", 3.0),
             autoturn_cancel_time: plain("skater_autoturn_cancel_time", 300.0) / 1000.0,
             autoturn_vert_angle: plain("skater_autoturn_vert_angle", 5.0),

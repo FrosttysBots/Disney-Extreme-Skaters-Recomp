@@ -1,5 +1,6 @@
 //! Lists a level's rail nodes with trigger scripts:
-//! `cargo run --example rail_scripts -- Tarzan_Treehouse`.
+//! `cargo run --example rail_scripts -- Tarzan_Treehouse`; also counts the
+//! segments from `LipOverride` nodes.
 use std::path::Path;
 
 fn main() {
@@ -28,5 +29,11 @@ fn main() {
         nodes.rail_scripts.len(),
         named,
         nodes.rails.len()
+    );
+    let wide: Vec<_> = nodes.rails.iter().filter(|r| r.lip_override).collect();
+    println!(
+        "{} LipOverride segments, {} unnamed",
+        wide.len(),
+        wide.iter().filter(|r| r.node == 0).count()
     );
 }

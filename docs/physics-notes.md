@@ -478,7 +478,11 @@ on-ground update switches on.
   air a unit up and out, turned to drop back in. Ported: lips from vert
   air at level coping rails, rising and facing within `LipAllowAngle`
   of straight up the ramp (the skater stays upright in our vert air, so
-  the other two angle tests always pass; the override isn't read), the
+  the other two angle tests always pass), or `LipAllowAngle_Override` off
+  rail nodes flagged `LipOverride` (0x800E4568 sets the node's bit 1 at
+  `+0x3F`: 19 segments, on Andy's Room, the Graveyard, the Treehouse and
+  Pizza Planet; `cargo run --release -p desa_viewer --example
+  rail_scripts -- <level>` counts them), the
   trick choice, balance, tweaks and the ways off: off the top, over a
   spine (`SkateInAble Lip`, 0x80117BC8: a line 7 below the coping from
   24 back to it, or else 2400 straight down from 13 back, meeting a vert

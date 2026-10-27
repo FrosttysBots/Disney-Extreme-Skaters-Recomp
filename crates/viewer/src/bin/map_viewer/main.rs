@@ -474,7 +474,8 @@ fn load_level(
                         (segment, r.node)
                     })
                     .collect(),
-            ))
+            )
+            .with_lip_override(nodes.rails.iter().filter(|r| r.lip_override).map(|r| r.node)))
         });
     // Rails on moving objects, from their models' own node arrays
     // (`Veh_Viper_NodeArray`: the toy cars, the lifeboat, the crane), there

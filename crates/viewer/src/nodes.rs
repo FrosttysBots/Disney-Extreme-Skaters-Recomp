@@ -66,6 +66,9 @@ pub struct RailSegment {
     pub terrain: Option<u32>,
     /// The node it starts at, whose link it is (its `Name`, 0 for none).
     pub node: u32,
+    /// Whether that node is flagged `LipOverride` (lips off it may be more
+    /// twisted).
+    pub lip_override: bool,
 }
 
 pub struct Spawn {
@@ -359,6 +362,7 @@ impl LevelNodes {
                                 kind: kind.clone(),
                                 terrain: node.get(key("TerrainType")).and_then(Value::as_name),
                                 node: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                                lip_override: node.has_flag(key("LipOverride")),
                             });
                         }
                     }

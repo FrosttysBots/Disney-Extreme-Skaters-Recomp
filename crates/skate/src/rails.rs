@@ -1,6 +1,8 @@
 //! A level's rails, for grinding: straight segments between rail nodes,
 //! joined where they share an end.
 
+use std::collections::HashSet;
+
 use glam::Vec3;
 
 /// One straight piece of rail.
@@ -39,6 +41,10 @@ pub struct Rails {
     /// toy cars, the Treehouse's lifeboat, the Hub's crane), put where they
     /// are each frame by whoever moves them.
     pub moving: usize,
+    /// Rail nodes flagged `LipOverride`, by name: lips from them may be
+    /// twisted up to `LipAllowAngle_Override` (main.dol 0x800E4568 sets
+    /// the node's bit, 0x80108660 reads it).
+    pub lip_override: HashSet<u32>,
 }
 
 /// Ends closer than this are the same node.
@@ -80,6 +86,7 @@ impl Rails {
             segments: kept,
             nodes,
             moving: 0,
+            lip_override: HashSet::new(),
         }
     }
 
@@ -92,6 +99,17 @@ impl Rails {
             self.nodes.push(node);
             self.moving += 1;
         }
+    }
+
+    /// Flags the named rail nodes `LipOverride`.
+    pub fn with_lip_override(mut self, nodes: impl IntoIterator<Item = u32>) -> Self {
+        self.lip_override.extend(nodes.into_iter().filter(|&n| n != 0));
+        self
+    }
+
+    /// Whether segment `i`'s node is flagged `LipOverride`.
+    pub fn lip_override(&self, i: usize) -> bool {
+        self.node(i).is_some_and(|n| self.lip_override.contains(&n))
     }
 
     /// Whether segment `i` moves.
