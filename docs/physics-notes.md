@@ -142,7 +142,7 @@ on-ground update switches on.
   length (0x80009B3C), and `cos` their dot product:
   - if the facing points along the new normal (the ground falls away
     ahead) and `0 < cos < cos(Ground_stick_angle)` (30 degrees;
-    `Ground_stick_angle_forward`, 60, while `+0x804` is set), it doesn't
+    `Ground_stick_angle_forward`, 60, while up is held: `+0x804`), it doesn't
     stick;
   - if the skater is above the face, it only snaps down as far as the
     distance moved this frame times `tan(acos(cos))`, or
