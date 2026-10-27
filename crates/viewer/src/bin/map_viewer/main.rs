@@ -1813,6 +1813,9 @@ type Pose = Vec<(Quat, Vec3)>;
 /// duration = d` a quarter second after the last, until the 10080 over
 /// 5 seconds), and from 1.75 s shrinking to a tenth over 3 s
 /// (`calcEase`), then gone (`skater:Hide`).
+/// When the skater's gone, going through a warp (`skater:Hide`).
+const WARP_GONE: f32 = 4.75;
+
 fn warp_spin_placement(at: Vec3, time: f32, stood: Mat4) -> Mat4 {
     // (Start, degrees a second.)
     const SPINS: [(f32, f32); 7] = [
@@ -1831,7 +1834,7 @@ fn warp_spin_placement(at: Vec3, time: f32, stood: Mat4) -> Mat4 {
     }
     let shrink = ((time - 1.75) / 3.0).clamp(0.0, 1.0);
     let left = 1.0 - shrink * 0.9;
-    let scale = if time > 4.75 {
+    let scale = if time > WARP_GONE {
         1e-4
     } else {
         left * left * (3.0 - 2.0 * left)
@@ -3633,6 +3636,10 @@ impl<'a> App<'a> {
             // (The skater spins away at the warp while its camera plays.)
             let at = self.level.as_ref().and_then(|l| l.portals.get(i)).map(|p| p.warp.position);
             self.warp_spin = at.map(|at| (at, 0.0, self.placement));
+            // (`Warp_Master:midgoalvoiceover stream = warp_build`.)
+            if let Some(level) = &mut self.level {
+                level.behaviour.voice_lines.push(qb::checksum("warp_build"));
+            }
             // The warp's own camera path first, then the level.
             match camera {
                 Some(camera) => {
@@ -6016,6 +6023,12 @@ impl<'a> App<'a> {
             // (The pad's still read, for Start.)
             let _ = self.pad_input();
             if let Some((at, time, stood)) = &mut self.warp_spin {
+                // Gone: `warp_poof`.
+                if *time < WARP_GONE && *time + dt >= WARP_GONE {
+                    if let Some(level) = &mut self.level {
+                        level.behaviour.voice_lines.push(qb::checksum("warp_poof"));
+                    }
+                }
                 *time += dt;
                 self.placement = warp_spin_placement(*at, *time, *stood);
             }
