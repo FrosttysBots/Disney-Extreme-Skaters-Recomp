@@ -126,6 +126,11 @@ pub struct Physics {
     /// ground's vert flag `+0x3650` set): `Physics_air_Jump_Speed_stat`.
     pub air_jump_speed: f32,
     pub air_jump_speed_min: f32,
+    /// How long the rail just left (or one joined to it) can't be grabbed
+    /// again (main.dol `+0x37A8`): after jumping off it, and otherwise
+    /// (`Rail_jump_rerail_time`, `Rail_minimum_rerail_time`).
+    pub rail_jump_rerail_time: f32,
+    pub rail_minimum_rerail_time: f32,
     /// Turning downhill on steep ground when slow (main.dol 0x800F3564):
     /// under this speed, on ground whose normal's height is under the
     /// cosine, at this rate (radians a second).
@@ -293,6 +298,8 @@ impl Physics {
             jump_speed_min: scaled("Physics_Jump_Speed_min_Stat", 350.0),
             air_jump_speed: scaled("Physics_Air_Jump_Speed_Stat", 247.5),
             air_jump_speed_min: scaled("Physics_Air_Jump_Speed_min_Stat", 100.0),
+            rail_jump_rerail_time: plain("Rail_jump_rerail_time", 300.0) / 1000.0,
+            rail_minimum_rerail_time: plain("Rail_minimum_rerail_time", 500.0) / 1000.0,
             max_sloped_turn_speed: plain("Skater_max_sloped_turn_speed", 300.0),
             max_sloped_turn_cosine: plain("Skater_max_sloped_turn_cosine", 0.5),
             slow_turn_on_slopes: plain("Skater_Slow_Turn_on_slopes", 3.0),

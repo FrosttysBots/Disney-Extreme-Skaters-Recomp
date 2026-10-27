@@ -483,6 +483,9 @@ pub struct Skater {
     /// In a bail, slow enough at one of `GeneralBail`'s `SpeedCheckStop`s
     /// to be stopped (`SetRollingFriction 100`).
     bail_stopping: bool,
+    /// The rail segment last left, and how long it's off limits after.
+    last_rail: Option<usize>,
+    rerail_time: f32,
     /// The friction the scripts set (`SetRollingFriction`, skater
     /// `+0x3A58`) when it isn't `Physics_Rolling_Friction`: a revert's
     /// (`SetSpecialFriction`), for as long as it plays (`Revert` goes
@@ -625,6 +628,8 @@ impl Skater {
             bail_anims: ("Bail1", "BailGetUp1"),
             smacked: false,
             bail_stopping: false,
+            last_rail: None,
+            rerail_time: 0.0,
             rolling_friction: None,
             reverts: 0,
             ground_flags: 0,
@@ -1273,8 +1278,24 @@ impl Skater {
             let armed =
                 input.grind || (self.simplified && self.since_grind <= p.regrind_time);
             let falling_bail = matches!(self.action, Action::BailFall { .. });
-            if armed && !self.on_ground && !falling_bail && self.since_rail >= p.regrind_time {
-                if let Some(hit) = world.rails.nearest(before, self.position, p.rail_max_snap) {
+            // (Back onto the rail just left, or one joined to it, only after
+            // its rerail time, 0x8010852C; any other at once. Off a lip,
+            // which keeps no segment, `Skater_regrind_time` for any.)
+            let rested = |segment: usize| match self.last_rail {
+                Some(last) => {
+                    let near = segment == last
+                        || world.rails.joins(last, true).any(|(s, _)| s == segment)
+                        || world.rails.joins(last, false).any(|(s, _)| s == segment);
+                    !near || self.since_rail >= self.rerail_time
+                }
+                None => self.since_rail >= p.regrind_time,
+            };
+            if armed && !self.on_ground && !falling_bail {
+                if let Some(hit) = world
+                    .rails
+                    .nearest(before, self.position, p.rail_max_snap)
+                    .filter(|hit| rested(hit.segment))
+                {
                     // Rising in vert air at the coping: a lip trick (the
                     // game's grind start, 0x80108470, checks the skater is
                     // flat against a steep ramp, facing up and rising).
@@ -1726,6 +1747,7 @@ impl Skater {
         }
         self.lip = None;
         self.since_rail = 0.0;
+        self.last_rail = None;
         self.position += Vec3::Y - lip.out * 24.0;
         self.velocity = Vec3::ZERO;
         self.heading = out.x.atan2(out.z);
@@ -1747,6 +1769,7 @@ impl Skater {
     fn leave_lip(&mut self, lip: &Lip, rise: f32) {
         self.lip = None;
         self.since_rail = 0.0;
+        self.last_rail = None;
         self.position += lip.out + Vec3::Y;
         self.velocity = Vec3::Y * rise;
         self.heading = lip.out.x.atan2(lip.out.z);
@@ -1924,6 +1947,7 @@ impl Skater {
             let mut velocity = Vec3::new(cos * v.x + sin * v.z, v.y, -sin * v.x + cos * v.z);
             velocity.y += self.jump_speed(p);
             self.leave_rail(velocity, p, world);
+            self.rerail_time = p.rail_jump_rerail_time;
             self.sounds.push(SkateSound::Jump { from_rail: true });
             // An ollie off the rail (its animation in the air).
             self.ollied = true;
@@ -1988,6 +2012,8 @@ impl Skater {
                 .filter(|hit| !is_wall(hit, p))
                 .filter(|hit| world.ray(self.position + lift, hit.point + lift).is_none());
             if let Some(hit) = ground {
+                self.last_rail = Some(grind.segment);
+                self.rerail_time = p.rail_minimum_rerail_time;
                 self.grind = None;
                 self.since_rail = 0.0;
                 self.position = hit.point;
@@ -2101,6 +2127,8 @@ impl Skater {
         }) {
             self.position = hit.point + Vec3::Y * 0.1;
         }
+        self.last_rail = self.grind.map(|g| g.segment);
+        self.rerail_time = p.rail_minimum_rerail_time;
         self.grind = None;
         self.since_rail = 0.0;
         self.velocity = velocity;

@@ -278,7 +278,10 @@ on-ground update switches on.
   (50 degrees); the end of the rail drops it off (`OffRail`). Jumping
   (0x800F5B40) turns the velocity by `Rail_Jump_Angle` (15 degrees)
   towards the held direction and blocks the rail for
-  `Rail_minimum_rerail_time` (500 ms).
+  `Rail_jump_rerail_time` (300 ms; leaving it any other way,
+  `Rail_minimum_rerail_time`, 500 ms, kept at `+0x37A8`): the grind start
+  (0x8010852C) holds only the rail just left (`+0x3A74`) and the nodes
+  joined to it to that, any other rail can be grabbed at once. Ported.
   Each frame ends with a line from 1 above the old position to 1 above
   the new one and 6 on (0x801032E4): hitting anything (the ground where
   a rail dips into it, a wall) puts the skater back at the old position,
