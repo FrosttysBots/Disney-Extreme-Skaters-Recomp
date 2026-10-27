@@ -128,8 +128,9 @@ on-ground update switches on.
 - **Speed limits** (0x800F4834), on horizontal speed only (vertical speed
   is set aside and put back): above `Skater_Max_Max_Speed_Stat` it's
   clamped, above `Skater_Max_Speed_Stat` it gets quadratic drag with
-  `Physics_Heavy_Air_Friction`. A timer at skater `+0x3594` (a speed
-  boost) swaps in other limits while it runs. Ported, without the boost.
+  `Physics_Heavy_Air_Friction`. A timer at skater `+0x3594` swaps in other
+  limits while it runs: the scripts' `OverrideLimits` (0x80118BE8 sets
+  it; skitching's, below). Ported.
 - **Steering** (0x800ED848): left turns at `+Physics_Ground_Rotation`,
   right at minus it (radians a second, times the frame time), or
   `Physics_Ground_Sharp_Rotation` while the button that also stops pushes
