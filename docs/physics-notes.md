@@ -120,7 +120,7 @@ on-ground update switches on.
 - **Steering** (0x800ED848): left turns at `+Physics_Ground_Rotation`,
   right at minus it (radians a second, times the frame time), or
   `Physics_Ground_Sharp_Rotation` while the button that also stops pushes
-  (skater `+0x82C`, probably brake) is held. Below a speed of 10 the rate
+  (skater `+0x82C`: Down, the brake) is held. Below a speed of 10 the rate
   is scaled by how long the turn has been held, up to 600 ms
   (0x800EBFF0 gives a button's held time). The velocity turns with the
   board. It also reads `cess_turn_min_speed` (cess slides). Ported.
