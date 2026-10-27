@@ -1490,10 +1490,25 @@ impl Skater {
             self.let_go_skitch(velocity);
             return;
         }
-        // Behind the car, on the ground there.
+        // Carried along by the car, closing in on its spot behind it at
+        // `skitch_suck_speed`; more than 180 from it, off (`OffMeterBottom`:
+        // `SkitchOut`) (main.dol 0x8011E620).
         let spot = car.position - car.forward * (car.half_length + p.skitch_offset);
+        let carried = self.position + velocity * STEP;
+        let gap = spot.with_y(0.0) - carried.with_y(0.0);
+        if gap.length() > 180.0 {
+            self.let_go_skitch(velocity);
+            return;
+        }
+        let step = p.skitch_suck_speed * STEP;
+        let at = if gap.length() <= step {
+            spot
+        } else {
+            carried + gap.normalize() * step
+        };
+        // On the ground there.
         let ground = world
-            .ray(spot + Vec3::Y * 50.0, spot - Vec3::Y * 400.0)
+            .ray(at.with_y(spot.y) + Vec3::Y * 50.0, at.with_y(spot.y) - Vec3::Y * 400.0)
             .filter(|hit| !is_wall(hit, p));
         // No ground there (off the end of a ramp): off into the air at the
         // car's speed, the way the slope was going.
@@ -4138,6 +4153,43 @@ mod tests {
         fast.velocity = Vec3::new(0.0, 500.0, 200.0);
         fast.update(Input::default(), &p, &world, STEP);
         assert_eq!(fast.heading, -FRAC_PI_2);
+    }
+
+    #[test]
+    fn skitching_closes_in_behind_the_car() {
+        let p = physics();
+        let mut world = floor_and_wall();
+        // A car going +Z at 300 on the floor (x = 500), the skater 80 behind
+        // its back, holding up.
+        let car = |z: f32| crate::world::Vehicle {
+            position: Vec3::new(500.0, 0.0, z),
+            forward: Vec3::Z,
+            speed: 300.0,
+            half_length: 20.0,
+        };
+        let mut z = 0.0;
+        world.vehicles = vec![car(z)];
+        let mut skater = Skater::new(Vec3::new(500.0, 0.0, -100.0), 0.0);
+        let push = Input {
+            push: true,
+            ..Input::default()
+        };
+        let mut gaps = Vec::new();
+        for _ in 0..90 {
+            z += 300.0 * STEP;
+            world.vehicles = vec![car(z)];
+            skater.update(push, &p, &world, STEP);
+            if skater.skitch.is_some() {
+                let spot = z - 20.0 - p.skitch_offset;
+                gaps.push(spot - skater.position.z);
+            }
+        }
+        assert!(gaps.len() > 30, "skitched {} frames", gaps.len());
+        // Closing in at `skitch_suck_speed` a second, not at once, then there.
+        let step = p.skitch_suck_speed * STEP;
+        assert!(gaps[0] > step);
+        assert!(gaps.windows(2).all(|w| w[1] <= w[0] + 1e-3));
+        assert!(gaps.last().unwrap().abs() < 1.0);
     }
 
     #[test]

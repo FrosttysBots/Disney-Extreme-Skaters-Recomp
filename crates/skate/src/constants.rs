@@ -243,6 +243,9 @@ pub struct Physics {
     pub skitch_max_distance: f32,
     pub skitch_offset: f32,
     pub skitch_hold_time: f32,
+    /// How fast a skitching skater closes in on its spot behind
+    /// (`skitch_suck_speed`).
+    pub skitch_suck_speed: f32,
     /// Chase camera: distance behind and height above (in feet, as the
     /// game's camera settings seem to be), and its horizontal FOV.
     pub camera_behind: f32,
@@ -360,6 +363,7 @@ impl Physics {
             skitch_max_distance: plain("Skitch_Max_Distance", 120.0),
             skitch_offset: plain("Skitch_Offset", 27.0),
             skitch_hold_time: plain("skitch_hold_time", 200.0) / 1000.0,
+            skitch_suck_speed: plain("skitch_suck_speed", 200.0),
             camera_behind: camera_value("behind", 12.0),
             camera_above: camera_value("above", 4.3),
             camera_fov: camera_value("horiz_fov", 72.0),
