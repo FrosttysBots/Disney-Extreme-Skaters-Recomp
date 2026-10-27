@@ -307,6 +307,9 @@ struct LoadedLevel {
     /// Rails on moving objects (each object's model's own, in mesh space
     /// about its origin), the world's moving rails in this order.
     object_rails: Vec<ObjectRails>,
+    /// The vehicles with collision of their own (their models' `.col`:
+    /// the toy cars), and its object in the world.
+    vehicle_collision: Vec<(usize, u32)>,
     /// Animated vertex colors of the level, its sky and its goal geometry.
     colors: [ColorAnimation; 3],
     /// The level's warps to other levels.
@@ -506,6 +509,23 @@ fn load_level(
             })
         });
         world.rails.add_moving(placed.collect());
+    }
+    // Vehicles with collision of their own (the toy cars' models' `.col`),
+    // each an object of the world placed where it is.
+    let mut vehicle_collision = Vec::new();
+    if let Some(world) = skate_world.as_mut() {
+        for (i, o) in nodes.objects.iter().enumerate() {
+            if o.kind != desa_viewer::nodes::ObjectKind::Vehicle {
+                continue;
+            }
+            let Some(stem) = o.model.strip_suffix(".mdl") else { continue };
+            let Some(data) = files.models.get(&format!("{stem}.col")) else { continue };
+            let Ok(collision) = ngc_collision::Collision::parse(data) else { continue };
+            let checksum = qb::checksum(&format!("{}#col", o.label));
+            world.add_vehicle_collision(checksum, &collision.objects);
+            world.place(checksum, Some(Mat4::from_rotation_translation(o.rotation(), o.position)));
+            vehicle_collision.push((i, checksum));
+        }
     }
     // Bouncy objects are knocked away, not run into.
     if let Some(world) = skate_world.as_mut() {
@@ -759,6 +779,7 @@ fn load_level(
             behaviour,
             world: skate_world,
             object_rails,
+            vehicle_collision,
             colors,
             pros,
             teleport_effects,
@@ -6152,9 +6173,31 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            // Small vehicles (the toy cars, not the Hub's plane or Zurg's
-            // platform) are solid too: the skater bumps off them.
-            obstacles.extend(vehicles.iter().filter(|(_, v)| v.half_length < 60.0).map(
+            // The vehicles' own collision, where they are (gone while
+            // they aren't).
+            if let Some(world) = &mut level.world {
+                for &(i, checksum) in &level.vehicle_collision {
+                    if level.behaviour.alive(i) {
+                        world.enable(checksum);
+                        let placed = Mat4::from_rotation_translation(
+                            level.behaviour.rotation(i),
+                            level.behaviour.position(i),
+                        );
+                        world.place(checksum, Some(placed));
+                    } else {
+                        world.disable(checksum);
+                    }
+                }
+            }
+            // Small vehicles without collision of their own (not the Hub's
+            // plane or Zurg's platform) are solid too: the skater bumps off
+            // them.
+            let own: HashSet<usize> = level.vehicle_collision.iter().map(|(i, _)| *i).collect();
+            obstacles.extend(
+                vehicles
+                    .iter()
+                    .filter(|(i, v)| v.half_length < 60.0 && !own.contains(i))
+                    .map(
                 |(_, v)| skate::world::Obstacle {
                     base: v.position - Vec3::Y * 24.0,
                     radius: v.half_length * 0.8,

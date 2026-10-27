@@ -181,7 +181,7 @@ fn collect_models(archive: &Archive, models: &mut HashMap<String, Vec<u8>>) -> R
         else {
             continue;
         };
-        if [".mdl", ".skin", ".tex"].iter().any(|s| key.ends_with(s)) {
+        if [".mdl", ".skin", ".tex", ".col"].iter().any(|s| key.ends_with(s)) {
             models.insert(key.to_string(), e.contents()?.into_owned());
         }
     }

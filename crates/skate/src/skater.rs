@@ -1554,7 +1554,8 @@ impl Skater {
     /// up by `CarPlant_Upward_boost` and on along the way it's going by
     /// `CarPlant_Forward_boost` (`DoCarPlantBoost`), "Car Plant" for 400.
     fn car_plant(&mut self, hit: &Hit, p: &Physics, world: &World) -> bool {
-        if hit.object != crate::world::OBSTACLE || self.since_car_plant < 1.0 / 3.0 {
+        let car_hit = hit.object == crate::world::OBSTACLE || world.is_vehicle(hit.object);
+        if !car_hit || self.since_car_plant < 1.0 / 3.0 {
             return false;
         }
         // (A small vehicle there: the toy cars are the obstacles that move.)
@@ -1564,8 +1565,11 @@ impl Skater {
         }) else {
             return false;
         };
-        // (Its roof: the obstacle's top, 40 above where it goes.)
-        let roof = car.position.y + 40.0;
+        // (Its roof: its own collision's top, or the obstacle's, 40 above
+        // where it goes.)
+        let roof = world
+            .object_top(hit.object)
+            .unwrap_or(car.position.y + 40.0);
         let reach = if self.velocity.y < 0.0 {
             p.min_car_height_downwards
         } else {
@@ -1595,7 +1599,8 @@ impl Skater {
     /// into a bail (`CarBail`, `NoseManualBail`); else pushed off at 1.5
     /// times its speed plus 50, flailing (`FlailLeft`).
     fn car_hit(&mut self, hit: &Hit, world: &World) -> bool {
-        if hit.object != crate::world::OBSTACLE || self.skitch.is_some() {
+        let car_hit = hit.object == crate::world::OBSTACLE || world.is_vehicle(hit.object);
+        if !car_hit || self.skitch.is_some() {
             return false;
         }
         let Some(car) = world.vehicles.iter().find(|v| {

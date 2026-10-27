@@ -59,6 +59,9 @@ pub struct World {
     /// pieces scripts move: a door swung open): stored space to where
     /// they are, and back.
     placed: std::collections::HashMap<u32, (Mat4, Mat4)>,
+    /// Collision objects that are vehicles' own (the toy cars' models'),
+    /// moved with them by [`World::place`].
+    vehicle_objects: std::collections::HashSet<u32>,
 }
 
 impl World {
@@ -70,7 +73,44 @@ impl World {
             vehicles: Vec::new(),
             disabled: Default::default(),
             placed: Default::default(),
+            vehicle_objects: Default::default(),
         }
+    }
+
+    /// Adds a vehicle's own collision (its model's, in its own space), as
+    /// one object `checksum` to place where the vehicle is.
+    pub fn add_vehicle_collision(&mut self, checksum: u32, objects: &[ngc_collision::CollisionObject]) {
+        for object in objects {
+            let mut object = object.clone();
+            object.checksum = checksum;
+            self.collision.objects.push(object);
+        }
+        self.vehicle_objects.insert(checksum);
+    }
+
+    /// Whether a collision object is a vehicle's.
+    pub fn is_vehicle(&self, object: u32) -> bool {
+        self.vehicle_objects.contains(&object)
+    }
+
+    /// The top of a collision object, where it is now.
+    pub fn object_top(&self, object: u32) -> Option<f32> {
+        let placed = self.placed.get(&object).map(|(m, _)| *m).unwrap_or(Mat4::IDENTITY);
+        self.collision
+            .objects
+            .iter()
+            .filter(|o| o.checksum == object)
+            .flat_map(|o| {
+                let [x0, y0, z0, x1, y1, z1] = o.bbox;
+                [
+                    Vec3::new(x0, y0, z0),
+                    Vec3::new(x1, y1, z1),
+                    Vec3::new(x0, y1, z1),
+                    Vec3::new(x1, y1, z0),
+                ]
+            })
+            .map(|c| placed.transform_point3(c).y)
+            .reduce(f32::max)
     }
 
     /// Puts a collision object somewhere else: `transform` takes it from
