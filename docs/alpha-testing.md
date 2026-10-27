@@ -112,6 +112,8 @@ skater is and what it's doing.
 - Races (the panel's Race button on Andy's Room, the Hub and Scar's
   Canyon): through the level's gates in order before the clock runs out,
   each gate adding its seconds.
+- Car plants (Andy's Room): jump into a toy car near its roof for a
+  "Car Plant" and a boost up and on.
 - Skitching (Andy's Room): roll up behind one of the toy cars and hold W
   (up): you hitch on ("Skitchin'", balance with A / D) and it sets off at
   its skitch speed towing you; let go of W, fall off the meter or ollie
