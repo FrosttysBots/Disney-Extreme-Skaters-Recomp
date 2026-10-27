@@ -73,6 +73,15 @@ on-ground update switches on.
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
   velocity * dt, at skater `+0x39A8`) for the collision checks.
+- **Cars** (0x8010D6F4, the skater meeting a vehicle): in the air with
+  the feet no more than `min_car_height_diff` (60) below its top
+  (`min_car_height_downwards`, 30, falling), `CarPlant`: "Car Plant" for
+  400, `DoCarPlantBoost` (0x80112908: the rise at least 0, plus
+  `Carplant_upward_boost`, and on along the way it's going, its facing
+  under 10), again only after `CarSparks`' third of a second. Otherwise,
+  by how fast they meet, `CarBail` or a flail. Ported: the car plant off
+  the toy cars (their roofs taken 40 above where they go), with
+  `CarPlant_Forward_boost` (400) along; not the car bail.
 - **Turning downhill when slow** (0x800F3564, ahead of the friction):
   under `Skater_max_sloped_turn_speed` (300) on ground whose normal's
   height is under `Skater_max_sloped_turn_cosine` (0.5), the skater

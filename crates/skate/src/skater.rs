@@ -486,6 +486,9 @@ pub struct Skater {
     /// The rail segment last left, and how long it's off limits after.
     last_rail: Option<usize>,
     rerail_time: f32,
+    /// Seconds since the last car plant (`CarSparks` sets the exception
+    /// again after a third of a second).
+    since_car_plant: f32,
     /// The friction the scripts set (`SetRollingFriction`, skater
     /// `+0x3A58`) when it isn't `Physics_Rolling_Friction`: a revert's
     /// (`SetSpecialFriction`), for as long as it plays (`Revert` goes
@@ -630,6 +633,7 @@ impl Skater {
             bail_stopping: false,
             last_rail: None,
             rerail_time: 0.0,
+            since_car_plant: f32::MAX,
             rolling_friction: None,
             reverts: 0,
             ground_flags: 0,
@@ -1535,6 +1539,46 @@ impl Skater {
         self.velocity = along.normalize_or(car.forward) * car.speed;
         self.heading = car.forward.x.atan2(car.forward.z);
         self.on_ground = true;
+    }
+
+    /// Off a car's roof in the air (`CarPlant`): the feet no more than
+    /// `min_car_height_diff` below it (`min_car_height_downwards` falling),
+    /// up by `CarPlant_Upward_boost` and on along the way it's going by
+    /// `CarPlant_Forward_boost` (`DoCarPlantBoost`), "Car Plant" for 400.
+    fn car_plant(&mut self, hit: &Hit, p: &Physics, world: &World) -> bool {
+        if hit.object != crate::world::OBSTACLE || self.since_car_plant < 1.0 / 3.0 {
+            return false;
+        }
+        // (A small vehicle there: the toy cars are the obstacles that move.)
+        let Some(car) = world.vehicles.iter().find(|v| {
+            v.half_length < 60.0
+                && (hit.point - v.position).with_y(0.0).length() < v.half_length + 16.0
+        }) else {
+            return false;
+        };
+        // (Its roof: the obstacle's top, 40 above where it goes.)
+        let roof = car.position.y + 40.0;
+        let reach = if self.velocity.y < 0.0 {
+            p.min_car_height_downwards
+        } else {
+            p.min_car_height_diff
+        };
+        if roof - self.position.y > reach {
+            return false;
+        }
+        self.since_car_plant = 0.0;
+        self.velocity.y = self.velocity.y.max(0.0) + p.car_plant_upward_boost;
+        let flat = self.velocity.with_y(0.0);
+        let along = if flat.length() < 10.0 {
+            self.forward()
+        } else {
+            flat.normalize()
+        };
+        self.velocity += along * p.car_plant_forward_boost;
+        self.position.y = self.position.y.max(roof + 1.0);
+        self.sounds.push(SkateSound::RailOn);
+        self.credit(Some(("Car Plant".into(), 400)), false);
+        true
     }
 
     /// Lets go of the car (`SkitchOut`): rolling on at its speed, and the
@@ -3180,6 +3224,7 @@ impl Skater {
             *time += STEP;
         }
         self.air_time += STEP;
+        self.since_car_plant = (self.since_car_plant + STEP).min(f32::MAX);
         // Landing within the next 0.2 seconds (`GetAirTimeLeft`)?
         let fall = self.velocity.y.min(0.0) * 0.2 + 0.5 * p.air_gravity * 0.04;
         // Once the legs stretch for the landing they stay so (no flicker
@@ -3272,6 +3317,9 @@ impl Skater {
                 // In vert air the ramp is for landing on.
                 let ramp = self.vert.is_some() && hit.flags & ngc_collision::face_flags::VERT != 0;
                 if !ground && !ramp && self.start_wallride(&hit, input, p, world) {
+                    return;
+                }
+                if !ground && !ramp && self.car_plant(&hit, p, world) {
                     return;
                 }
                 if !ground && !ramp {
@@ -4190,6 +4238,40 @@ mod tests {
         assert!(gaps[0] > step);
         assert!(gaps.windows(2).all(|w| w[1] <= w[0] + 1e-3));
         assert!(gaps.last().unwrap().abs() < 1.0);
+    }
+
+    #[test]
+    fn planting_off_a_toy_car() {
+        let p = physics();
+        let mut world = floor_and_wall();
+        let car = crate::world::Vehicle {
+            position: Vec3::new(500.0, 0.0, 0.0),
+            forward: Vec3::X,
+            speed: 0.0,
+            half_length: 20.0,
+        };
+        world.vehicles = vec![car];
+        world.set_obstacles(vec![crate::world::Obstacle {
+            base: Vec3::new(500.0, -24.0, 0.0),
+            radius: 16.0,
+            height: 64.0,
+        }]);
+        // Flying at it, the feet a little under its roof (40 up).
+        let mut skater = Skater::new(Vec3::new(500.0, 20.0, -80.0), 0.0);
+        skater.on_ground = false;
+        skater.set_action(Action::Air);
+        skater.velocity = Vec3::new(0.0, 60.0, 400.0);
+        let mut planted = false;
+        for _ in 0..30 {
+            skater.update(Input::default(), &p, &world, STEP);
+            planted |= skater.combo_tricks.tricks.iter().any(|t| t.name == "Car Plant");
+            if planted {
+                break;
+            }
+        }
+        assert!(planted);
+        assert!(skater.velocity.y >= p.car_plant_upward_boost - 1.0);
+        assert!(skater.velocity.z > 400.0);
     }
 
     #[test]
