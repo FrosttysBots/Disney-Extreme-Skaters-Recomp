@@ -114,6 +114,8 @@ skater is and what it's doing.
   each gate adding its seconds.
 - Toy cars (Andy's Room): jump into one near its roof for a "Car Plant"
   and a boost up and on; run into a fast one and it knocks you over.
+- Rails on things that move: grind the toy cars' roofs, the Treehouse's
+  lifeboat, the Hub's crane and Zurg's platform, carried along with them.
 - Skitching (Andy's Room): roll up behind one of the toy cars and hold W
   (up): you hitch on ("Skitchin'", balance with A / D) and it sets off at
   its skitch speed towing you; let go of W, fall off the meter or ollie

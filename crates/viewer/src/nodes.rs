@@ -29,6 +29,34 @@ use qb::{Definition, Symbols, Value, checksum, parse_definitions, tokenize};
 use crate::camera::FlyCamera;
 use crate::collision::ColorVertex;
 
+/// The rail segments in a node array (a model's own, `Veh_Viper_NodeArray`:
+/// rails that move with it), in mesh space about the model's origin, each
+/// with its start node's name.
+pub fn rails_in(nodes: &[Value]) -> Vec<(Vec3, Vec3, u32)> {
+    let key = checksum;
+    let rail = |node: &Value| node.get(key("Class")).and_then(Value::as_name) == Some(key("RailNode"));
+    let position = |node: &Value| {
+        node.get(key("Position"))
+            .and_then(Value::as_vector)
+            .map(|[x, y, z]| Vec3::new(x, y, -z))
+    };
+    let mut out = Vec::new();
+    for node in nodes.iter().filter(|n| rail(n)) {
+        let Some(start) = position(node) else { continue };
+        let name = node.get(key("Name")).and_then(Value::as_name).unwrap_or(0);
+        let links = node.get(key("Links")).and_then(Value::as_array).unwrap_or_default();
+        for link in links {
+            let Some(target) = link.as_int().and_then(|i| nodes.get(i as usize)) else {
+                continue;
+            };
+            if let (true, Some(end)) = (rail(target), position(target)) {
+                out.push((start, end, name));
+            }
+        }
+    }
+    out
+}
+
 pub struct RailSegment {
     pub start: Vec3,
     pub end: Vec3,

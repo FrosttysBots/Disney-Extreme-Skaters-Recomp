@@ -486,6 +486,9 @@ pub struct Skater {
     /// The rail segment last left, and how long it's off limits after.
     last_rail: Option<usize>,
     rerail_time: f32,
+    /// How fast the moving rail being ground carried the skater along
+    /// last frame (a toy car's, the lifeboat's): kept going off it.
+    rail_carry: Vec3,
     /// Seconds since the last car plant (`CarSparks` sets the exception
     /// again after a third of a second).
     since_car_plant: f32,
@@ -634,6 +637,7 @@ impl Skater {
             last_rail: None,
             rerail_time: 0.0,
             since_car_plant: f32::MAX,
+            rail_carry: Vec3::ZERO,
             rolling_friction: None,
             reverts: 0,
             ground_flags: 0,
@@ -2025,6 +2029,14 @@ impl Skater {
         };
         let rails = &world.rails;
         let mut rail = rails.segments[grind.segment];
+        // On a rail that moves: where it's got to (carried along with it).
+        self.rail_carry = Vec3::ZERO;
+        if rails.is_moving(grind.segment) {
+            let along = (self.position - rail.start).dot(rail.direction());
+            let on = rail.start + rail.direction() * along.clamp(0.0, rail.length());
+            self.rail_carry = (on - self.position) / STEP;
+            self.position = on;
+        }
         let mut travel = rail.direction() * if grind.forwards { 1.0 } else { -1.0 };
         grind.speed += p.rail_gravity * travel.y * STEP;
         if grind.speed < 0.0 {
@@ -2232,7 +2244,8 @@ impl Skater {
         self.rerail_time = p.rail_minimum_rerail_time;
         self.grind = None;
         self.since_rail = 0.0;
-        self.velocity = velocity;
+        // (Off a moving rail, with its motion too.)
+        self.velocity = velocity + std::mem::take(&mut self.rail_carry);
         self.on_ground = false;
         // Off the rail any other way, no ollie (`Stand2InAir`).
         self.ollied = false;
@@ -4352,6 +4365,39 @@ mod tests {
             bailed |= matches!(skater.action, Action::BailGrind | Action::Bail);
         }
         assert!(bailed);
+    }
+
+    #[test]
+    fn a_moving_rail_carries_the_skater() {
+        let p = physics();
+        let mut world = floor_and_wall();
+        // A rail 50 up along Z, moving +X at 120 a second.
+        let rail = |x: f32| crate::rails::Segment {
+            start: Vec3::new(x, 50.0, -400.0),
+            end: Vec3::new(x, 50.0, 400.0),
+        };
+        world.rails = crate::rails::Rails::default();
+        world.rails.add_moving(vec![(rail(500.0), 0)]);
+        let mut skater = Skater::new(Vec3::new(500.0, 50.0, -300.0), 0.0);
+        skater.on_ground = false;
+        skater.grind = Some(Grind {
+            segment: 0,
+            forwards: true,
+            speed: 200.0,
+        });
+        skater.set_action(Action::Grinding);
+        let grind = Input {
+            grind: true,
+            ..Input::default()
+        };
+        let mut x = 500.0;
+        for _ in 0..60 {
+            x += 120.0 * STEP;
+            world.rails.segments[0] = rail(x);
+            skater.update(grind, &p, &world, STEP);
+        }
+        assert!(skater.grind.is_some(), "still grinding");
+        assert!((skater.position.x - x).abs() < 3.0, "{} vs {x}", skater.position.x);
     }
 
     #[test]

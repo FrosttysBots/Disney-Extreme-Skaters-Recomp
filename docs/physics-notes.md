@@ -302,8 +302,12 @@ on-ground update switches on.
   1 higher, with its velocity flattened against what it hit, in the air
   (`OffRail`).
   Ported: all of the above for level rails, with balance, bails and lip
-  tricks (below), without the side check, moving objects' rails and the
-  events. The
+  tricks (below), without the side check and the events. Moving objects
+  carry rails of their own, in their models' node arrays
+  (`Veh_Viper_NodeArray`: the toy TransAM and Viper, the Treehouse's
+  lifeboat, the Hub's crane, Zurg's platform and UFOs); this crate moves
+  them with their objects each frame, keeps a skater grinding one on it,
+  and gives it the rail's motion as it leaves. The
   grind button (0x80108558): with the pro controls (`+0x3A3C`, what
   `HawkControlsIsOff` reads), Triangle held; with the simplified ones,
   Square, Triangle or Circle held or pressed within

@@ -35,6 +35,10 @@ pub struct Rails {
     /// none): grinding onto the segment reaches it, running its
     /// `TriggerScript` (a rail gap's start or end, a goal's grind).
     pub nodes: Vec<u32>,
+    /// How many segments, at the end, move (rails on moving objects: the
+    /// toy cars, the Treehouse's lifeboat, the Hub's crane), put where they
+    /// are each frame by whoever moves them.
+    pub moving: usize,
 }
 
 /// Ends closer than this are the same node.
@@ -75,10 +79,26 @@ impl Rails {
         Rails {
             segments: kept,
             nodes,
+            moving: 0,
         }
     }
 
     /// Segment `i`'s node's name, if it has one.
+    /// Adds rails that move (after the level's own), each with its node;
+    /// their segments are then set each frame with [`Rails::segments`].
+    pub fn add_moving(&mut self, segments: Vec<(Segment, u32)>) {
+        for (segment, node) in segments {
+            self.segments.push(segment);
+            self.nodes.push(node);
+            self.moving += 1;
+        }
+    }
+
+    /// Whether segment `i` moves.
+    pub fn is_moving(&self, i: usize) -> bool {
+        i < self.segments.len() && i + self.moving >= self.segments.len()
+    }
+
     pub fn node(&self, i: usize) -> Option<u32> {
         self.nodes.get(i).copied().filter(|&n| n != 0)
     }

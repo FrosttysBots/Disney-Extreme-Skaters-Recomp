@@ -304,6 +304,9 @@ struct LoadedLevel {
     behaviour: Behaviour,
     /// The collision as a world to skate on.
     world: Option<World>,
+    /// Rails on moving objects (each object's model's own, in mesh space
+    /// about its origin), the world's moving rails in this order.
+    object_rails: Vec<ObjectRails>,
     /// Animated vertex colors of the level, its sky and its goal geometry.
     colors: [ColorAnimation; 3],
     /// The level's warps to other levels.
@@ -350,6 +353,10 @@ struct LoadedLevel {
 }
 
 /// Loads a level from the game data and uploads it to the GPU.
+/// A moving object's rails (its index, and each segment's ends about its
+/// origin with the segment's node).
+type ObjectRails = (usize, Vec<(Vec3, Vec3, u32)>);
+
 fn load_level(
     data: &mut GameData,
     info: &LevelInfo,
@@ -466,6 +473,40 @@ fn load_level(
                     .collect(),
             ))
         });
+    // Rails on moving objects, from their models' own node arrays
+    // (`Veh_Viper_NodeArray`: the toy cars, the lifeboat, the crane), there
+    // as the objects start; moved with them as they go.
+    let object_rails: Vec<ObjectRails> = nodes
+        .objects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| {
+            let file = o.model.rsplit(['/', '\\']).next()?;
+            let stem = file.split('.').next()?;
+            let array = behaviour
+                .program()
+                .value(qb::checksum(&format!("{stem}_NodeArray")))
+                .and_then(qb::Value::as_array)?;
+            let rails = desa_viewer::nodes::rails_in(array);
+            (!rails.is_empty()).then_some((i, rails))
+        })
+        .collect();
+    if let Some(world) = skate_world.as_mut() {
+        let placed = object_rails.iter().flat_map(|(i, rails)| {
+            let o = &nodes.objects[*i];
+            let (at, turn) = (o.position, o.rotation());
+            rails.iter().map(move |&(a, b, name)| {
+                (
+                    Segment {
+                        start: at + turn * a,
+                        end: at + turn * b,
+                    },
+                    name,
+                )
+            })
+        });
+        world.rails.add_moving(placed.collect());
+    }
     // Bouncy objects are knocked away, not run into.
     if let Some(world) = skate_world.as_mut() {
         for name in &bouncy_names {
@@ -717,6 +758,7 @@ fn load_level(
             layers,
             behaviour,
             world: skate_world,
+            object_rails,
             colors,
             pros,
             teleport_effects,
@@ -6086,6 +6128,30 @@ impl<'a> App<'a> {
                 })
                 .collect();
             self.vehicle_objects = vehicles.iter().map(|(i, _)| *i).collect();
+            // The moving objects' rails, where the objects are now.
+            if let Some(world) = &mut level.world {
+                let rails = &mut world.rails;
+                let mut at = rails.segments.len() - rails.moving;
+                for (i, local) in &level.object_rails {
+                    let (position, turn) = (level.behaviour.position(*i), level.behaviour.rotation(*i));
+                    // (Not there, its rails far away.)
+                    let alive = level.behaviour.alive(*i);
+                    for &(a, b, _) in local {
+                        rails.segments[at] = if alive {
+                            Segment {
+                                start: position + turn * a,
+                                end: position + turn * b,
+                            }
+                        } else {
+                            Segment {
+                                start: Vec3::splat(1e7),
+                                end: Vec3::splat(1e7) + Vec3::X,
+                            }
+                        };
+                        at += 1;
+                    }
+                }
+            }
             // Small vehicles (the toy cars, not the Hub's plane or Zurg's
             // platform) are solid too: the skater bumps off them.
             obstacles.extend(vehicles.iter().filter(|(_, v)| v.half_length < 60.0).map(
