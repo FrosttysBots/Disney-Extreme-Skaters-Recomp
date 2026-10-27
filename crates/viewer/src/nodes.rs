@@ -69,6 +69,9 @@ pub struct RailSegment {
     /// Whether that node is flagged `LipOverride` (lips off it may be more
     /// twisted).
     pub lip_override: bool,
+    /// Whether that node's there from the start (`CreatedAtStart`), not
+    /// waiting for a script to create it.
+    pub created_at_start: bool,
 }
 
 pub struct Spawn {
@@ -363,6 +366,7 @@ impl LevelNodes {
                                 terrain: node.get(key("TerrainType")).and_then(Value::as_name),
                                 node: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
                                 lip_override: node.has_flag(key("LipOverride")),
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
                             });
                         }
                     }

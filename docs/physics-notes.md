@@ -295,7 +295,10 @@ on-ground update switches on.
   each frame; turning round flips the fakie flag (`+0x3588`). Past a
   node it carries on to the next one (`+0x34`, or `+0x38` going
   backwards) unless the corner is sharper than `Rail_Corner_Leave_Angle`
-  (50 degrees); the end of the rail drops it off (`OffRail`). Jumping
+  (50 degrees), measured from above (0x80102628 zeroes both ways'
+  heights, so a rail dropping steeply ahead is carried on), or the next
+  node isn't there (bit 4 of its flags, `CreatedAtStart` or a script's
+  `Create`); the end of the rail drops it off (`OffRail`). Jumping
   (0x800F5B40) turns the velocity by `Rail_Jump_Angle` (15 degrees)
   towards the held direction and blocks the rail for
   `Rail_jump_rerail_time` (300 ms; leaving it any other way,

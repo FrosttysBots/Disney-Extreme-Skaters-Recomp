@@ -476,6 +476,13 @@ fn load_level(
                     .collect(),
             )
             .with_lip_override(nodes.rails.iter().filter(|r| r.lip_override).map(|r| r.node)))
+        })
+        .map(|mut world| {
+            // Rails waiting for a script to create them.
+            for r in nodes.rails.iter().filter(|r| !r.created_at_start) {
+                world.rails.set_present(r.node, false);
+            }
+            world
         });
     // Rails on moving objects, from their models' own node arrays
     // (`Veh_Viper_NodeArray`: the toy cars, the lifeboat, the crane), there
@@ -880,8 +887,8 @@ struct ObjectLayers {
 }
 
 impl LoadedLevel {
-    /// The particle effects and hidden sectors the scripts started and
-    /// stopped, created and killed.
+    /// The particle effects, hidden sectors and rails the scripts started
+    /// and stopped, created and killed.
     fn apply_creates(&mut self) {
         for (name, created) in std::mem::take(&mut self.behaviour.other_creates) {
             // A bouncy object: shown at rest, or gone.
@@ -900,6 +907,12 @@ impl LoadedLevel {
             }
             if self.nodes.hidden_sectors.contains(&name) {
                 self.show_sector(name, created);
+                continue;
+            }
+            if self.nodes.rails.iter().any(|r| r.node == name) {
+                if let Some(world) = &mut self.world {
+                    world.rails.set_present(name, created);
+                }
                 continue;
             }
             if created {

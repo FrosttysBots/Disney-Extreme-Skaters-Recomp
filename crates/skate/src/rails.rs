@@ -45,6 +45,11 @@ pub struct Rails {
     /// twisted up to `LipAllowAngle_Override` (main.dol 0x800E4568 sets
     /// the node's bit, 0x80108660 reads it).
     pub lip_override: HashSet<u32>,
+    /// Rail nodes not there now, by name: not `CreatedAtStart`, or killed
+    /// by a script, and not since created (bit 4 of the node's flags,
+    /// main.dol 0x801CFC74). Their segments can't be got onto or
+    /// grinded into.
+    pub absent: HashSet<u32>,
 }
 
 /// Ends closer than this are the same node.
@@ -87,6 +92,7 @@ impl Rails {
             nodes,
             moving: 0,
             lip_override: HashSet::new(),
+            absent: HashSet::new(),
         }
     }
 
@@ -112,6 +118,20 @@ impl Rails {
         self.node(i).is_some_and(|n| self.lip_override.contains(&n))
     }
 
+    /// Creates (or kills) the named rail node, as a script's `Create`.
+    pub fn set_present(&mut self, node: u32, present: bool) {
+        if present {
+            self.absent.remove(&node);
+        } else if node != 0 {
+            self.absent.insert(node);
+        }
+    }
+
+    /// Whether segment `i`'s node is there.
+    pub fn present(&self, i: usize) -> bool {
+        self.node(i).is_none_or(|n| !self.absent.contains(&n))
+    }
+
     /// Whether segment `i` moves.
     pub fn is_moving(&self, i: usize) -> bool {
         i < self.segments.len() && i + self.moving >= self.segments.len()
@@ -122,7 +142,7 @@ impl Rails {
     }
 
     /// The rail to grind on moving from `from` to `to` (main.dol
-    /// 0x800E52C4): for each segment, the closest points between it and
+    /// 0x800E52C4): for each segment that's there, the closest points between it and
     /// the move; the best scores `distance * (1.122 - |cos|)`, with `cos`
     /// between the move and the rail, and it's taken if
     /// `distance * (2 - |cos|)` is within `max_snap`.
@@ -133,6 +153,9 @@ impl Rails {
         let mut best_score = f32::MAX;
         let mut best = None;
         for (i, segment) in self.segments.iter().enumerate() {
+            if !self.present(i) {
+                continue;
+            }
             let (s_lo, s_hi) = (
                 segment.start.min(segment.end),
                 segment.start.max(segment.end),
@@ -190,12 +213,12 @@ impl Rails {
             })
     }
 
-    /// Of the segments joined on at `segment`'s end (or start, going
-    /// backwards), the one carrying on straightest; and whether it runs
-    /// the same way.
+    /// Of the segments there joined on at `segment`'s end (or start,
+    /// going backwards), the one carrying on straightest; and whether it
+    /// runs the same way.
     pub fn next(&self, segment: usize, forwards: bool) -> Option<(usize, bool)> {
         let travel = self.segments[segment].direction() * if forwards { 1.0 } else { -1.0 };
-        self.joins(segment, forwards).max_by(|&(a, sa), &(b, sb)| {
+        self.joins(segment, forwards).filter(|&(i, _)| self.present(i)).max_by(|&(a, sa), &(b, sb)| {
             let along = |i: usize, same: bool| {
                 self.segments[i].direction().dot(travel) * if same { 1.0 } else { -1.0 }
             };
@@ -287,6 +310,21 @@ mod tests {
         assert_eq!(r.next(0, true), Some((1, true)));
         assert_eq!(r.next(1, false), Some((0, false)));
         assert_eq!(r.next(0, false), None);
+    }
+
+    #[test]
+    fn rails_not_there_are_neither_found_nor_followed() {
+        let segments = rails().segments;
+        let mut r = Rails::named(vec![(segments[0], 1), (segments[1], 2)]);
+        let (from, to) = (Vec3::new(40.0, 30.0, 2.0), Vec3::new(50.0, 25.0, 2.0));
+        r.set_present(1, false);
+        r.set_present(2, false);
+        assert!(r.nearest(from, to, 40.0).is_none());
+        r.set_present(1, true);
+        assert_eq!(r.nearest(from, to, 40.0).map(|h| h.segment), Some(0));
+        assert_eq!(r.next(0, true), None);
+        r.set_present(2, true);
+        assert_eq!(r.next(0, true), Some((1, true)));
     }
 
     #[test]

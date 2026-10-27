@@ -2167,11 +2167,15 @@ impl Skater {
             if past <= 0.0 {
                 break;
             }
+            // The corner's measured from above (0x80102628: both ways
+            // with their heights zeroed), so a rail tipping down a slope
+            // carries on however steeply.
+            let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
             let next = rails
                 .next(grind.segment, grind.forwards)
                 .filter(|&(n, same)| {
                     let d = rails.segments[n].direction() * if same { 1.0 } else { -1.0 };
-                    d.dot(travel) >= p.rail_corner_leave_angle.to_radians().cos()
+                    flat(d).dot(flat(travel)) >= p.rail_corner_leave_angle.to_radians().cos()
                 });
             let Some((n, same)) = next else {
                 // Off the end, or a corner too sharp to follow.
@@ -3904,6 +3908,41 @@ mod tests {
         assert!(skater.grind.is_none(), "off at the right angle");
         assert_eq!(skater.action, Action::Air);
         assert!((skater.position.distance(c)) < 20.0, "{}", skater.position);
+    }
+
+    #[test]
+    fn grinds_on_over_a_steep_drop_in_the_rail() {
+        use crate::rails::{Rails, Segment};
+        let p = physics();
+        let empty = ngc_collision::Collision {
+            objects: Vec::new(),
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        };
+        // Level, then tipping 60 degrees down the same way: past the
+        // corner angle in 3D, but straight on seen from above.
+        let a = Vec3::new(0.0, 100.0, 0.0);
+        let b = Vec3::new(200.0, 100.0, 0.0);
+        let c = b + Vec3::new(60f32.to_radians().cos(), -60f32.to_radians().sin(), 0.0) * 200.0;
+        let world = World::new(empty).with_rails(Rails::new(vec![
+            Segment { start: a, end: b },
+            Segment { start: b, end: c },
+        ]));
+        let mut skater = Skater::new(Vec3::new(40.0, 110.0, 3.0), FRAC_PI_2);
+        skater.on_ground = false;
+        skater.velocity = Vec3::new(300.0, -100.0, 0.0);
+        let grind = Input {
+            grind: true,
+            ..Input::default()
+        };
+        skater.update(grind, &p, &world, STEP * 2.0);
+        assert_eq!(skater.grind.map(|g| g.segment), Some(0));
+        let mut down = false;
+        for _ in 0..60 {
+            skater.update(grind, &p, &world, STEP);
+            down |= skater.grind.is_some_and(|g| g.segment == 1);
+        }
+        assert!(down, "on down the drop");
     }
 
     #[test]
