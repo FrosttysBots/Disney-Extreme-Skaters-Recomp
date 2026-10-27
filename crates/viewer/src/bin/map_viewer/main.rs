@@ -2952,7 +2952,23 @@ impl<'a> App<'a> {
         // Each run starts with the character's `StartLevel` (`warpIn`),
         // but in the Skate Shop.
         if !level.id.eq_ignore_ascii_case("SkateShop") {
-            skater.start_level();
+            let kid = id == "kid";
+            skater.start_level(kid);
+            // (And the Kid arrives at `TRG_Start_P1`, `warpIn`'s
+            // `Obj_MoveToNode`, when starting from the level's start: on the
+            // Hub and the Graveyard not the first `Player1` restart.)
+            let start = level
+                .nodes
+                .spawns
+                .iter()
+                .find(|s| s.name == qb::checksum("TRG_Start_P1"));
+            if let (true, true, Some(start), Some(world)) =
+                (kid, self.placement == level.home, start, &level.world)
+            {
+                let facing = start.facing();
+                skater.place(start.position, facing.x.atan2(facing.z), &physics, world);
+                skater.start_level(kid);
+            }
         }
         // Falling out of the level puts the skater back at the nearest
         // spawn point.

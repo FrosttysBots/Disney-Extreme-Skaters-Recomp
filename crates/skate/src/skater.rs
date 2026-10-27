@@ -122,6 +122,10 @@ pub enum Action {
     /// Starting the level (`warpIn`: `PlayAnim anim = StartLevel`, input
     /// off till it's done).
     StartLevel,
+    /// The Kid arriving first (`warpIn`'s `if SkaterIsNamed kid`):
+    /// `OffBoardSpinning` while it spins seven times round and grows from
+    /// a tenth (`rotate_time_out`'s 1.75 s), then `OffBoardDizzy`.
+    WarpIn,
     /// Bounced off a wall fast enough to flail (turning left or right).
     FlailLeft,
     FlailRight,
@@ -317,6 +321,8 @@ const REVERT_SCORE: u32 = 100;
 /// How long after a revert a manual still carries the combo on (about the
 /// revert animation).
 const REVERT_LINGER: f32 = 0.6;
+/// How long the Kid spins arriving (`rotate_time_out`).
+const WARP_IN_SPIN: f32 = 1.75;
 /// How long after skating in off a coping, or landing off a lip, a revert
 /// keeps the combo going (`SkateInOrBail`'s and `LipLand`'s `Reverts
 /// duration = 20`).
@@ -991,8 +997,13 @@ impl Skater {
 
     /// The level's start (`GameFlow_PlayRun`'s `warpIn`): the character's
     /// `StartLevel` animation, with no control till it's played.
-    pub fn start_level(&mut self) {
-        self.set_action(Action::StartLevel);
+    /// The Kid (`kid`) spins in first (`Action::WarpIn`).
+    pub fn start_level(&mut self, kid: bool) {
+        self.set_action(if kid {
+            Action::WarpIn
+        } else {
+            Action::StartLevel
+        });
     }
 
     /// Knocked down (`PedKnockDown`: a heckler's swipe, a missile): off
@@ -1062,11 +1073,23 @@ impl Skater {
         }
     }
 
-    /// Where to draw the skater: standing on `up`, facing its heading.
+    /// Where to draw the skater: standing on `up`, facing its heading
+    /// (spinning and growing in as the Kid arrives).
     pub fn placement(&self) -> Mat4 {
-        let yaw = Quat::from_rotation_y(self.heading);
+        let (spin, scale) = if self.action == Action::WarpIn {
+            // `RotateDisplay y EndAngle = (-7 * 360) duration = 1.75
+            // seconds SinePower = 1`; the size from a tenth up 0.02 a frame
+            // (`calcEase`).
+            let done = (self.action_time / WARP_IN_SPIN).min(1.0);
+            let spin = -7.0 * std::f32::consts::TAU * (done * FRAC_PI_2).sin();
+            let size = (0.1 + self.action_time * 60.0 * 0.02).min(1.0);
+            (spin, size * size * (3.0 - 2.0 * size))
+        } else {
+            (0.0, 1.0)
+        };
+        let yaw = Quat::from_rotation_y(self.heading + spin);
         let tilt = Quat::from_rotation_arc(Vec3::Y, self.shown_up.normalize_or(Vec3::Y));
-        Mat4::from_rotation_translation(tilt * yaw, self.position)
+        Mat4::from_scale_rotation_translation(Vec3::splat(scale), tilt * yaw, self.position)
     }
 
     /// Advances `dt` seconds in fixed steps.
@@ -1177,6 +1200,11 @@ impl Skater {
         self.last_input = input;
         // Bailing: no control until it's over.
         let input = if matches!(self.action, Action::BailFall { .. }) {
+            Input::default()
+        } else if self.action == Action::WarpIn {
+            if self.action_time >= WARP_IN_SPIN + self.anim_length("OffBoardDizzy") {
+                self.set_action(Action::StartLevel);
+            }
             Input::default()
         } else if self.action == Action::StartLevel {
             if self.action_time < self.anim_length("StartLevel") {
@@ -2505,7 +2533,7 @@ impl Skater {
             Action::BailManual | Action::BailGrind | Action::Bail
         );
         let push = (input.push || self.auto_kick)
-            && self.action != Action::StartLevel
+            && !matches!(self.action, Action::StartLevel | Action::WarpIn)
             && !input.brake
             && !self.manual
             && !bailing
@@ -2887,6 +2915,7 @@ impl Skater {
                 | Action::Bail
                 | Action::CessSlide { .. }
                 | Action::StartLevel
+                | Action::WarpIn
         ) || (matches!(self.action, Action::Revert { .. })
             && self.action_time < 0.6)
         {

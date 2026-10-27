@@ -172,6 +172,9 @@ skater is and what it's doing.
   the GameCube's own others aren't known; a code turns its cheat on in
   the panel as well.
 - Every level, and a few characters (each has its own tricks and stats).
+- Starting a level: the character's own start pose (`StartLevel`); the
+  Kid spins in first, growing, and stands up dizzy, at the level's own
+  start for the Kid (`TRG_Start_P1`).
 - Wallrides: jump at a wall alongside it, fast enough, holding Grind (E):
   "FS Wallride" or "BS Wallride", then Wallie or Wallplant off it. The
   game only lets you ride Canyon's few wall-ridable faces; the "Wallride
