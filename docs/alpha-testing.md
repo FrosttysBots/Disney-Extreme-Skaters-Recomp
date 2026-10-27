@@ -218,15 +218,16 @@ skater is and what it's doing.
 - Wallrides have no animation of their own (the characters on the disc
   have none): the skater leans off the wall instead.
 - Approximations of our own: the camera follows the game's camera
-  update (a lagging focus, turning, the quick swing after vert, zooming
-  for big air tricks, grinds and lips) but sees past walls its own way
-  (rising over them, holding back from swinging into a ramp, pulling
-  in), lips start at coping rails in vert air facing
-  within 35 degrees of straight up the ramp (60 on rails the level
-  flags; the game checks two more angles of its own), a skater barely rolling into a wall just stops
-  against it, ground is found across hairline cracks in the levels'
-  collision, and the skater is put back at the nearest spawn when it
-  falls out of a level (the game uses out-of-bounds triggers).
+  update (a lagging focus, turning, the quick swing after vert,
+  zooming for big air tricks, grinds and lips) but sees past walls its
+  own way (rising over them, holding back from swinging into a ramp,
+  pulling in), lips start at coping rails in vert air facing within 35
+  degrees of straight up the ramp (60 on rails the level flags; the
+  game checks two more angles of its own), a skater barely rolling
+  into a wall just stops against it, ground is found across hairline
+  cracks in the levels' collision, and the skater is put back at the
+  nearest spawn when it falls out of a level (the game uses
+  out-of-bounds triggers).
 
 ## Reporting a problem
 
