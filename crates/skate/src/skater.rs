@@ -3111,7 +3111,38 @@ impl Skater {
         } else {
             Action::Standing
         };
+        if self.on_ground && self.skitch.is_none() {
+            self.wall_lean_push(input, p, world);
+        }
         self.set_action(action);
+    }
+
+    /// Steering into a wall while slow (main.dol 0x800F9664, on the ground
+    /// and not skitching): under `wall_lean_push_speed`, a line from
+    /// `wall_lean_push_height` up reaching out the way the skater's
+    /// turning, `wall_lean_push_length` once the turn's been held
+    /// `wall_lean_push_time`. Into a wall, the skater moves out along the
+    /// wall's normal by as far as the line went into it, unless a line 1
+    /// up that way meets something.
+    fn wall_lean_push(&mut self, input: Input, p: &Physics, world: &World) {
+        if self.velocity.length() > p.wall_lean_push_speed || input.turn == 0.0 {
+            return;
+        }
+        let held = self.turn_time.min(p.wall_lean_push_time);
+        let reach = held / p.wall_lean_push_time * p.wall_lean_push_length;
+        let up = self.up.normalize_or(Vec3::Y);
+        let left = up.cross(self.forward()).normalize_or_zero();
+        let side = if input.turn < 0.0 { left } else { -left };
+        let from = self.position + up * p.wall_lean_push_height;
+        let to = from + side * reach;
+        let Some(hit) = world.ray(from, to) else {
+            return;
+        };
+        let push = hit.normal * (hit.point - to).dot(hit.normal);
+        let foot = self.position + up;
+        if world.ray(foot, foot + push).is_none() {
+            self.position += push;
+        }
     }
 
     /// Off the lip of a vert ramp going up (the game's 0x800F140C, when
@@ -4315,6 +4346,31 @@ mod tests {
         fast.velocity = Vec3::new(0.0, 500.0, 200.0);
         fast.update(Input::default(), &p, &world, STEP);
         assert_eq!(fast.heading, -FRAC_PI_2);
+    }
+
+    #[test]
+    fn steering_into_a_wall_when_slow_eases_off_it() {
+        let p = physics();
+        let world = floor_and_wall();
+        // Stopped 20 from the wall at x = 0, facing +Z: the wall's on the
+        // left.
+        let lean = |turn: f32| {
+            let mut skater = Skater::new(Vec3::new(-20.0, 0.0, 0.0), 0.0);
+            skater.on_ground = true;
+            skater.auto_kick = false;
+            let input = Input {
+                turn,
+                ..Input::default()
+            };
+            for _ in 0..30 {
+                skater.update(input, &p, &world, STEP);
+            }
+            skater.position.x
+        };
+        // Steering left, the reach grows past the wall and pushes off it.
+        assert!(lean(-1.0) < -30.0, "{}", lean(-1.0));
+        // Steering away: no push.
+        assert!(lean(1.0) > -20.5, "{}", lean(1.0));
     }
 
     #[test]

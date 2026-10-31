@@ -180,6 +180,15 @@ pub struct Physics {
     pub air_snap_up: f32,
     /// How far out from a vert ramp's lip vert air starts.
     pub vert_push_out: f32,
+    /// Steering into a wall while slow eases the skater off it: under
+    /// `Skate_min_wall_lean_push_speed`, a line from
+    /// `Skate_wall_lean_push_height` up reaching out to the side up to
+    /// `Skate_wall_lean_push_length`, over the first
+    /// `Skate_wall_lean_push_time` (seconds) the turn's held.
+    pub wall_lean_push_speed: f32,
+    pub wall_lean_push_height: f32,
+    pub wall_lean_push_length: f32,
+    pub wall_lean_push_time: f32,
     /// The skater only sticks to ground whose normal is within this many
     /// degrees of the one it stands on, when the ground falls away
     /// (main.dol 0x800F52AC); otherwise it leaves the ground.
@@ -344,6 +353,10 @@ impl Physics {
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
+            wall_lean_push_speed: plain("Skate_min_wall_lean_push_speed", 1000.0),
+            wall_lean_push_height: plain("Skate_wall_lean_push_height", 30.0),
+            wall_lean_push_length: plain("Skate_wall_lean_push_length", 35.0),
+            wall_lean_push_time: plain("Skate_wall_lean_push_time", 0.4),
             ground_stick_angle: plain("Ground_stick_angle", 30.0),
             ground_stick_angle_forward: plain("Ground_stick_angle_forward", 60.0),
             ground_snap_down: plain("Physics_Ground_Snap_Down", 8.2),

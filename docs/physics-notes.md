@@ -73,6 +73,18 @@ on-ground update switches on.
   are other such names), come blocks that halve the speed or add 200 in
   a direction; then it works out the proposed position (position +
   velocity * dt, at skater `+0x39A8`) for the collision checks.
+- **Leaning on walls** (0x800F9664, near the end of the on-ground
+  update, not while skitching, `+0x3704`): under
+  `Skate_min_wall_lean_push_speed` (1000), with Left or Right held
+  (Right if both), a line from `Skate_wall_lean_push_height` (30) up
+  out that way along the side row, `Skate_wall_lean_push_length` (35)
+  long once held `Skate_wall_lean_push_time` (0.4 s), less before. Into
+  a wall, the skater moves by how far it went in, along the wall's
+  normal (0x80009D00), unless a line 1 up that way hits something.
+  Ported. Just before it, 0x800F9AAC feels 15 (`Skater_side_collide_
+  length`) to each side at 16 up through 0x800F9BAC, nudging off walls
+  and turning away (0x800F6860) when no turn's held, and puts the
+  skater back if both sides hit; not ported.
 - **Cars** (0x8010D6F4, the skater meeting a vehicle): in the air with
   the feet no more than `min_car_height_diff` (60) below its top
   (`min_car_height_downwards`, 30, falling), `CarPlant`: "Car Plant" for
