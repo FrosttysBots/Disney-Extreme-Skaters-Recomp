@@ -242,7 +242,10 @@ on-ground update switches on.
     when the skater's made, read in 63 places: the local player, by the
     look of it), it turns by 180 degrees less the bounce: right round
     from the way it came, so a corner sends it back out.
-  Ported: all but the script event and the sound (the second line is
+  The sound (0x8010E340) is the terrain's bonk (sound table entry 4) at
+  a volume of 100 times the speed over a stat (checksum 0xCC5E87AA)
+  that no script defines, so always 100 (0x8010DEBC).
+  Ported: all but the script event (the second line is
   `Skater_First_Forward_Collision_Length` along the new way, from the
   forward line's height); the
   bounce's sign is chosen to turn away from the wall rather than read
