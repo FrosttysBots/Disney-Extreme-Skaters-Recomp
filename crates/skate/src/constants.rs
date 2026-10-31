@@ -138,6 +138,9 @@ pub struct Physics {
     pub max_sloped_turn_cosine: f32,
     pub slow_turn_on_slopes: f32,
     pub max_tense_time: f32,
+    /// How long after rolling off an edge an ollie still goes
+    /// (`Skater_Late_Jump_Slop`, seconds).
+    pub late_jump_slop: f32,
     /// Gravity in the air, before dividing by `air_hang` (the game does
     /// that: `main.dol` at 0x800FC634).
     pub air_gravity: f32,
@@ -340,6 +343,7 @@ impl Physics {
             max_sloped_turn_cosine: plain("Skater_max_sloped_turn_cosine", 0.5),
             slow_turn_on_slopes: plain("Skater_Slow_Turn_on_slopes", 3.0),
             max_tense_time: plain("Skater_max_tense_time", 200.0) / 1000.0,
+            late_jump_slop: plain("Skater_Late_Jump_Slop", 333.0) / 1000.0,
             air_gravity: plain("Physics_Air_Gravity", -1350.0),
             air_hang: scaled("Physics_Air_hang_Stat", 1.0),
             vert_hang: scaled("Physics_Vert_hang_Stat", 1.0),

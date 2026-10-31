@@ -225,7 +225,11 @@ on-ground update switches on.
   the `..._Stat` checksums found nothing. On the ground, moving down, it's
   added along the ground's normal; otherwise downward speed is dropped
   and it's added straight up. Upside down (vert) there's more. Ported:
-  the ground ollie.
+  the ground ollie, and the late one: rolling off an edge, `GroundGone`
+  sets the `Ollied` exception to `Ollie` (`Jump` in the air) and its
+  loop clears it once `AirTimeGreaterThan Skater_Late_Jump_Slop` (333
+  ms), so letting go of a crouch that soon after still jumps, with the
+  crouch's tense.
 
 - **Walls on the ground** (0x800F7D38, from the ground update): a line
   `Skater_First_Forward_Collision_Height` (8.1) up the skater's up axis,

@@ -1175,7 +1175,8 @@ impl Skater {
         self.action_time += STEP;
         self.crouch_time = if input.crouch {
             self.crouch_time + STEP
-        } else if self.on_ground || self.grind.is_some() {
+        } else if self.on_ground || self.grind.is_some() || self.crouched {
+            // (Still crouched off an edge: a late ollie's tense.)
             self.crouch_time
         } else {
             0.0
@@ -1971,7 +1972,8 @@ impl Skater {
     fn jump_speed(&self, p: &Physics) -> f32 {
         let tense = (self.crouch_time / p.max_tense_time).min(1.0);
         // (Off a vert face, the air jump speeds: 0x800F62C4.)
-        let on_vert = self.on_ground && self.ground_flags & ngc_collision::face_flags::VERT != 0;
+        let on_vert = (self.on_ground && self.ground_flags & ngc_collision::face_flags::VERT != 0)
+            || (!self.on_ground && self.vert.is_some());
         let (top, min) = if on_vert {
             (p.air_jump_speed, p.air_jump_speed_min)
         } else {
@@ -3476,6 +3478,24 @@ impl Skater {
             *time += STEP;
         }
         self.air_time += STEP;
+        // A late ollie (`GroundGone`'s `Ollied` exception, cleared once
+        // `AirTimeGreaterThan Skater_Late_Jump_Slop`): letting go of a
+        // crouch just after rolling off an edge still jumps (0x800F62C4 in
+        // the air: downward speed dropped, the jump straight up).
+        if self.action == Action::Air
+            && !self.ollied
+            && self.crouched
+            && !input.crouch
+            && self.air_time <= p.late_jump_slop
+        {
+            self.crouched = false;
+            self.velocity.y = self.velocity.y.max(0.0) + self.jump_speed(p);
+            self.ollied = true;
+            self.sounds.push(SkateSound::Jump { from_rail: false });
+        }
+        if !input.crouch {
+            self.crouched = false;
+        }
         self.since_car_plant = (self.since_car_plant + STEP).min(f32::MAX);
         // Landing within the next 0.2 seconds (`GetAirTimeLeft`)?
         let fall = self.velocity.y.min(0.0) * 0.2 + 0.5 * p.air_gravity * 0.04;
@@ -4390,6 +4410,73 @@ mod tests {
             repaired_fields: 0,
             repaired_bsp_fields: 0,
         })
+    }
+
+    #[test]
+    fn an_ollie_just_off_an_edge_still_goes() {
+        use ngc_collision::{BspNode, BspTree, Collision, CollisionObject, Face};
+        let p = physics();
+        // A ledge 100 up, ending at z = 0.
+        let face = |indices: [u16; 3]| Face {
+            flags: 0,
+            terrain: 0,
+            indices,
+        };
+        let world = World::new(Collision {
+            objects: vec![CollisionObject {
+                checksum: 1,
+                flags: 0,
+                bbox: [-500.0, 100.0, -2000.0, 500.0, 100.0, 0.0],
+                vertices: vec![
+                    [-500.0, 100.0, -2000.0],
+                    [500.0, 100.0, -2000.0],
+                    [500.0, 100.0, 0.0],
+                    [-500.0, 100.0, 0.0],
+                ],
+                intensities: Vec::new(),
+                faces: vec![face([0, 1, 2]), face([0, 2, 3])],
+                skipped_faces: 0,
+                bsp: BspTree {
+                    nodes: vec![BspNode::Leaf { first: 0, count: 2 }],
+                    faces: vec![0, 1],
+                },
+            }],
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        });
+        // Rolling off it crouched, letting go `after` seconds past the
+        // edge: the rise just after.
+        let off = |after: f32| {
+            let mut skater = Skater::new(Vec3::new(0.0, 100.0, -60.0), 0.0);
+            skater.on_ground = true;
+            skater.auto_kick = false;
+            skater.velocity = Vec3::Z * 300.0;
+            let crouch = Input {
+                crouch: true,
+                ..Input::default()
+            };
+            let mut past = 0.0;
+            for _ in 0..120 {
+                let input = if skater.on_ground || past < after {
+                    crouch
+                } else {
+                    Input::default()
+                };
+                skater.update(input, &p, &world, STEP);
+                if skater.on_ground {
+                    past = 0.0;
+                } else {
+                    past += STEP;
+                    if past >= after + 2.0 * STEP {
+                        return skater.velocity.y;
+                    }
+                }
+            }
+            f32::NAN
+        };
+        assert!(off(0.1) > 100.0, "{}", off(0.1));
+        // Past `Skater_Late_Jump_Slop` (333 ms), only falling.
+        assert!(off(0.5) < 0.0, "{}", off(0.5));
     }
 
     #[test]
