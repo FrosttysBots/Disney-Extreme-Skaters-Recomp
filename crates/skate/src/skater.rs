@@ -456,8 +456,6 @@ pub struct Skater {
     pub auto_kick: bool,
     /// Pushing this step.
     pub pushing: bool,
-    /// The wall bounced off last step (flat normal), to tell a corner.
-    last_wall: Option<Vec3>,
     /// Seconds left of the push under way (`DoAPush` plays a whole
     /// `PushCycle` before coasting again).
     push_left: f32,
@@ -619,7 +617,6 @@ impl Skater {
             message: None,
             auto_kick: true,
             pushing: false,
-            last_wall: None,
             push_left: 0.0,
             push_anim: "PushCycle1",
             air_time: 0.0,
@@ -2867,7 +2864,6 @@ impl Skater {
         let mut forward = forward;
         let mut target = self.position + forward * speed * STEP;
         let mut flailed = None;
-        let last_wall = self.last_wall.take();
         let lift = up * p.forward_collision_height;
         if let Some(direction) = (target - self.position).try_normalize() {
             let from = self.position + lift;
@@ -2887,21 +2883,8 @@ impl Skater {
                     // it off one wall then the other, frame after frame.
                     speed = 0.0;
                     target = self.position;
-                } else if let Some(previous) = last_wall.filter(|w| {
-                    let n = Vec3::new(hit.normal.x, 0.0, hit.normal.z).normalize_or_zero();
-                    let (turn, _) = wall_bounce(forward, up, hit.normal, p);
-                    let away = Quat::from_rotation_y(turn) * forward;
-                    w.dot(n) < 0.95 && away.with_y(0.0).dot(*w) < 0.0
-                }) {
-                    // Into a corner: bounced off one wall last step, this
-                    // one would turn it back into that (and the next step
-                    // back here, frame after frame). Stopped in it.
-                    self.last_wall = Some(previous);
-                    speed = 0.0;
-                    target = self.position;
                 } else {
                     let (turn, angle) = wall_bounce(forward, up, hit.normal, p);
-                    self.last_wall = Vec3::new(hit.normal.x, 0.0, hit.normal.z).try_normalize();
                     self.heading += turn;
                     let flat = self.forward();
                     forward = (flat - up * flat.dot(up)).normalize_or(flat);
