@@ -55,6 +55,11 @@ pub struct Rails {
     /// or a `DefaultLine` node's). Where rails fork, grinding takes the
     /// way the chain goes.
     pub chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>,
+    /// Segments that aren't a node's link to its next either way round:
+    /// a second link from a node, which the game has no rail for
+    /// (0x800E52C4 only looks along each node's next), only reached
+    /// grinding back to a node's previous.
+    pub off_chain: Vec<bool>,
 }
 
 /// Ends closer than this are the same node.
@@ -99,6 +104,7 @@ impl Rails {
             lip_override: HashSet::new(),
             absent: HashSet::new(),
             chain: Vec::new(),
+            off_chain: Vec::new(),
         }
     }
 
@@ -126,8 +132,24 @@ impl Rails {
 
     /// The game's rail chain (see [`Rails::chain`]).
     pub fn with_chain(mut self, chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>) -> Self {
+        let is_next = |a: Vec3, b: Vec3| {
+            chain
+                .iter()
+                .any(|&(n, next, _)| n.distance(a) < JOIN && next.is_some_and(|x| x.distance(b) < JOIN))
+        };
+        self.off_chain = self
+            .segments
+            .iter()
+            .map(|s| !chain.is_empty() && !is_next(s.start, s.end) && !is_next(s.end, s.start))
+            .collect();
         self.chain = chain;
         self
+    }
+
+    /// Whether segment `i` is a rail in the game's chain (see
+    /// [`Rails::off_chain`]).
+    pub fn on_chain(&self, i: usize) -> bool {
+        !self.off_chain.get(i).copied().unwrap_or(false)
     }
 
     /// Creates (or kills) the named rail node, as a script's `Create`.
@@ -154,8 +176,8 @@ impl Rails {
     }
 
     /// The rail to grind on moving from `from` to `to` (main.dol
-    /// 0x800E52C4): for each segment that's there, the closest points between it and
-    /// the move; the best scores `distance * (1.122 - |cos|)`, with `cos`
+    /// 0x800E52C4): for each segment that's there and in the chain, the
+    /// closest points between it and the move; the best scores `distance * (1.122 - |cos|)`, with `cos`
     /// between the move and the rail, and it's taken if
     /// `distance * (2 - |cos|)` is within `max_snap`.
     pub fn nearest(&self, from: Vec3, to: Vec3, max_snap: f32) -> Option<RailHit> {
@@ -165,7 +187,7 @@ impl Rails {
         let mut best_score = f32::MAX;
         let mut best = None;
         for (i, segment) in self.segments.iter().enumerate() {
-            if !self.present(i) {
+            if !self.present(i) || !self.on_chain(i) {
                 continue;
             }
             let (s_lo, s_hi) = (
@@ -249,7 +271,7 @@ impl Rails {
             }
         }
         let travel = this.direction() * if forwards { 1.0 } else { -1.0 };
-        joins.into_iter().max_by(|&(a, sa), &(b, sb)| {
+        joins.into_iter().filter(|&(i, _)| self.on_chain(i)).max_by(|&(a, sa), &(b, sb)| {
             let along = |i: usize, same: bool| {
                 self.segments[i].direction().dot(travel) * if same { 1.0 } else { -1.0 }
             };
@@ -359,6 +381,12 @@ mod tests {
         assert_eq!(chained.next(0, true), Some((2, true)));
         // Coming back along the side branch, its node's previous: the start.
         assert_eq!(chained.next(2, false), Some((0, false)));
+        // The straight branch is no rail of the game's: not got onto.
+        let (from, to) = (p(140.0, 0.0) + Vec3::Y * 10.0, p(150.0, 2.0) + Vec3::Y * 5.0);
+        assert!(!chained.on_chain(1));
+        assert_eq!(chained.nearest(from, to, 40.0), None);
+        let alone = Rails::new(vec![Segment { start: b, end: straight }]);
+        assert_eq!(alone.nearest(from, to, 40.0).map(|h| h.segment), Some(0));
     }
 
     #[test]

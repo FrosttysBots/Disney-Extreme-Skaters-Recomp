@@ -305,7 +305,12 @@ on-ground update switches on.
   flagged `DefaultLine` (bit 2 of `+0x3F`). Ported for forks: the chain's
   way where it's one of the rails joined there, else the straightest
   (about a fifth of the forks go another way: `cargo run --release -p
-  desa_viewer --example rail_scripts -- <level>`); the end of the rail drops it off (`OffRail`). Jumping
+  desa_viewer --example rail_scripts -- <level>`). And only a node's
+  link to its next is a rail to get onto (0x800E52C4 looks along each
+  node's `+0x34` alone): a second link, 126 segments on the disc (the
+  Treehouse's `TRG_QPRail95` on to `TRG_QPRail96`, whose first link is
+  the platform's rail), is only grinded into, going back to a node's
+  previous. Ported; the end of the rail drops it off (`OffRail`). Jumping
   (0x800F5B40) turns the velocity by `Rail_Jump_Angle` (15 degrees)
   towards the held direction and blocks the rail for
   `Rail_jump_rerail_time` (300 ms; leaving it any other way,
