@@ -206,12 +206,19 @@ pub struct Physics {
     /// How fast the drawn tilt follows a new ground normal: this much of
     /// the way a 60th of a second (`Normal_Lerp_Speed`).
     pub normal_lerp_speed: f32,
+    /// In the air, the drawn tilt's sideways roll is righted at this
+    /// many degrees a second (`skater_upright_sideways_speed`, -60: the
+    /// sign is the way main.dol 0x80124240 turns).
+    pub upright_sideways_speed: f32,
     pub wall_lean_push_speed: f32,
     /// Walls felt for to each side on the ground: this far out
     /// (`Skater_side_collide_length`) from this high up
     /// (`Skater_side_collide_height`).
     pub side_collide_length: f32,
     pub side_collide_height: f32,
+    /// In the air the side feelers reach this much further
+    /// (`Skater_air_extra_side_col`).
+    pub air_extra_side_col: f32,
     pub wall_lean_push_height: f32,
     pub wall_lean_push_length: f32,
     pub wall_lean_push_time: f32,
@@ -386,9 +393,11 @@ impl Physics {
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
             normal_lerp_speed: plain("Normal_Lerp_Speed", 0.1),
+            upright_sideways_speed: -plain("skater_upright_sideways_speed", -60.0),
             wall_lean_push_speed: plain("Skate_min_wall_lean_push_speed", 1000.0),
             side_collide_length: plain("Skater_side_collide_length", 15.0),
             side_collide_height: plain("Skater_side_collide_height", 16.0),
+            air_extra_side_col: plain("Skater_air_extra_side_col", 12.0),
             wall_lean_push_height: plain("Skate_wall_lean_push_height", 30.0),
             wall_lean_push_length: plain("Skate_wall_lean_push_length", 35.0),
             wall_lean_push_time: plain("Skate_wall_lean_push_time", 0.4),

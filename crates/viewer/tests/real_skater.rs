@@ -715,3 +715,59 @@ fn spine_transfer_on_camp() {
     assert!(landed.x > -8560.0, "{landed}");
     assert!(skater.velocity.x > 0.0 && !skater.landing.backwards);
 }
+
+/// A late spine transfer on Camp: the spine button only pressed a few
+/// frames into the vert air, still rising, goes over all the same.
+#[test]
+#[ignore = "needs the game data"]
+fn late_spine_transfer_on_camp() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let files = data.load_level("camp").unwrap();
+    let mut program = Program::new();
+    for file in data.global_scripts().unwrap() {
+        program.add(&file).unwrap();
+    }
+    let physics = Physics::new(&program, &Stats::of(&program, "jessie"));
+    let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
+    let world = World::new(collision);
+    let mut skater = Skater::new(Vec3::ZERO, 0.0);
+    skater.place(
+        Vec3::new(-8816.0, -1.0, 2440.0),
+        90f32.to_radians(),
+        &physics,
+        &world,
+    );
+    let mut air_frames = 0;
+    let mut transferred = false;
+    let mut landed = None;
+    for frame in 0..180 {
+        if !skater.on_ground && skater.velocity.y > 0.0 {
+            air_frames += 1;
+        }
+        // (Up let go before the lip, where holding it breaks out.)
+        let input = Input {
+            push: frame < 20,
+            crouch: true,
+            revert: air_frames >= 4,
+            ..Input::default()
+        };
+        skater.update(input, &physics, &world, 1.0 / 60.0);
+        transferred |= skater
+            .combo_tricks
+            .tricks
+            .iter()
+            .any(|t| t.name == "Spine Transfer");
+        if frame > 30 && skater.on_ground && transferred {
+            landed = Some(skater.position);
+            break;
+        }
+    }
+    println!(
+        "late spine transfer: {transferred} after {air_frames} rising frames, landed at {landed:?}"
+    );
+    assert!(transferred, "a spine transfer");
+    let landed = landed.expect("down the other side");
+    assert!(landed.x > -8560.0, "{landed}");
+}

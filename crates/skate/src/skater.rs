@@ -1172,17 +1172,38 @@ impl Skater {
         if self.on_ground || self.grind.is_some() || self.lip.is_some() || self.wall.is_some() {
             self.lean = 0.0;
         }
-        if self.up != self.tilt.0 {
+        let flying = !self.on_ground
+            && self.grind.is_none()
+            && self.lip.is_none()
+            && self.wall.is_none()
+            && self.vert.is_none()
+            && self.skitch.is_none();
+        if flying && self.up == Vec3::Y {
+            // In the air the game doesn't ease the tilt: it rights the
+            // roll at a steady rate (0x80124240, `skater_upright_sideways_speed`).
+            let up = self.shown_up.normalize_or(Vec3::Y);
+            let angle = up.angle_between(Vec3::Y);
+            let turn = (p.upright_sideways_speed.to_radians() * STEP).min(angle);
+            let axis = up.cross(Vec3::Y);
+            if angle > 0.0 && axis.length_squared() > 1e-12 {
+                self.shown_up = Quat::from_axis_angle(axis.normalize(), turn) * up;
+            } else {
+                self.shown_up = Vec3::Y;
+            }
             self.tilt = (self.up, self.shown_up, 1.0);
-        }
-        let (to, from, left) = &mut self.tilt;
-        *left -= p.normal_lerp_speed * STEP * 60.0;
-        self.shown_up = if *left <= 0.0 {
-            *left = 0.0;
-            *to
         } else {
-            (*to + (*from - *to) * *left).normalize_or(*to)
-        };
+            if self.up != self.tilt.0 {
+                self.tilt = (self.up, self.shown_up, 1.0);
+            }
+            let (to, from, left) = &mut self.tilt;
+            *left -= p.normal_lerp_speed * STEP * 60.0;
+            self.shown_up = if *left <= 0.0 {
+                *left = 0.0;
+                *to
+            } else {
+                (*to + (*from - *to) * *left).normalize_or(*to)
+            };
+        }
         self.action_time += STEP;
         self.crouch_time = if input.crouch {
             self.crouch_time + STEP
@@ -3271,6 +3292,26 @@ impl Skater {
         }
     }
 
+    /// The side feelers in the air (0x800F9AAC from the end of the air
+    /// update, out of vert air): the same lines, `air_extra_side_col`
+    /// longer, and a wall met tries a wall ride (0x800FDB6C). (The game
+    /// also nudges the skater off a wall further than
+    /// `air_extra_side_col` out by a tenth of the rest; not ported, see
+    /// the physics notes.) Whether a wall ride started.
+    fn air_side_feelers(&mut self, input: Input, p: &Physics, world: &World) -> bool {
+        for side in [-1.0, 1.0] {
+            let left = Vec3::Y.cross(self.forward()).normalize_or_zero();
+            let from = self.position + Vec3::Y * p.side_collide_height;
+            let length = p.side_collide_length + p.air_extra_side_col;
+            if let Some(hit) = world.ray(from, from + left * side * length) {
+                if self.start_wallride(&hit, input, p, world) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// One side's feeler (0x800F9BAC, on the ground): a line from
     /// `side_collide_height` up, `side_collide_length` out to the left
     /// (`side` 1) or right (-1). A wall there (its normal within 0.25 of
@@ -3520,6 +3561,16 @@ impl Skater {
             *time += STEP;
         }
         self.air_time += STEP;
+        // A late spine transfer (0x800FCF24): rising in vert air with the
+        // spine buttons held (or, with the simplified controls, the jump
+        // button pressed since leaving the ramp), the air update runs the
+        // vert take-off again, over the spine from here.
+        if let Some(vert) = self.vert {
+            let jumped = self.simplified && input.crouch && self.crouch_time + 0.01 < self.air_time;
+            if self.transfer.is_none() && self.velocity.y > 0.0 && (input.revert || jumped) {
+                self.spine_transfer(vert.out, p, world);
+            }
+        }
         // A late ollie (`GroundGone`'s `Ollied` exception, cleared once
         // `AirTimeGreaterThan Skater_Late_Jump_Slop`): letting go of a
         // crouch just after rolling off an edge still jumps (0x800F62C4 in
@@ -3868,6 +3919,9 @@ impl Skater {
             return;
         }
         self.position = target;
+        if self.vert.is_none() && self.air_side_feelers(input, p, world) {
+            return;
+        }
         // Fell out of the level, off its edge or through a gap: well below
         // where it last stood with nothing at all underneath, or below the
         // level altogether. (The game uses its own out-of-bounds triggers,
@@ -4530,6 +4584,28 @@ mod tests {
             drawn_up(&skater),
             before
         );
+    }
+
+    #[test]
+    fn the_air_rights_a_banked_take_off_at_60_degrees_a_second() {
+        let p = physics();
+        let world = floor_and_wall();
+        let mut skater = Skater::new(Vec3::new(500.0, 2500.0, -800.0), 0.0);
+        skater.on_ground = false;
+        skater.auto_kick = false;
+        skater.set_action(Action::Air);
+        skater.velocity = Vec3::new(0.0, 600.0, 100.0);
+        // Banked 30 degrees over to the side.
+        skater.shown_up = Vec3::new(30f32.to_radians().sin(), 30f32.to_radians().cos(), 0.0);
+        for _ in 0..15 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        let left = skater.shown_up.angle_between(Vec3::Y).to_degrees();
+        assert!((left - 15.0).abs() < 0.5, "{left}");
+        for _ in 0..30 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        assert!(skater.shown_up.distance(Vec3::Y) < 1e-5);
     }
 
     #[test]

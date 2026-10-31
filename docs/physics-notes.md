@@ -94,8 +94,16 @@ on-ground update switches on.
   line from 1 to 15 out from the wall is clear, the wall event (type 6)
   and the skater 15 out from it, at the feet. So rolling along a wall
   keeps 15 off it. Ported, but for the event and an unknown flag
-  (`+0x37B0`) that skips the move; in the air the same feelers start
-  wall rides (0x800FDB6C) and nudge off by a tenth, not ported.
+  (`+0x37B0`) that skips the move. In the air (state 1, called from the
+  end of the air update out of vert air, 0x800FDB3C) the lines reach
+  `Skater_air_extra_side_col` (12) further, 27 in all, and a face met,
+  whatever its slope, first tries a wall ride (0x800FDB6C); otherwise a
+  hit more than 12 out moves the skater a tenth of the rest away from
+  it (so 0 to 1.5 a frame, nothing within 12). Ported: the wall-ride
+  start. The nudge was tried and left out: over 180 random runs it took
+  falls out of the level from 13 to 23 on Tarzan and 5 to 17 on
+  Graveyard (why isn't known; the port's lines meet faces from both
+  sides, which may not be so in the game).
 - **Pushed off walls in bails** (0x800FA3B8, every ground frame after
   the friction while `SetExtraPush` has set a radius and speed: the bail
   scripts' `radius = 48 speed = 100 Rotate = 6`, which `Baildone`
@@ -119,8 +127,8 @@ on-ground update switches on.
   `AbsolutePitchGreaterThan 60` and `PitchGreaterThan 60`: the
   skater's up (`+0x375C`, kept at landing) more than 60 degrees off
   straight up (0x80117600) and off the ground's normal (0x80117594).
-  Ported, out of vert air (`Physics_Spine_Lean_stat`, 3, is the vert
-  version, not ported). Nothing else levels the pitch on the way up: the
+  Ported, out of vert air (`Physics_Spine_Lean_stat` belongs to spine
+  transfers). Nothing else levels the pitch on the way up: the
   matrix flies off a slope as it was (0x80124240, in ordinary air, only
   rights its roll, about the facing, unless that's within 0.95 of
   vertical), so leaving a kicker nose up stays nose up. Falling, though
@@ -128,7 +136,15 @@ on-ground update switches on.
   skater whose up is under 0.9 high is turned back towards upright at
   `Physics_recover_rate_stat` (2 radians a second), so a lean only bails
   if it's built up well above the ground. Ported: the take-off's pitch
-  (its roll dropped at once) and the recovery.
+  and the recovery, and the roll righting: at
+  `skater_upright_sideways_speed` (60 degrees a second, turning the
+  matrix about its forward row while its up is more than `0.02 * dt *
+  60` along the flat side) rather than the ground's 10-frame
+  `Normal_Lerp_Speed` ease. It's skipped while any of `+0x3634+4`,
+  `+0x36E8+4`, `+0x347C` or `+0x349C` is set (not identified; the port
+  skips it in vert air, on rails, lips and walls). The port rights the
+  drawn tilt in the world, so a spin doesn't carry the roll round with
+  the body as the game's matrix does.
 - **Grind start's leftovers** (0x80109150–0x801094FC): two lines 5 to
   each side of the rail (`Rail_Bad_Ledge_Side_Dist`), from
   `Physics_Ground_Snap_Up` above to `Rail_Bad_Ledge_Drop_Down_Dist`
@@ -456,6 +472,25 @@ on-ground update switches on.
   then comes down in the far ramp's plane. Our own: the ramp being left
   is also looked for 3 and 6 out (a skater can leave a hair past the
   face).
+  The air update (0x800FCF24) runs the vert take-off again while rising
+  in vert air (`+0x3638`) with both shoulder buttons held, or, without
+  `HawkControls`, X pressed more than 10 ms after the skater's state
+  last changed (`+0x37A4`), unless a transfer's under way: so a spine
+  transfer can be started late, on the way up. Ported. (While
+  `+0x365C` is set, the ground's flag that the vert take-off clears,
+  it instead runs it whenever a line along the skater's up from 1 above
+  to 23 below finds nothing, and clears the flag once up's been held
+  over `Skater_vert_active_up_time` or after
+  `Skater_Vert_Allow_break_Time`; not ported: the vert take-off clears
+  it, at 0x800F28A0, so it's only set in vert air reached another way.)
+  The transfer also sets `+0x36EC` and stores the flat way across
+  crossed with straight up in `[+0x698]+0xD4`; while that's set, the
+  lean code (0x800EFD50) turns the matrix about it at
+  `Physics_Spine_Lean_stat` (3 radians a second) until its up is below
+  -0.05, so the skater, facing up off the near ramp, rolls over the
+  spine (about 180 degrees, a second) onto the far ramp's face. Not
+  ported: the port draws vert air upright rather than with the game's
+  matrix.
   Not ported: the spin axis. The autoturn: taking off into vert air
   (0x800F12A4) keeps the skater's facing with its height negated
   (`+0x39B8`) and sets `+0x36B8`. The spin code (0x800EE4CC), with
@@ -495,7 +530,8 @@ on-ground update switches on.
   11 faces in the whole game are wall-ridable (all in the canyon:
   `cargo run --release -p desa_viewer --example face_flags`), and no
   character has the `WallRide*` animations the `WallRide` script plays:
-  it's left over from the engine. Not ported.
+  it's left over from the engine. Ported anyway (crouching in place of
+  the missing animations), from the air's wall line and side feelers.
 - **Balance** (manuals, grinds, lips): 0x800CAA50 starts a balance trick,
   0x800CAD30 updates it, called from the ground, rail and lip updates.
   Each change is scaled by the frame's length in 60ths of a second
