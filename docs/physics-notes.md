@@ -108,6 +108,19 @@ on-ground update switches on.
   wall met it turns towards that wall's normal at `Rotate` radians a
   second, no further. Ported (the skater's bails, with the scripts'
   values).
+- **Leaning in the air** (0x800EFD50, from the air update): with no
+  trick button held (just Square with the full controls, `+0x3A3C`;
+  Square, Triangle or Circle with the simplified ones), up held longer
+  than `Physics_Air_No_Lean_Time` (200 ms) leans the skater forward at
+  `Physics_Air_Lean_stat` (1 radian a second), down back (down wins;
+  not with `+0x36F8` set), turning its matrix about its own side
+  (0x800065F0); the ramp-up over `Physics_Air_Ramp_Lean_Time` can't
+  apply (it ends as the wait does). `Land` then bails (`PitchBail`) if
+  `AbsolutePitchGreaterThan 60` and `PitchGreaterThan 60`: the
+  skater's up (`+0x375C`, kept at landing) more than 60 degrees off
+  straight up (0x80117600) and off the ground's normal (0x80117594).
+  Ported, out of vert air (`Physics_Spine_Lean_stat`, 3, is the vert
+  version, not ported).
 - **Grind start's leftovers** (0x80109150–0x801094FC): two lines 5 to
   each side of the rail (`Rail_Bad_Ledge_Side_Dist`), from
   `Physics_Ground_Snap_Up` above to `Rail_Bad_Ledge_Drop_Down_Dist`

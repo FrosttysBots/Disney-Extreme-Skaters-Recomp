@@ -134,7 +134,7 @@ around takes over from wherever it is.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
-| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind (in the air), stop |
+| W / S, A / D, Space, E, Esc | While skating: push, brake (in the air, lean forward or back), steer, crouch (let go to ollie), grind (in the air), stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
 | F + W / S / A / D | On the ground or in a manual: manuals 2 to 5 (each character has five) |
 | W / S / A / D with E | Onto a rail: grinds 2 to 5 (none: grind 1) |
@@ -150,7 +150,7 @@ around takes over from wherever it is.
 | F12 | Save a picture of the window to `Pictures\DESA Map Viewer` |
 
 A gamepad works too while skating, laid out like the GameCube game: the
-left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
+left stick or D-pad steers (up pushes, down brakes; in the air they lean), A crouches and ollies,
 X flips, B grabs, Y grinds, the shoulder buttons revert, the right stick
 looks round and Start pauses. It rumbles
 where the game's does (ollies, landings, grinds, reverts, flails, bails);

@@ -351,6 +351,9 @@ pub struct Skater {
     /// straight across, `Normal_Lerp_Speed` of the way a 60th of a
     /// second.
     pub shown_up: Vec3,
+    /// Leant forward (or back, negative) in the air, about the skater's
+    /// side, in radians (0x800EFD50's lean of the matrix).
+    pub lean: f32,
     /// The normal the drawn tilt is heading for, where it set off from,
     /// and how much of the way is left (1 to 0).
     tilt: (Vec3, Vec3, f32),
@@ -580,6 +583,7 @@ impl Skater {
             heading,
             up: Vec3::Y,
             shown_up: Vec3::Y,
+            lean: 0.0,
             tilt: (Vec3::Y, Vec3::Y, 0.0),
             on_ground: true,
             action: Action::Standing,
@@ -1115,7 +1119,8 @@ impl Skater {
         };
         let yaw = Quat::from_rotation_y(self.heading + spin);
         let tilt = Quat::from_rotation_arc(Vec3::Y, self.shown_up.normalize_or(Vec3::Y));
-        Mat4::from_scale_rotation_translation(Vec3::splat(scale), tilt * yaw, self.position)
+        let lean = Quat::from_rotation_x(self.lean);
+        Mat4::from_scale_rotation_translation(Vec3::splat(scale), tilt * yaw * lean, self.position)
     }
 
     /// Advances `dt` seconds in fixed steps.
@@ -1161,6 +1166,10 @@ impl Skater {
     }
 
     fn step(&mut self, input: Input, p: &Physics, world: &World) {
+        // (The air lean only lasts the flight.)
+        if self.on_ground || self.grind.is_some() || self.lip.is_some() || self.wall.is_some() {
+            self.lean = 0.0;
+        }
         if self.up != self.tilt.0 {
             self.tilt = (self.up, self.shown_up, 1.0);
         }
@@ -3496,6 +3505,22 @@ impl Skater {
         if !input.crouch {
             self.crouched = false;
         }
+        // Leaning (0x800EFD50, out of vert air): with no trick button held
+        // (just Square with the full controls), up or down held
+        // `air_no_lean_time` (down if both) tips the skater forward or back
+        // about its side at `air_lean`.
+        let tricking = input.flip || (self.simplified && (input.grab || input.grind));
+        if self.action == Action::Air && self.vert.is_none() && !tricking {
+            let held = |on: bool, since: f32| on && since > p.air_no_lean_time;
+            let rate = if held(input.brake, self.since_down) {
+                -p.air_lean
+            } else if held(input.push, self.since_up) {
+                p.air_lean
+            } else {
+                0.0
+            };
+            self.lean += rate * STEP;
+        }
         self.since_car_plant = (self.since_car_plant + STEP).min(f32::MAX);
         // Landing within the next 0.2 seconds (`GetAirTimeLeft`)?
         let fall = self.velocity.y.min(0.0) * 0.2 + 0.5 * p.air_gravity * 0.04;
@@ -3711,16 +3736,26 @@ impl Skater {
                     // `LaunchPanelMessage "&C1Sketchy"`.
                     self.message = Some(("Sketchy".into(), MESSAGE_TIME));
                 }
+                // Landing leant over (`Land`'s `AbsolutePitchGreaterThan 60`
+                // and `PitchGreaterThan 60`: the skater's up more than 60
+                // degrees off straight up and off the ground's normal):
+                // `PitchBail`.
+                let leant = Quat::from_rotation_y(self.heading)
+                    * Quat::from_rotation_x(self.lean)
+                    * Vec3::Y;
+                let cos60 = 60f32.to_radians().cos();
+                let pitch_bail = leant.y < cos60 && leant.dot(hit.normal) < cos60;
+                self.lean = 0.0;
                 // Landing sideways at speed: `YawBail` (faster than 500,
                 // 60 to 120 degrees off).
-                let yaw_bail = flat.length() > 500.0 && yaw >= 60.0;
+                let bad_landing = pitch_bail || (flat.length() > 500.0 && yaw >= 60.0);
                 // Landing mid-trick (`BailOn`): a bail; with the simplified
                 // controls, the combo lost instead (`ClearPanel_Bailed`).
-                if self.simplified && self.bail_on() && !yaw_bail {
+                if self.simplified && self.bail_on() && !bad_landing {
                     self.trick = None;
                     self.end_combo(false);
                 }
-                if self.bail_on() || yaw_bail {
+                if self.bail_on() || bad_landing {
                     self.trick = None;
                     self.end_combo(false);
                     let backwards = self.landing.backwards;
@@ -4420,6 +4455,44 @@ mod tests {
             repaired_fields: 0,
             repaired_bsp_fields: 0,
         })
+    }
+
+    #[test]
+    fn leaning_too_far_in_the_air_bails_the_landing() {
+        let p = physics();
+        let world = floor_and_wall();
+        // A long flight (about two seconds), holding up for `hold`.
+        let fly = |hold: f32| {
+            let mut skater = Skater::new(Vec3::new(500.0, 50.0, -800.0), 0.0);
+            skater.on_ground = false;
+            skater.auto_kick = false;
+            skater.set_action(Action::Air);
+            skater.velocity = Vec3::new(0.0, 900.0, 100.0);
+            let mut time = 0.0;
+            let mut most = 0.0f32;
+            for _ in 0..300 {
+                let input = Input {
+                    push: time < hold,
+                    ..Input::default()
+                };
+                skater.update(input, &p, &world, STEP);
+                most = most.max(skater.lean);
+                time += STEP;
+                if skater.on_ground {
+                    break;
+                }
+            }
+            (skater.action, most)
+        };
+        // Up for 1.5 s: past 60 degrees forward (1 radian a second after
+        // the first 0.2), down in a bail.
+        let (action, most) = fly(1.5);
+        assert!(most > 1.1, "{most}");
+        assert_eq!(action, Action::Bail);
+        // A little lean lands.
+        let (action, most) = fly(0.6);
+        assert!(most > 0.3 && most < 0.5, "{most}");
+        assert_ne!(action, Action::Bail);
     }
 
     #[test]

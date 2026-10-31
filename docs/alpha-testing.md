@@ -123,6 +123,9 @@ skater is and what it's doing.
   it still goes (a third of a second's grace).
 - Spins in the air start once the turn's been held a tenth of a
   second, so a quick tap no longer twitches you round.
+- Leaning in the air: hold up or down (with no trick button) to lean
+  forward or back, as for coming down a slope; lean too far (past 60
+  degrees) and the landing bails.
 - Rails that come and go: a level's rails that its scripts create later
   (Zurg's stepping stones once he's beaten, the goals' own rails) can't
   be grinded until they're there.
