@@ -52,7 +52,8 @@ fn main() {
                 end: r.end,
             })
             .collect(),
-    );
+    )
+    .with_chain(nodes.rail_chain.clone());
     let world = World::new(collision).with_rails(rails.clone());
     let dt = 1.0 / 60.0;
 

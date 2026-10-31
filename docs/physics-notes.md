@@ -298,7 +298,14 @@ on-ground update switches on.
   (50 degrees), measured from above (0x80102628 zeroes both ways'
   heights, so a rail dropping steeply ahead is carried on), or the next
   node isn't there (bit 4 of its flags, `CreatedAtStart` or a script's
-  `Create`); the end of the rail drops it off (`OffRail`). Jumping
+  `Create`). The next and previous nodes are a chain built at load
+  (0x800E5C40 walks the rail nodes in order, 0x800E4400 links each to
+  its first four links): a node's next is the first rail node it links
+  to, its previous the first linking to it, unless a later one is
+  flagged `DefaultLine` (bit 2 of `+0x3F`). Ported for forks: the chain's
+  way where it's one of the rails joined there, else the straightest
+  (about a fifth of the forks go another way: `cargo run --release -p
+  desa_viewer --example rail_scripts -- <level>`); the end of the rail drops it off (`OffRail`). Jumping
   (0x800F5B40) turns the velocity by `Rail_Jump_Angle` (15 degrees)
   towards the held direction and blocks the rail for
   `Rail_jump_rerail_time` (300 ms; leaving it any other way,

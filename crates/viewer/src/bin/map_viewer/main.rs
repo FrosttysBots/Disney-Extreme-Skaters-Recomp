@@ -475,7 +475,8 @@ fn load_level(
                     })
                     .collect(),
             )
-            .with_lip_override(nodes.rails.iter().filter(|r| r.lip_override).map(|r| r.node)))
+            .with_lip_override(nodes.rails.iter().filter(|r| r.lip_override).map(|r| r.node))
+            .with_chain(nodes.rail_chain.clone()))
         })
         .map(|mut world| {
             // Rails waiting for a script to create them.

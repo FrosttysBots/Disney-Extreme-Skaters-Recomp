@@ -1,6 +1,6 @@
 //! Lists a level's rail nodes with trigger scripts:
 //! `cargo run --example rail_scripts -- Tarzan_Treehouse`; also counts the
-//! segments from `LipOverride` nodes.
+//! segments from `LipOverride` nodes and the forks.
 use std::path::Path;
 
 fn main() {
@@ -30,6 +30,24 @@ fn main() {
         named,
         nodes.rails.len()
     );
+    // Forks, and those where the game's chain goes another way than
+    // straightest on.
+    let segments = |r: &desa_viewer::nodes::RailSegment| skate::rails::Segment {
+        start: r.start,
+        end: r.end,
+    };
+    let plain = skate::rails::Rails::named(nodes.rails.iter().map(|r| (segments(r), r.node)).collect());
+    let chained = plain.clone().with_chain(nodes.rail_chain.clone());
+    let (mut forks, mut differ) = (0, 0);
+    for i in 0..plain.segments.len() {
+        for forwards in [true, false] {
+            if plain.joins(i, forwards).count() > 1 {
+                forks += 1;
+                differ += usize::from(plain.next(i, forwards) != chained.next(i, forwards));
+            }
+        }
+    }
+    println!("{forks} forks, {differ} going another way by the game's chain");
     let wide: Vec<_> = nodes.rails.iter().filter(|r| r.lip_override).collect();
     println!(
         "{} LipOverride segments, {} unnamed",

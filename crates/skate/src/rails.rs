@@ -50,6 +50,11 @@ pub struct Rails {
     /// main.dol 0x801CFC74). Their segments can't be got onto or
     /// grinded into.
     pub absent: HashSet<u32>,
+    /// The game's chain of rail nodes: each node's position with its next
+    /// and previous nodes' (main.dol 0x800E4400: the first link each way,
+    /// or a `DefaultLine` node's). Where rails fork, grinding takes the
+    /// way the chain goes.
+    pub chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>,
 }
 
 /// Ends closer than this are the same node.
@@ -93,6 +98,7 @@ impl Rails {
             moving: 0,
             lip_override: HashSet::new(),
             absent: HashSet::new(),
+            chain: Vec::new(),
         }
     }
 
@@ -116,6 +122,12 @@ impl Rails {
     /// Whether segment `i`'s node is flagged `LipOverride`.
     pub fn lip_override(&self, i: usize) -> bool {
         self.node(i).is_some_and(|n| self.lip_override.contains(&n))
+    }
+
+    /// The game's rail chain (see [`Rails::chain`]).
+    pub fn with_chain(mut self, chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>) -> Self {
+        self.chain = chain;
+        self
     }
 
     /// Creates (or kills) the named rail node, as a script's `Create`.
@@ -214,11 +226,30 @@ impl Rails {
     }
 
     /// Of the segments there joined on at `segment`'s end (or start,
-    /// going backwards), the one carrying on straightest; and whether it
-    /// runs the same way.
+    /// going backwards), the one the game's chain goes on to (the node's
+    /// next going the way the rail runs, its previous the other way),
+    /// else the one carrying on straightest; and whether it runs the same
+    /// way.
     pub fn next(&self, segment: usize, forwards: bool) -> Option<(usize, bool)> {
-        let travel = self.segments[segment].direction() * if forwards { 1.0 } else { -1.0 };
-        self.joins(segment, forwards).filter(|&(i, _)| self.present(i)).max_by(|&(a, sa), &(b, sb)| {
+        let this = self.segments[segment];
+        let at = if forwards { this.end } else { this.start };
+        let joins: Vec<_> = self.joins(segment, forwards).filter(|&(i, _)| self.present(i)).collect();
+        let chained = self
+            .chain
+            .iter()
+            .find(|(node, ..)| node.distance(at) < JOIN)
+            .and_then(|&(_, next, prev)| if forwards { next } else { prev });
+        if let Some(to) = chained.filter(|_| joins.len() > 1) {
+            let toward = joins.iter().find(|&&(i, same)| {
+                let s = self.segments[i];
+                (if same { s.end } else { s.start }).distance(to) < JOIN
+            });
+            if let Some(&join) = toward {
+                return Some(join);
+            }
+        }
+        let travel = this.direction() * if forwards { 1.0 } else { -1.0 };
+        joins.into_iter().max_by(|&(a, sa), &(b, sb)| {
             let along = |i: usize, same: bool| {
                 self.segments[i].direction().dot(travel) * if same { 1.0 } else { -1.0 }
             };
@@ -310,6 +341,24 @@ mod tests {
         assert_eq!(r.next(0, true), Some((1, true)));
         assert_eq!(r.next(1, false), Some((0, false)));
         assert_eq!(r.next(0, false), None);
+    }
+
+    #[test]
+    fn forks_go_the_way_the_chain_goes() {
+        let p = |x: f32, z: f32| Vec3::new(x, 20.0, z);
+        let (a, b, straight, side) = (p(0.0, 0.0), p(100.0, 0.0), p(200.0, 0.0), p(170.0, 70.0));
+        let segments = vec![
+            Segment { start: a, end: b },
+            Segment { start: b, end: straight },
+            Segment { start: b, end: side },
+        ];
+        assert_eq!(Rails::new(segments.clone()).next(0, true), Some((1, true)));
+        // The fork's node is chained on to the side branch (its first
+        // link), and back to the start.
+        let chained = Rails::new(segments).with_chain(vec![(a, Some(b), None), (b, Some(side), Some(a))]);
+        assert_eq!(chained.next(0, true), Some((2, true)));
+        // Coming back along the side branch, its node's previous: the start.
+        assert_eq!(chained.next(2, false), Some((0, false)));
     }
 
     #[test]

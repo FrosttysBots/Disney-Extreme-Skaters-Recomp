@@ -190,6 +190,10 @@ impl ObjectNode {
 #[derive(Default)]
 pub struct LevelNodes {
     pub rails: Vec<RailSegment>,
+    /// The game's rail chain: each rail node's position, and those of its
+    /// next and previous nodes, which grinding follows where rails fork
+    /// (see [`skate::rails::Rails::chain`]).
+    pub rail_chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>,
     pub spawns: Vec<Spawn>,
     pub objects: Vec<ObjectNode>,
     /// Name checksums of scene sectors that aren't there at the start.
@@ -334,6 +338,38 @@ impl LevelNodes {
                 out.labels.insert(name, label);
             }
         }
+        // The game links rail nodes into a chain (main.dol 0x800E5C40, in
+        // the array's order, each node's first four links; 0x800E4400): a
+        // node's next is the first rail it links to, its previous the
+        // first linking to it, unless a later one is flagged
+        // `DefaultLine`.
+        let default_line: Vec<Option<bool>> = nodes
+            .iter()
+            .map(|n| (class_of(n) == Some(key("RailNode"))).then(|| n.has_flag(key("DefaultLine"))))
+            .collect();
+        let mut next = vec![None; nodes.len()];
+        let mut prev = vec![None; nodes.len()];
+        for a in 0..nodes.len() {
+            let Some(a_default) = default_line[a] else {
+                continue;
+            };
+            for &b in out.nodes[a].links.iter().take(4) {
+                let Some(b_default) = default_line[b] else {
+                    continue;
+                };
+                if next[a].is_none() || b_default {
+                    next[a] = Some(b);
+                }
+                if prev[b].is_none() || a_default {
+                    prev[b] = Some(a);
+                }
+            }
+        }
+        let at = |i: Option<usize>| i.and_then(|i| out.nodes[i].position);
+        out.rail_chain = (0..nodes.len())
+            .filter(|&i| default_line[i].is_some())
+            .filter_map(|i| Some((out.nodes[i].position?, at(next[i]), at(prev[i]))))
+            .collect();
         for (index, node) in nodes.iter().enumerate() {
             let Some(pos) = position(node).map(Vec3::from) else {
                 continue;
