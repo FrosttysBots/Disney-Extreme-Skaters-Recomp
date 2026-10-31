@@ -114,6 +114,15 @@ skater is and what it's doing.
   each gate adding its seconds.
 - Toy cars (Andy's Room): jump into one near its roof for a "Car Plant"
   and a boost up and on; run into a fast one and it knocks you over.
+- Skating along walls and into corners: rolling beside a wall keeps
+  you 15 off it, steering into one when slow eases you off it, and a
+  corner turns you right round, as in the game.
+- Bails near walls: you're pushed off them and turned away while you
+  get up, with the game's thump and rustle.
+- A late ollie: let go of the jump just after rolling off an edge and
+  it still goes (a third of a second's grace).
+- Spins in the air start once the turn's been held a tenth of a
+  second, so a quick tap no longer twitches you round.
 - Rails that come and go: a level's rails that its scripts create later
   (Zurg's stepping stones once he's beaten, the goals' own rails) can't
   be grinded until they're there.
