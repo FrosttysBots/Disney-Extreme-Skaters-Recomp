@@ -2466,6 +2466,7 @@ impl Skater {
     }
 
     fn ground_step(&mut self, input: Input, p: &Physics, world: &World) {
+        let start = self.position;
         // (A spin tap's half turn stops on landing.)
         self.tap_spin = 0.0;
         // `Handbrake`: braking for 1.4 seconds steps off the board (rolling
@@ -3112,9 +3113,56 @@ impl Skater {
             Action::Standing
         };
         if self.on_ground && self.skitch.is_none() {
+            self.side_collide(start, p, world);
             self.wall_lean_push(input, p, world);
         }
         self.set_action(action);
+    }
+
+    /// Walls at the skater's sides (main.dol 0x800F9AAC): felt for to the
+    /// right, then the left (or the left, then the right), and if both
+    /// sides meet one, left as it was.
+    fn side_collide(&mut self, start: Vec3, p: &Physics, world: &World) {
+        let moved = self.position;
+        let squeezed = if self.side_wall(-1.0, start, p, world) {
+            self.side_wall(1.0, start, p, world)
+        } else {
+            self.side_wall(1.0, start, p, world) && self.side_wall(-1.0, start, p, world)
+        };
+        if squeezed {
+            self.position = moved;
+        }
+    }
+
+    /// One side's feeler (0x800F9BAC, on the ground): a line from
+    /// `side_collide_height` up, `side_collide_length` out to the left
+    /// (`side` 1) or right (-1). A wall there (its normal within 0.25 of
+    /// level, to the skater) puts the skater back where it started the
+    /// frame, turned a fifth of a bounce away from it (0x800F6860 with
+    /// 0.2); then, with room `side_collide_length` out from the wall,
+    /// there, at the feet. Whether a wall was met there with room.
+    fn side_wall(&mut self, side: f32, start: Vec3, p: &Physics, world: &World) -> bool {
+        let up = self.up.normalize_or(Vec3::Y);
+        let left = up.cross(self.forward()).normalize_or_zero();
+        let from = self.position + up * p.side_collide_height;
+        let Some(hit) = world.ray(from, from + left * side * p.side_collide_length) else {
+            return false;
+        };
+        if hit.normal.dot(up).abs() >= 0.25 {
+            return false;
+        }
+        self.position = start;
+        let (turn, _) = wall_bounce(self.forward(), up, hit.normal, p);
+        let turn = turn * 0.2;
+        self.heading += turn;
+        self.velocity = Quat::from_rotation_y(turn) * self.velocity;
+        let out = hit.point + hit.normal;
+        let room = hit.point + hit.normal * p.side_collide_length;
+        if world.ray(out, room).is_some() {
+            return false;
+        }
+        self.position = room - up * p.side_collide_height;
+        true
     }
 
     /// Steering into a wall while slow (main.dol 0x800F9664, on the ground
@@ -4346,6 +4394,23 @@ mod tests {
         fast.velocity = Vec3::new(0.0, 500.0, 200.0);
         fast.update(Input::default(), &p, &world, STEP);
         assert_eq!(fast.heading, -FRAC_PI_2);
+    }
+
+    #[test]
+    fn rolling_along_a_wall_keeps_off_it() {
+        let p = physics();
+        let world = floor_and_wall();
+        // Rolling along the wall at x = 0, 10 from it on the left.
+        let mut skater = Skater::new(Vec3::new(-10.0, 0.0, 0.0), 0.0);
+        skater.on_ground = true;
+        skater.auto_kick = false;
+        skater.velocity = Vec3::Z * 300.0;
+        for _ in 0..10 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        // Put 15 out (`Skater_side_collide_length`), still going along.
+        assert!((skater.position.x + 15.0).abs() < 1.0, "{}", skater.position);
+        assert!(skater.position.z > 30.0, "{}", skater.position);
     }
 
     #[test]

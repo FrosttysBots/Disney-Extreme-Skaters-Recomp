@@ -81,11 +81,21 @@ on-ground update switches on.
   long once held `Skate_wall_lean_push_time` (0.4 s), less before. Into
   a wall, the skater moves by how far it went in, along the wall's
   normal (0x80009D00), unless a line 1 up that way hits something.
-  Ported. Just before it, 0x800F9AAC feels 15
-  (`Skater_side_collide_length`) to each side at 16 up through
-  0x800F9BAC, nudging off walls
-  and turning away (0x800F6860) when no turn's held, and puts the
-  skater back if both sides hit; not ported.
+  Ported.
+- **Side walls** (0x800F9AAC, just before the lean push): feels to the
+  right, then the left (0x800F9BAC; the left first if the right's
+  clear), and if both sides meet a wall leaves the skater where it
+  moved to. Each feeler, on the ground, is a line from
+  `Skater_side_collide_height` (16) up out `Skater_side_collide_length`
+  (15) along the side row; a face there within 0.25 of level (its
+  normal on the skater's up) puts the skater back at the frame's start
+  (`+0x24`), turned a fifth of a wall bounce away (0x800F6860 with 0.2:
+  the bounce angle times `Wall_Bounce_Angle_Multiplier`), then, if a
+  line from 1 to 15 out from the wall is clear, the wall event (type 6)
+  and the skater 15 out from it, at the feet. So rolling along a wall
+  keeps 15 off it. Ported, but for the event and an unknown flag
+  (`+0x37B0`) that skips the move; in the air the same feelers start
+  wall rides (0x800FDB6C) and nudge off by a tenth, not ported.
 - **Cars** (0x8010D6F4, the skater meeting a vehicle): in the air with
   the feet no more than `min_car_height_diff` (60) below its top
   (`min_car_height_downwards`, 30, falling), `CarPlant`: "Car Plant" for

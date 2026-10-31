@@ -186,6 +186,11 @@ pub struct Physics {
     /// `Skate_wall_lean_push_length`, over the first
     /// `Skate_wall_lean_push_time` (seconds) the turn's held.
     pub wall_lean_push_speed: f32,
+    /// Walls felt for to each side on the ground: this far out
+    /// (`Skater_side_collide_length`) from this high up
+    /// (`Skater_side_collide_height`).
+    pub side_collide_length: f32,
+    pub side_collide_height: f32,
     pub wall_lean_push_height: f32,
     pub wall_lean_push_length: f32,
     pub wall_lean_push_time: f32,
@@ -354,6 +359,8 @@ impl Physics {
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
             wall_lean_push_speed: plain("Skate_min_wall_lean_push_speed", 1000.0),
+            side_collide_length: plain("Skater_side_collide_length", 15.0),
+            side_collide_height: plain("Skater_side_collide_height", 16.0),
             wall_lean_push_height: plain("Skate_wall_lean_push_height", 30.0),
             wall_lean_push_length: plain("Skate_wall_lean_push_length", 35.0),
             wall_lean_push_time: plain("Skate_wall_lean_push_time", 0.4),
