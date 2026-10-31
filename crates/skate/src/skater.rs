@@ -1306,8 +1306,7 @@ impl Skater {
             // The button held (main.dol 0x80108558: Triangle with the pro
             // controls); with the simplified controls, any trick button
             // held or pressed within `Skater_regrind_time` (0x80108568).
-            let armed =
-                input.grind || (self.simplified && self.since_grind <= p.regrind_time);
+            let armed = input.grind || (self.simplified && self.since_grind <= p.regrind_time);
             let falling_bail = matches!(self.action, Action::BailFall { .. });
             // (Back onto the rail just left, or one joined to it, only after
             // its rerail time, 0x8010852C; any other at once. Off a lip,
@@ -1332,7 +1331,15 @@ impl Skater {
                     // flat against a steep ramp, facing up and rising).
                     let level = world.rails.segments[hit.segment].direction().y.abs() < 0.3;
                     match self.vert {
-                        Some(vert) if self.velocity.y > 0.0 && level && self.lip_allowed(vert, world.rails.lip_override(hit.segment), p) => {
+                        Some(vert)
+                            if self.velocity.y > 0.0
+                                && level
+                                && self.lip_allowed(
+                                    vert,
+                                    world.rails.lip_override(hit.segment),
+                                    p,
+                                ) =>
+                        {
                             self.start_lip(hit.point, vert.out, p);
                             if self.lip.is_some() {
                                 self.rail_node = None;
@@ -1745,7 +1752,11 @@ impl Skater {
     /// flagged `LipOverride` allows `LipAllowAngle_Override` instead.
     fn lip_allowed(&self, vert: VertAir, wide: bool, p: &Physics) -> bool {
         let into = -Vec3::new(vert.out.x, 0.0, vert.out.z).normalize_or_zero();
-        let angle = if wide { p.lip_allow_angle_override } else { p.lip_allow_angle };
+        let angle = if wide {
+            p.lip_allow_angle_override
+        } else {
+            p.lip_allow_angle
+        };
         self.forward().dot(into) > angle.to_radians().cos()
     }
 
@@ -1960,8 +1971,7 @@ impl Skater {
     fn jump_speed(&self, p: &Physics) -> f32 {
         let tense = (self.crouch_time / p.max_tense_time).min(1.0);
         // (Off a vert face, the air jump speeds: 0x800F62C4.)
-        let on_vert =
-            self.on_ground && self.ground_flags & ngc_collision::face_flags::VERT != 0;
+        let on_vert = self.on_ground && self.ground_flags & ngc_collision::face_flags::VERT != 0;
         let (top, min) = if on_vert {
             (p.air_jump_speed, p.air_jump_speed_min)
         } else {
@@ -2952,7 +2962,10 @@ impl Skater {
                     // the new way, `forward_collision_length` long): turned
                     // right round from the way it came instead.
                     let from = target + lift;
-                    if world.ray(from, from + forward * p.forward_collision_length).is_some() {
+                    if world
+                        .ray(from, from + forward * p.forward_collision_length)
+                        .is_some()
+                    {
                         self.heading += PI - turn;
                         let flat = self.forward();
                         forward = (flat - up * flat.dot(up)).normalize_or(flat);
@@ -3052,7 +3065,15 @@ impl Skater {
                         from,
                         first.map(|h| (h.point, h.normal, is_wall(&h, p))),
                         past.map(|h| (h.point, h.normal, is_wall(&h, p))),
-                        past.map(|h| sticks_at(&h, self.position, target, forward, up, p, stick_angle)),
+                        past.map(|h| sticks_at(
+                            &h,
+                            self.position,
+                            target,
+                            forward,
+                            up,
+                            p,
+                            stick_angle
+                        )),
                     );
                 }
                 // The ground is gone: off an edge, or over the lip of a
@@ -3550,7 +3571,8 @@ impl Skater {
                 if !ground && !ramp && self.start_wallride(&hit, input, p, world) {
                     return;
                 }
-                if !ground && !ramp && (self.car_plant(&hit, p, world) || self.car_hit(&hit, world)) {
+                if !ground && !ramp && (self.car_plant(&hit, p, world) || self.car_hit(&hit, world))
+                {
                     return;
                 }
                 if !ground && !ramp {
@@ -4385,7 +4407,11 @@ mod tests {
         // Out of it, heading back the way it came.
         let away = skater.position.x.min(skater.position.z);
         assert!(away < -40.0, "{} {:?}", skater.position, skater.velocity);
-        assert!(skater.velocity.x < 0.0 && skater.velocity.z < 0.0, "{:?}", skater.velocity);
+        assert!(
+            skater.velocity.x < 0.0 && skater.velocity.z < 0.0,
+            "{:?}",
+            skater.velocity
+        );
     }
 
     #[test]
@@ -4437,7 +4463,10 @@ mod tests {
             let mut skater = Skater::new(Vec3::ZERO, 0.0);
             let way = Quat::from_rotation_y(degrees.to_radians()) * -Vec3::X;
             skater.heading = way.x.atan2(way.z);
-            (skater.lip_allowed(vert, false, &p), skater.lip_allowed(vert, true, &p))
+            (
+                skater.lip_allowed(vert, false, &p),
+                skater.lip_allowed(vert, true, &p),
+            )
         };
         assert_eq!(facing(0.0), (true, true));
         assert_eq!(facing(30.0), (true, true));
@@ -4475,7 +4504,13 @@ mod tests {
         assert!(skater.lip.is_none());
         assert_eq!(skater.vert.map(|v| v.out), Some(-Vec3::X));
         assert!((skater.position.x + 12.0).abs() < 0.01);
-        assert!(skater.combo_tricks.tricks.iter().any(|t| t.name == "Spine Transfer"));
+        assert!(
+            skater
+                .combo_tricks
+                .tricks
+                .iter()
+                .any(|t| t.name == "Spine Transfer")
+        );
         // A deck (the floor) or a plain wall behind: `LipBail` instead.
         let deck = floor_and_wall();
         let mut skater = Skater::new(Vec3::new(500.0, 10.0, 0.0), 0.0);
@@ -4519,7 +4554,11 @@ mod tests {
         }
         // Turned away from it (at 6 radians a second) and pushed off it,
         // till out of the lines' reach.
-        assert!(before > 0.99 && skater.forward().x < 0.8, "{:?}", skater.forward());
+        assert!(
+            before > 0.99 && skater.forward().x < 0.8,
+            "{:?}",
+            skater.forward()
+        );
         assert!(skater.position.x < -35.0, "{}", skater.position);
     }
 
@@ -4574,7 +4613,11 @@ mod tests {
             skater.update(Input::default(), &p, &world, STEP);
         }
         // Put 15 out (`Skater_side_collide_length`), still going along.
-        assert!((skater.position.x + 15.0).abs() < 1.0, "{}", skater.position);
+        assert!(
+            (skater.position.x + 15.0).abs() < 1.0,
+            "{}",
+            skater.position
+        );
         assert!(skater.position.z > 30.0, "{}", skater.position);
     }
 
@@ -4664,7 +4707,11 @@ mod tests {
         let mut planted = false;
         for _ in 0..30 {
             skater.update(Input::default(), &p, &world, STEP);
-            planted |= skater.combo_tricks.tricks.iter().any(|t| t.name == "Car Plant");
+            planted |= skater
+                .combo_tricks
+                .tricks
+                .iter()
+                .any(|t| t.name == "Car Plant");
             if planted {
                 break;
             }
@@ -4738,7 +4785,11 @@ mod tests {
             skater.update(grind, &p, &world, STEP);
         }
         assert!(skater.grind.is_some(), "still grinding");
-        assert!((skater.position.x - x).abs() < 3.0, "{} vs {x}", skater.position.x);
+        assert!(
+            (skater.position.x - x).abs() < 3.0,
+            "{} vs {x}",
+            skater.position.x
+        );
     }
 
     #[test]

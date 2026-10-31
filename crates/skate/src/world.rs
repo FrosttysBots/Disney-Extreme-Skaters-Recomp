@@ -79,7 +79,11 @@ impl World {
 
     /// Adds a vehicle's own collision (its model's, in its own space), as
     /// one object `checksum` to place where the vehicle is.
-    pub fn add_vehicle_collision(&mut self, checksum: u32, objects: &[ngc_collision::CollisionObject]) {
+    pub fn add_vehicle_collision(
+        &mut self,
+        checksum: u32,
+        objects: &[ngc_collision::CollisionObject],
+    ) {
         for object in objects {
             let mut object = object.clone();
             object.checksum = checksum;
@@ -95,7 +99,11 @@ impl World {
 
     /// The top of a collision object, where it is now.
     pub fn object_top(&self, object: u32) -> Option<f32> {
-        let placed = self.placed.get(&object).map(|(m, _)| *m).unwrap_or(Mat4::IDENTITY);
+        let placed = self
+            .placed
+            .get(&object)
+            .map(|(m, _)| *m)
+            .unwrap_or(Mat4::IDENTITY);
         self.collision
             .objects
             .iter()

@@ -34,7 +34,8 @@ use crate::collision::ColorVertex;
 /// with its start node's name.
 pub fn rails_in(nodes: &[Value]) -> Vec<(Vec3, Vec3, u32)> {
     let key = checksum;
-    let rail = |node: &Value| node.get(key("Class")).and_then(Value::as_name) == Some(key("RailNode"));
+    let rail =
+        |node: &Value| node.get(key("Class")).and_then(Value::as_name) == Some(key("RailNode"));
     let position = |node: &Value| {
         node.get(key("Position"))
             .and_then(Value::as_vector)
@@ -42,9 +43,14 @@ pub fn rails_in(nodes: &[Value]) -> Vec<(Vec3, Vec3, u32)> {
     };
     let mut out = Vec::new();
     for node in nodes.iter().filter(|n| rail(n)) {
-        let Some(start) = position(node) else { continue };
+        let Some(start) = position(node) else {
+            continue;
+        };
         let name = node.get(key("Name")).and_then(Value::as_name).unwrap_or(0);
-        let links = node.get(key("Links")).and_then(Value::as_array).unwrap_or_default();
+        let links = node
+            .get(key("Links"))
+            .and_then(Value::as_array)
+            .unwrap_or_default();
         for link in links {
             let Some(target) = link.as_int().and_then(|i| nodes.get(i as usize)) else {
                 continue;

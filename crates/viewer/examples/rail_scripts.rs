@@ -36,7 +36,8 @@ fn main() {
         start: r.start,
         end: r.end,
     };
-    let plain = skate::rails::Rails::named(nodes.rails.iter().map(|r| (segments(r), r.node)).collect());
+    let plain =
+        skate::rails::Rails::named(nodes.rails.iter().map(|r| (segments(r), r.node)).collect());
     let chained = plain.clone().with_chain(nodes.rail_chain.clone());
     let (mut forks, mut differ) = (0, 0);
     for i in 0..plain.segments.len() {

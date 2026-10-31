@@ -462,21 +462,29 @@ fn load_level(
         .as_deref()
         .and_then(|c| ngc_collision::Collision::parse(c).ok())
         .map(|c| {
-            World::new(c).with_rails(Rails::named(
-                nodes
-                    .rails
-                    .iter()
-                    .map(|r| {
-                        let segment = Segment {
-                            start: r.start,
-                            end: r.end,
-                        };
-                        (segment, r.node)
-                    })
-                    .collect(),
+            World::new(c).with_rails(
+                Rails::named(
+                    nodes
+                        .rails
+                        .iter()
+                        .map(|r| {
+                            let segment = Segment {
+                                start: r.start,
+                                end: r.end,
+                            };
+                            (segment, r.node)
+                        })
+                        .collect(),
+                )
+                .with_lip_override(
+                    nodes
+                        .rails
+                        .iter()
+                        .filter(|r| r.lip_override)
+                        .map(|r| r.node),
+                )
+                .with_chain(nodes.rail_chain.clone()),
             )
-            .with_lip_override(nodes.rails.iter().filter(|r| r.lip_override).map(|r| r.node))
-            .with_chain(nodes.rail_chain.clone()))
         })
         .map(|mut world| {
             // Rails waiting for a script to create them.
@@ -527,12 +535,21 @@ fn load_level(
             if o.kind != desa_viewer::nodes::ObjectKind::Vehicle {
                 continue;
             }
-            let Some(stem) = o.model.strip_suffix(".mdl") else { continue };
-            let Some(data) = files.models.get(&format!("{stem}.col")) else { continue };
-            let Ok(collision) = ngc_collision::Collision::parse(data) else { continue };
+            let Some(stem) = o.model.strip_suffix(".mdl") else {
+                continue;
+            };
+            let Some(data) = files.models.get(&format!("{stem}.col")) else {
+                continue;
+            };
+            let Ok(collision) = ngc_collision::Collision::parse(data) else {
+                continue;
+            };
             let checksum = qb::checksum(&format!("{}#col", o.label));
             world.add_vehicle_collision(checksum, &collision.objects);
-            world.place(checksum, Some(Mat4::from_rotation_translation(o.rotation(), o.position)));
+            world.place(
+                checksum,
+                Some(Mat4::from_rotation_translation(o.rotation(), o.position)),
+            );
             vehicle_collision.push((i, checksum));
         }
     }
@@ -3712,7 +3729,11 @@ impl<'a> App<'a> {
         if let Some(index) = index {
             self.skate_on_load = true;
             // (The skater spins away at the warp while its camera plays.)
-            let at = self.level.as_ref().and_then(|l| l.portals.get(i)).map(|p| p.warp.position);
+            let at = self
+                .level
+                .as_ref()
+                .and_then(|l| l.portals.get(i))
+                .map(|p| p.warp.position);
             self.warp_spin = at.map(|at| (at, 0.0, self.placement));
             // (`Warp_Master:midgoalvoiceover stream = warp_build`.)
             if let Some(level) = &mut self.level {
@@ -5327,7 +5348,10 @@ impl<'a> App<'a> {
         }
         // Paused with the game (`PauseMovie`): held where it is, and on
         // from there after.
-        let pause = self.screen.as_mut().and_then(|s| s.screen.movie_paused.take());
+        let pause = self
+            .screen
+            .as_mut()
+            .and_then(|s| s.screen.movie_paused.take());
         let Some((movie, started, looping)) = &mut level.screen_movie else {
             return;
         };
@@ -6169,7 +6193,8 @@ impl<'a> App<'a> {
                 let rails = &mut world.rails;
                 let mut at = rails.segments.len() - rails.moving;
                 for (i, local) in &level.object_rails {
-                    let (position, turn) = (level.behaviour.position(*i), level.behaviour.rotation(*i));
+                    let (position, turn) =
+                        (level.behaviour.position(*i), level.behaviour.rotation(*i));
                     // (Not there, its rails far away.)
                     let alive = level.behaviour.alive(*i);
                     for &(a, b, _) in local {
@@ -6212,13 +6237,12 @@ impl<'a> App<'a> {
                 vehicles
                     .iter()
                     .filter(|(i, v)| v.half_length < 60.0 && !own.contains(i))
-                    .map(
-                |(_, v)| skate::world::Obstacle {
-                    base: v.position - Vec3::Y * 24.0,
-                    radius: v.half_length * 0.8,
-                    height: 64.0,
-                },
-            ));
+                    .map(|(_, v)| skate::world::Obstacle {
+                        base: v.position - Vec3::Y * 24.0,
+                        radius: v.half_length * 0.8,
+                        height: 64.0,
+                    }),
+            );
             if let Some(world) = &mut level.world {
                 world.vehicles = vehicles.into_iter().map(|(_, v)| v).collect();
                 world.set_obstacles(obstacles);
@@ -8255,7 +8279,12 @@ mod tests {
     fn a_warp_spins_faster_then_shrinks_away() {
         let at = Vec3::new(10.0, 0.0, 5.0);
         let stood = Mat4::IDENTITY;
-        let size = |t: f32| warp_spin_placement(at, t, stood).to_scale_rotation_translation().0.x;
+        let size = |t: f32| {
+            warp_spin_placement(at, t, stood)
+                .to_scale_rotation_translation()
+                .0
+                .x
+        };
         // Full size while it spins up, there at the warp.
         assert_eq!(size(1.0), 1.0);
         let moved = warp_spin_placement(Vec3::ZERO, 1.0, Mat4::from_translation(Vec3::X));

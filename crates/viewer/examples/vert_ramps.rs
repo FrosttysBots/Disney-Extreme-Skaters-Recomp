@@ -219,7 +219,11 @@ fn main() {
             let facing = air_facing.dot(out);
             println!(
                 "  landed facing {}{}",
-                if facing > 0.0 { "down the ramp" } else { "up the ramp" },
+                if facing > 0.0 {
+                    "down the ramp"
+                } else {
+                    "up the ramp"
+                },
                 if went_vert { " from vert air" } else { "" },
             );
         }

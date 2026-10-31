@@ -121,7 +121,8 @@ impl Rails {
 
     /// Flags the named rail nodes `LipOverride`.
     pub fn with_lip_override(mut self, nodes: impl IntoIterator<Item = u32>) -> Self {
-        self.lip_override.extend(nodes.into_iter().filter(|&n| n != 0));
+        self.lip_override
+            .extend(nodes.into_iter().filter(|&n| n != 0));
         self
     }
 
@@ -133,9 +134,9 @@ impl Rails {
     /// The game's rail chain (see [`Rails::chain`]).
     pub fn with_chain(mut self, chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>) -> Self {
         let is_next = |a: Vec3, b: Vec3| {
-            chain
-                .iter()
-                .any(|&(n, next, _)| n.distance(a) < JOIN && next.is_some_and(|x| x.distance(b) < JOIN))
+            chain.iter().any(|&(n, next, _)| {
+                n.distance(a) < JOIN && next.is_some_and(|x| x.distance(b) < JOIN)
+            })
         };
         self.off_chain = self
             .segments
@@ -255,7 +256,10 @@ impl Rails {
     pub fn next(&self, segment: usize, forwards: bool) -> Option<(usize, bool)> {
         let this = self.segments[segment];
         let at = if forwards { this.end } else { this.start };
-        let joins: Vec<_> = self.joins(segment, forwards).filter(|&(i, _)| self.present(i)).collect();
+        let joins: Vec<_> = self
+            .joins(segment, forwards)
+            .filter(|&(i, _)| self.present(i))
+            .collect();
         let chained = self
             .chain
             .iter()
@@ -271,12 +275,15 @@ impl Rails {
             }
         }
         let travel = this.direction() * if forwards { 1.0 } else { -1.0 };
-        joins.into_iter().filter(|&(i, _)| self.on_chain(i)).max_by(|&(a, sa), &(b, sb)| {
-            let along = |i: usize, same: bool| {
-                self.segments[i].direction().dot(travel) * if same { 1.0 } else { -1.0 }
-            };
-            along(a, sa).total_cmp(&along(b, sb))
-        })
+        joins
+            .into_iter()
+            .filter(|&(i, _)| self.on_chain(i))
+            .max_by(|&(a, sa), &(b, sb)| {
+                let along = |i: usize, same: bool| {
+                    self.segments[i].direction().dot(travel) * if same { 1.0 } else { -1.0 }
+                };
+                along(a, sa).total_cmp(&along(b, sb))
+            })
     }
 }
 
@@ -371,21 +378,34 @@ mod tests {
         let (a, b, straight, side) = (p(0.0, 0.0), p(100.0, 0.0), p(200.0, 0.0), p(170.0, 70.0));
         let segments = vec![
             Segment { start: a, end: b },
-            Segment { start: b, end: straight },
-            Segment { start: b, end: side },
+            Segment {
+                start: b,
+                end: straight,
+            },
+            Segment {
+                start: b,
+                end: side,
+            },
         ];
         assert_eq!(Rails::new(segments.clone()).next(0, true), Some((1, true)));
         // The fork's node is chained on to the side branch (its first
         // link), and back to the start.
-        let chained = Rails::new(segments).with_chain(vec![(a, Some(b), None), (b, Some(side), Some(a))]);
+        let chained =
+            Rails::new(segments).with_chain(vec![(a, Some(b), None), (b, Some(side), Some(a))]);
         assert_eq!(chained.next(0, true), Some((2, true)));
         // Coming back along the side branch, its node's previous: the start.
         assert_eq!(chained.next(2, false), Some((0, false)));
         // The straight branch is no rail of the game's: not got onto.
-        let (from, to) = (p(140.0, 0.0) + Vec3::Y * 10.0, p(150.0, 2.0) + Vec3::Y * 5.0);
+        let (from, to) = (
+            p(140.0, 0.0) + Vec3::Y * 10.0,
+            p(150.0, 2.0) + Vec3::Y * 5.0,
+        );
         assert!(!chained.on_chain(1));
         assert_eq!(chained.nearest(from, to, 40.0), None);
-        let alone = Rails::new(vec![Segment { start: b, end: straight }]);
+        let alone = Rails::new(vec![Segment {
+            start: b,
+            end: straight,
+        }]);
         assert_eq!(alone.nearest(from, to, 40.0).map(|h| h.segment), Some(0));
     }
 
