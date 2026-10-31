@@ -559,6 +559,9 @@ pub struct Skater {
     /// the clock they're timed by.
     presses: Vec<(Press, f32)>,
     clock: f32,
+    /// When each of the bail push's four lines (left, right, forward,
+    /// back) last met a wall, on [`Skater::clock`].
+    extra_push_hits: [f32; 4],
     pub score: u32,
     leftover: f32,
 }
@@ -672,6 +675,7 @@ impl Skater {
             autoturn: None,
             presses: Vec::new(),
             clock: 0.0,
+            extra_push_hits: [f32::NEG_INFINITY; 4],
             score: 0,
             leftover: 0.0,
         }
@@ -2818,6 +2822,13 @@ impl Skater {
             };
             velocity = rolling_friction(velocity, friction);
         }
+        let forward = if bailing {
+            velocity = self.extra_push(velocity, p, world);
+            let flat = self.forward();
+            (flat - up * flat.dot(up)).normalize_or(flat)
+        } else {
+            forward
+        };
         // Along the board, keeping the sign: it can roll backwards
         // (0x800F4D5C).
         let sign = if velocity.dot(forward) < 0.0 {
@@ -3125,6 +3136,51 @@ impl Skater {
             self.wall_lean_push(input, p, world);
         }
         self.set_action(action);
+    }
+
+    /// Pushed off walls in a bail (main.dol 0x800FA3B8, the bail scripts'
+    /// `SetExtraPush radius = 48 speed = 100 Rotate = 6`, cleared by
+    /// `Baildone`): lines from `side_collide_height` up, `radius` long, to
+    /// the left, right, front and back (each skipped while the opposite
+    /// one met a wall in the last half second, 0x800FA268). Meeting any,
+    /// the velocity gains `speed` times how near the nearest was, along
+    /// their normals summed, and stays along the ground; and facing into
+    /// the last, the skater turns to face along its normal at `Rotate`
+    /// radians a second.
+    fn extra_push(&mut self, mut velocity: Vec3, p: &Physics, world: &World) -> Vec3 {
+        const RADIUS: f32 = 48.0;
+        const SPEED: f32 = 100.0;
+        const ROTATE: f32 = 6.0;
+        let up = self.up.normalize_or(Vec3::Y);
+        let flat = self.forward();
+        let forward = (flat - up * flat.dot(up)).normalize_or(flat);
+        let left = up.cross(forward).normalize_or_zero();
+        let from = self.position + up * p.side_collide_height;
+        let (mut sum, mut nearest, mut last) = (Vec3::ZERO, 1.0f32, None);
+        for (i, way) in [left, -left, forward, -forward].into_iter().enumerate() {
+            if self.clock - self.extra_push_hits[i ^ 1] <= 0.5 {
+                continue;
+            }
+            if let Some(hit) = world.ray(from, from + way * RADIUS) {
+                sum += hit.normal;
+                nearest = nearest.min(hit.fraction);
+                last = Some(hit.normal);
+                self.extra_push_hits[i] = self.clock;
+            }
+        }
+        let Some(normal) = last.filter(|_| nearest < 1.0) else {
+            return velocity;
+        };
+        velocity += sum.normalize_or_zero() * SPEED * (1.0 - nearest);
+        velocity -= up * velocity.dot(up);
+        if forward.dot(normal) >= 0.0 {
+            return velocity;
+        }
+        let along = (normal - up * normal.dot(up)).normalize_or_zero();
+        let angle = up.dot(forward.cross(along)).atan2(forward.dot(along));
+        let turn = (ROTATE * STEP).min(angle.abs()) * angle.signum();
+        self.heading += turn;
+        velocity
     }
 
     /// Walls at the skater's sides (main.dol 0x800F9AAC): felt for to the
@@ -4430,6 +4486,26 @@ mod tests {
         // speed check the rest: stopped within a second, not far on.
         assert!(skater.velocity.length() < 1.0, "{:?}", skater.velocity);
         assert!(skater.position.distance(start) < 150.0);
+    }
+
+    #[test]
+    fn a_bail_by_a_wall_turns_off_it() {
+        let p = physics();
+        let world = floor_and_wall();
+        // Bailing 30 from the wall at x = 0, facing into it.
+        let mut skater = Skater::new(Vec3::new(-30.0, 1.0, 0.0), FRAC_PI_2);
+        skater.auto_kick = false;
+        skater.update(Input::default(), &p, &world, STEP);
+        assert!(skater.on_ground);
+        skater.start_bail(Action::Bail, false);
+        let before = skater.forward().x;
+        for _ in 0..30 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        // Turned away from it (at 6 radians a second) and pushed off it,
+        // till out of the lines' reach.
+        assert!(before > 0.99 && skater.forward().x < 0.8, "{:?}", skater.forward());
+        assert!(skater.position.x < -35.0, "{}", skater.position);
     }
 
     #[test]

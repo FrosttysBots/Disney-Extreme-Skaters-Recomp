@@ -96,6 +96,18 @@ on-ground update switches on.
   keeps 15 off it. Ported, but for the event and an unknown flag
   (`+0x37B0`) that skips the move; in the air the same feelers start
   wall rides (0x800FDB6C) and nudge off by a tenth, not ported.
+- **Pushed off walls in bails** (0x800FA3B8, every ground frame after
+  the friction while `SetExtraPush` has set a radius and speed: the bail
+  scripts' `radius = 48 speed = 100 Rotate = 6`, which `Baildone`
+  clears): four lines from `Skater_side_collide_height` up, `radius`
+  long, left, right, forward and back (0x800FA268; one is skipped while
+  the opposite met something in the last 500 ms). Their normals are
+  summed and the nearest hit kept; meeting any, the velocity gains the
+  sum scaled to `speed` times one less the nearest hit's fraction, kept
+  along the ground (0x80009B3C), and if the skater faces into the last
+  wall met it turns towards that wall's normal at `Rotate` radians a
+  second, no further. Ported (the skater's bails, with the scripts'
+  values).
 - **Cars** (0x8010D6F4, the skater meeting a vehicle): in the air with
   the feet no more than `min_car_height_diff` (60) below its top
   (`min_car_height_downwards`, 30, falling), `CarPlant`: "Car Plant" for
