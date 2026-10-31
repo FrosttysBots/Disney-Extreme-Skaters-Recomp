@@ -159,6 +159,18 @@ impl Props {
 
     /// Moves copy `copy` to `placement`; returns the vertices to write and
     /// where they start.
+    /// Half a copy's length along its facing (its model's furthest point
+    /// fore or aft).
+    pub fn half_length(&self, copy: usize) -> f32 {
+        self.copies.get(copy).map_or(0.0, |&(model, _)| {
+            self.models[model]
+                .vertices
+                .iter()
+                .map(|v| v.position[2].abs())
+                .fold(0.0, f32::max)
+        })
+    }
+
     pub fn place(&self, copy: usize, placement: Mat4) -> (usize, Vec<Vertex>) {
         let Some(&(model, first)) = self.copies.get(copy) else {
             return (0, Vec::new());
@@ -371,6 +383,9 @@ fn pedestrian(node: &ObjectNode, files: &LevelFiles, sets: &AnimationSets) -> Re
         skin: skin.clone(),
         textures: texture_path(&node.model).and_then(|t| files.models.get(&t).cloned()),
         board: None,
+        parts: Vec::new(),
+        part_tints: Vec::new(),
+        extra_textures: Vec::new(),
         skeleton: skeleton.clone(),
         key_tables,
         animations,

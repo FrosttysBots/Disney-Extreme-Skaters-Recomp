@@ -113,9 +113,11 @@ pub struct Level {
 pub struct ColorAnimation {
     /// Where the animated vertices start in the level's pool.
     pub first_vertex: usize,
-    /// The animated vertices, and the sequence each plays.
+    /// The animated vertices, the sequence each plays and the sector
+    /// each is of.
     pub vertices: Vec<Vertex>,
     pub sequence: Vec<usize>,
+    pub sector: Vec<u32>,
     pub sequences: Vec<VcSequence>,
 }
 
@@ -127,11 +129,21 @@ impl ColorAnimation {
     /// The animated vertices at `seconds`, to replace the level's from
     /// `first_vertex` on.
     pub fn at(&self, seconds: f32) -> Vec<Vertex> {
+        self.at_clocks(seconds, &HashMap::new())
+    }
+
+    /// Like [`ColorAnimation::at`], the sectors in `clocks` at their own
+    /// times (the scripts' `wibbleVC`: stopped, or started over).
+    pub fn at_clocks(&self, seconds: f32, clocks: &HashMap<u32, f32>) -> Vec<Vertex> {
         self.vertices
             .iter()
             .zip(&self.sequence)
-            .map(|(v, &s)| Vertex {
-                color: sample_colors(&self.sequences[s], seconds),
+            .zip(&self.sector)
+            .map(|((v, &s), sector)| Vertex {
+                color: sample_colors(
+                    &self.sequences[s],
+                    clocks.get(sector).copied().unwrap_or(seconds),
+                ),
                 ..*v
             })
             .collect()
@@ -200,6 +212,26 @@ impl Level {
         textures: Option<&[u8]>,
         keep: impl Fn(u32) -> bool,
     ) -> Result<Level> {
+        Self::build(scene, textures, &[], keep)
+    }
+
+    /// Like [`from_bytes`](Self::from_bytes), with textures from elsewhere
+    /// for any the texture file hasn't (by checksum): the created girl's
+    /// head, which her `girl.tex` leaves to the skin chosen.
+    pub fn from_bytes_with_extra(
+        scene: &[u8],
+        textures: Option<&[u8]>,
+        extra: &[TextureData],
+    ) -> Result<Level> {
+        Self::build(scene, textures, extra, |_| true)
+    }
+
+    fn build(
+        scene: &[u8],
+        textures: Option<&[u8]>,
+        extra: &[TextureData],
+        keep: impl Fn(u32) -> bool,
+    ) -> Result<Level> {
         let scene = Scene::parse(scene).context("could not parse the scene")?;
         let dictionary = match textures {
             Some(data) => {
@@ -230,7 +262,7 @@ impl Level {
         const ANIMATED: u32 = 1 << 31;
         let mut sequences_of: HashMap<u32, Option<(usize, usize)>> = HashMap::new();
         let mut copies: HashMap<(u32, u32), u32> = HashMap::new();
-        let mut animated: Vec<(Vertex, usize)> = Vec::new();
+        let mut animated: Vec<(Vertex, usize, u32)> = Vec::new();
         for sector in scene.sectors.iter().filter(|s| keep(s.checksum)) {
             let base = level.vertices.len() as u32;
             for (i, position) in sector.positions.iter().enumerate() {
@@ -273,6 +305,7 @@ impl Level {
                                         animated.push((
                                             level.vertices[vertex as usize],
                                             first + usize::from(n) - 1,
+                                            sector.checksum,
                                         ));
                                         animated.len() as u32 - 1
                                     });
@@ -287,10 +320,11 @@ impl Level {
 
         let first_animated = level.vertices.len() as u32;
         level.color_animation.first_vertex = first_animated as usize;
-        for (vertex, sequence) in animated {
+        for (vertex, sequence, sector) in animated {
             level.vertices.push(vertex);
             level.color_animation.vertices.push(vertex);
             level.color_animation.sequence.push(sequence);
+            level.color_animation.sector.push(sector);
         }
         for (_, list) in &mut by_material {
             for index in list.iter_mut().filter(|i| **i & ANIMATED != 0) {
@@ -301,6 +335,7 @@ impl Level {
         let mut textures = TextureCache {
             dictionary: dictionary.as_ref(),
             slots: HashMap::new(),
+            extra,
         };
         for (material_checksum, triangles) in by_material {
             let material = scene.material(material_checksum);
@@ -465,6 +500,9 @@ fn pass_draw_untextured() -> PassDraw {
 struct TextureCache<'a> {
     dictionary: Option<&'a TexDictionary<'a>>,
     slots: HashMap<u32, usize>,
+    /// Textures to use in place of the dictionary's of that checksum (or
+    /// where it has none).
+    extra: &'a [TextureData],
 }
 
 impl TextureCache<'_> {
@@ -475,7 +513,13 @@ impl TextureCache<'_> {
         if let Some(&slot) = self.slots.get(&checksum) {
             return slot;
         }
-        let slot = match self.dictionary.and_then(|d| decode_texture(d, checksum)) {
+        let found = self
+            .extra
+            .iter()
+            .find(|t| t.checksum == checksum)
+            .cloned()
+            .or_else(|| self.dictionary.and_then(|d| decode_texture(d, checksum)));
+        let slot = match found {
             Some(data) => {
                 level.textures.push(data);
                 level.textures.len() - 1
@@ -485,6 +529,35 @@ impl TextureCache<'_> {
         self.slots.insert(checksum, slot);
         slot
     }
+}
+
+/// The checksums a texture named `name` (`"05A.png"`, as the scripts
+/// name them) can have in a `.tex.ngc`: as the game finds it (main.dol
+/// 0x8007CA24), its name's checksum times one of a few factors, or the
+/// same for the name with `_auto32m0.png` in place of its extension
+/// (`05A_auto32m0.png`, the levels' textures).
+pub fn texture_checksums(name: &str) -> Vec<u32> {
+    const FACTORS: [u32; 10] = [2, 3, 4, 6, 12, 8, 24, 0xffff_ffff, 0x4000_4010, 0x4020_4080];
+    let auto = name
+        .len()
+        .checked_sub(4)
+        .and_then(|cut| name.get(..cut))
+        .map(|stem| format!("{stem}_auto32m0.png"));
+    [Some(name.to_string()), auto]
+        .into_iter()
+        .flatten()
+        .flat_map(|form| {
+            let base = qb::checksum(&form);
+            FACTORS.map(|f| base.wrapping_mul(f))
+        })
+        .collect()
+}
+
+/// One texture of a `.tex.ngc`, decoded (`None` if it has none of
+/// `checksums`).
+pub fn decode_texture_from(textures: &[u8], checksums: &[u32]) -> Option<TextureData> {
+    let dict = TexDictionary::parse(textures).ok()?;
+    checksums.iter().find_map(|&c| decode_texture(&dict, c))
 }
 
 /// Decodes every usable mip level of one texture, or `None` if it's

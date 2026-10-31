@@ -16,9 +16,6 @@
 //!   scaling `behind`, and `above` towards 3 when closer (0x80122DB0).
 //! - Rates scale with the frame time as the game's 0x8011FDFC does:
 //!   `n r / (1 - r + n r)` for `n` frames.
-//!
-//! Our own: it never ends up behind a wall (it rises up to 120 to see over
-//! what's in the way, or else a line from the focus pulls it in at once,
 //! - It looks along its heading pitched down by `Tilt` (0x80120FC8), so
 //!   the skater sits below the middle of the view; and its line meets
 //!   only camera-collidable faces (flag 0x80, 0x80122A04).
@@ -26,7 +23,9 @@
 //! Our own: it never ends up behind a wall (it rises up to 120 to see over
 //! what's in the way, or else a line from the focus pulls it in at once,
 //! and it eases back), and it turns faster the further it has to go. The
-//! game's own handling of walls isn't ported.
+//! game's own feeler (0x80122A04: a line from the focus to the camera,
+//! meeting camera-collidable faces, pulls it in to 90% of the way to the
+//! wall, no nearer than 11.9, at once each frame) isn't followed.
 
 use glam::Vec3;
 
@@ -39,7 +38,10 @@ const FOOT: f32 = 12.0;
 /// The faces the camera's line meets (the game's camera feeler requires
 /// flag 0x80: camera-collidable; poles and the like let it through).
 const CAMERA: u16 = ngc_collision::face_flags::CAMERA_COLLIDABLE;
-/// How close to a wall the camera may come.
+/// How close to a wall the camera may come. (The game's feeler,
+/// 0x80122A2C, comes in to 90% of the way from the focus to the wall, no
+/// nearer the focus than 11.9: much closer to walls than this, which the
+/// near plane here doesn't take well.)
 const WALL_MARGIN: f32 = 10.0;
 /// How long after vert air it turns at `vert_air_landed_slerp`.
 const LANDED_TIME: f32 = 1.0 / 6.0;

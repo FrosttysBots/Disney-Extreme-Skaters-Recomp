@@ -74,6 +74,26 @@ fn real_skater_on_the_hub() {
         .air_trick(skate::Button::Grab, Some(skate::Dir::Left))
         .unwrap();
     assert_eq!(book.tricks[grab_left].name, "Well Howdy There");
+    // The simplified controls: either button does the direction's trick
+    // (down the down flip, left the left grab).
+    let simple =
+        skate::TrickBook::with_controls(&program, "jessie", &Stats::of(&program, "jessie"), true);
+    for button in [skate::Button::Flip, skate::Button::Grab] {
+        let name = |dir| {
+            simple
+                .air_trick(button, dir)
+                .map(|i| simple.tricks[i].name.clone())
+        };
+        assert_eq!(
+            name(Some(skate::Dir::Down)).as_deref(),
+            Some("Roll'Em Roll'Em Roll'Em")
+        );
+        assert_eq!(
+            name(Some(skate::Dir::Left)).as_deref(),
+            Some("Well Howdy There")
+        );
+        assert!(name(None).is_some());
+    }
 
     let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
     let nodes = LevelNodes::from_bytes(files.nodes.as_ref().unwrap()).unwrap();
@@ -281,14 +301,24 @@ fn real_skater_on_the_hub() {
     // Spinning all the way down lands sideways: at speed, the yaw bail.
     let mut sideways = Skater::new(start.position, facing.x.atan2(facing.z));
     sideways.tricks = trickster.tricks.clone();
-    for _ in 0..90 {
-        sideways.update(crouch, &physics, &world, 1.0 / 60.0);
-    }
-    sideways.update(Input::default(), &physics, &world, 1.0 / 60.0);
     let spin = Input {
         turn: 1.0,
         ..Input::default()
     };
+    // (The spin held from just before the ollie: a held spin waits
+    // `Physics_Air_No_Rotate_Time` to start.)
+    for frame in 0..90 {
+        let input = if frame < 84 {
+            crouch
+        } else {
+            Input {
+                crouch: true,
+                ..spin
+            }
+        };
+        sideways.update(input, &physics, &world, 1.0 / 60.0);
+    }
+    sideways.update(spin, &physics, &world, 1.0 / 60.0);
     for frame in 0..240 {
         sideways.update(spin, &physics, &world, 1.0 / 60.0);
         if frame > 2 && sideways.on_ground {
@@ -684,4 +714,60 @@ fn spine_transfer_on_camp() {
     // The spine's apex is at x -8560: over it, riding on along +X.
     assert!(landed.x > -8560.0, "{landed}");
     assert!(skater.velocity.x > 0.0 && !skater.landing.backwards);
+}
+
+/// A late spine transfer on Camp: the spine button only pressed a few
+/// frames into the vert air, still rising, goes over all the same.
+#[test]
+#[ignore = "needs the game data"]
+fn late_spine_transfer_on_camp() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let files = data.load_level("camp").unwrap();
+    let mut program = Program::new();
+    for file in data.global_scripts().unwrap() {
+        program.add(&file).unwrap();
+    }
+    let physics = Physics::new(&program, &Stats::of(&program, "jessie"));
+    let collision = ngc_collision::Collision::parse(files.collision.as_ref().unwrap()).unwrap();
+    let world = World::new(collision);
+    let mut skater = Skater::new(Vec3::ZERO, 0.0);
+    skater.place(
+        Vec3::new(-8816.0, -1.0, 2440.0),
+        90f32.to_radians(),
+        &physics,
+        &world,
+    );
+    let mut air_frames = 0;
+    let mut transferred = false;
+    let mut landed = None;
+    for frame in 0..180 {
+        if !skater.on_ground && skater.velocity.y > 0.0 {
+            air_frames += 1;
+        }
+        // (Up let go before the lip, where holding it breaks out.)
+        let input = Input {
+            push: frame < 20,
+            crouch: true,
+            revert: air_frames >= 4,
+            ..Input::default()
+        };
+        skater.update(input, &physics, &world, 1.0 / 60.0);
+        transferred |= skater
+            .combo_tricks
+            .tricks
+            .iter()
+            .any(|t| t.name == "Spine Transfer");
+        if frame > 30 && skater.on_ground && transferred {
+            landed = Some(skater.position);
+            break;
+        }
+    }
+    println!(
+        "late spine transfer: {transferred} after {air_frames} rising frames, landed at {landed:?}"
+    );
+    assert!(transferred, "a spine transfer");
+    let landed = landed.expect("down the other side");
+    assert!(landed.x > -8560.0, "{landed}");
 }

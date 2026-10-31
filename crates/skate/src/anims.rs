@@ -124,11 +124,18 @@ pub fn choose(skater: &Skater) -> Anim {
         Action::FlailLeft => Anim::once("StandFlailLeft", LAND).committed(),
         Action::FlailRight => Anim::once("StandFlailRight", LAND).committed(),
         Action::Grinding => Anim::into("GrindIn1", "GrindRange1", TRICK),
+        // (The game's `WallRideFrontLoop` and the rest aren't on the disc.)
+        Action::WallRide => Anim::cycle("CrouchIdle", TRICK),
+        // `Skitch`: `PlayAnim anim = StandIdle cycle`.
+        Action::Skitching => Anim::cycle("StandIdle", TRICK),
         Action::Manual if skater.special_manual => {
             Anim::into("SpecialManualIn", "SpecialManualRange", TRICK)
         }
         Action::Manual => Anim::into("ManualIn1", "ManualRange1", TRICK),
         Action::Lip => Anim::once("LipRange1", TRICK),
+        Action::StartLevel => Anim::into("StartLevel", "StandIdle", TRICK).committed(),
+        Action::WarpIn if skater.action_time < 1.75 => Anim::cycle("OffBoardSpinning", TRICK),
+        Action::WarpIn => Anim::once("OffBoardDizzy", TRICK).committed(),
         Action::CessSlide { frontside: true } => Anim::once("CessSlide180_FS", LAND).committed(),
         Action::CessSlide { frontside: false } => Anim::once("CessSlide180_BS", LAND).committed(),
         // `Handbrake`: off the board, idling, and back on.
