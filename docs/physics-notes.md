@@ -108,6 +108,15 @@ on-ground update switches on.
   wall met it turns towards that wall's normal at `Rotate` radians a
   second, no further. Ported (the skater's bails, with the scripts'
   values).
+- **Grind start's leftovers** (0x80109150–0x801094FC): two lines 5 to
+  each side of the rail (`Rail_Bad_Ledge_Side_Dist`), from
+  `Physics_Ground_Snap_Up` above to `Rail_Bad_Ledge_Drop_Down_Dist`
+  below, set the scripts' `Ledge` and `BadLedge` (`+0x33EC`,
+  `+0x33F0`); the board more across the rail than `Rail_Tolerance`
+  (0.7) sets `+0x358C`; with the fakie flags they index `grindlist.q`'s
+  `Template1`-`3` (`_BS`, `_FS`, `_180`) for a prefix-named grind
+  script (0x800EB6FC). Nothing on this disc uses them: only the `Nutter`
+  bail reads `Ledge`, and nothing calls it; no trick has a template.
 - **Mashing in a bail** (`BashOn`, `+0x7F8`; 0x8011CF6C each frame from
   0x8010B440): button events (presses and releases, types 1 and 2 in
   the skater's event buffer, 0x8011B248) in the last `BashPeriod` (400
