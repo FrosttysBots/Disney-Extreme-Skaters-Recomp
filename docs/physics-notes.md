@@ -197,9 +197,11 @@ on-ground update switches on.
     entering trigger faces, and the score.
   - not sticking: 0x800F612C(skater, 1) puts it in the air and the
     `GroundGone` exception fires.
-  Ported: all but skitching, the forward angle, the events and how the
-  drawn tilt eases. The game also has a `moon_gravity` cheat (it
-  multiplies air gravity).
+  Ported, but for the trigger events. The drawn tilt (0x800F4FD0): from
+  where it's drawn (`+0x3A00`, kept at `+0x3A20`) to the new normal,
+  straight across, the way left (`+0x3A34`, from 1) falling by
+  `Normal_Lerp_Speed` (0.1) a 60th of a second, renormalised; ported.
+  The game also has a `moon_gravity` cheat (it multiplies air gravity).
 - **The ollie** (0x800F62C4, the scripts' `Jump` command): the jump speed
   is `min + (max - min) * tense / skater_max_tense_time`, where `tense`
   is the crouch time (skater `+0x3478`, capped at the max, 200 ms) and

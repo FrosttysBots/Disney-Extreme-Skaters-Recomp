@@ -340,9 +340,14 @@ pub struct Skater {
     /// The surface it stands on (up when in the air).
     pub up: Vec3,
     /// `up` eased for drawing: the game tilts the skater's model over to a
-    /// new slope gradually (`Normal_Lerp_Speed`) while its physics uses
-    /// the new normal at once. The easing here is this crate's.
+    /// new slope gradually while its physics uses the new normal at once
+    /// (main.dol 0x800F4FD0): from where it was drawn to the new normal,
+    /// straight across, `Normal_Lerp_Speed` of the way a 60th of a
+    /// second.
     pub shown_up: Vec3,
+    /// The normal the drawn tilt is heading for, where it set off from,
+    /// and how much of the way is left (1 to 0).
+    tilt: (Vec3, Vec3, f32),
     pub on_ground: bool,
     pub action: Action,
     /// Seconds in the current action.
@@ -568,6 +573,7 @@ impl Skater {
             heading,
             up: Vec3::Y,
             shown_up: Vec3::Y,
+            tilt: (Vec3::Y, Vec3::Y, 0.0),
             on_ground: true,
             action: Action::Standing,
             action_time: 0.0,
@@ -1148,7 +1154,17 @@ impl Skater {
     }
 
     fn step(&mut self, input: Input, p: &Physics, world: &World) {
-        self.shown_up = self.shown_up.lerp(self.up, 0.25).normalize_or(Vec3::Y);
+        if self.up != self.tilt.0 {
+            self.tilt = (self.up, self.shown_up, 1.0);
+        }
+        let (to, from, left) = &mut self.tilt;
+        *left -= p.normal_lerp_speed * STEP * 60.0;
+        self.shown_up = if *left <= 0.0 {
+            *left = 0.0;
+            *to
+        } else {
+            (*to + (*from - *to) * *left).normalize_or(*to)
+        };
         self.action_time += STEP;
         self.crouch_time = if input.crouch {
             self.crouch_time + STEP

@@ -185,6 +185,9 @@ pub struct Physics {
     /// `Skate_wall_lean_push_height` up reaching out to the side up to
     /// `Skate_wall_lean_push_length`, over the first
     /// `Skate_wall_lean_push_time` (seconds) the turn's held.
+    /// How fast the drawn tilt follows a new ground normal: this much of
+    /// the way a 60th of a second (`Normal_Lerp_Speed`).
+    pub normal_lerp_speed: f32,
     pub wall_lean_push_speed: f32,
     /// Walls felt for to each side on the ground: this far out
     /// (`Skater_side_collide_length`) from this high up
@@ -358,6 +361,7 @@ impl Physics {
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),
             vert_push_out: plain("Physics_Vert_Push_Out", 3.0),
+            normal_lerp_speed: plain("Normal_Lerp_Speed", 0.1),
             wall_lean_push_speed: plain("Skate_min_wall_lean_push_speed", 1000.0),
             side_collide_length: plain("Skater_side_collide_length", 15.0),
             side_collide_height: plain("Skater_side_collide_height", 16.0),
