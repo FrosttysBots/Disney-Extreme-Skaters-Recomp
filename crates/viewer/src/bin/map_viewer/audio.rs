@@ -463,6 +463,12 @@ impl Audio {
                     self.play("copinghit3_11", 0.8, pitch);
                 }
                 SkateSound::Smack => self.play("bodysmacka", 1.0, 1.0),
+                // `Random(@hitblood01 @hitblood02 @hitblood04 @hitblood05)`.
+                SkateSound::BailHit => {
+                    let pick = ((self.random() * 4.0) as usize).min(3);
+                    self.play(["hitblood01", "hitblood02", "hitblood04", "hitblood05"][pick], 1.0, 1.0);
+                }
+                SkateSound::BailFoley => self.play("foleymove01", 0.5, 1.0),
                 SkateSound::Bonk { terrain } => self.play_terrain(terrain, Moment::Bonk),
                 SkateSound::Gap => self.play("hud_jumpgap", 1.0, 1.0),
                 // The teleporter's own sound (the viewer plays it).

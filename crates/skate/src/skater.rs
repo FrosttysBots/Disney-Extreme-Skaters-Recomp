@@ -87,6 +87,12 @@ pub enum SkateSound {
     /// wall in one (`bodysmackA`).
     Bail,
     Smack,
+    /// Down in a bail, its `BloodFrame` (10) in: one of the `hitblood`
+    /// thumps (the scripts' blood itself isn't in this game's executable).
+    BailHit,
+    /// Three quarters through a bail's fall (`FoleySound`: `Foleymove01`
+    /// at half volume).
+    BailFoley,
     /// A revert or a 180 slide (`PlayCessSound`).
     Cess,
     /// A gap scored (`HUD_jumpgap`).
@@ -2810,6 +2816,15 @@ impl Skater {
                 .any(|&at| before < fall * at && now >= fall * at);
             if checked && velocity.length() < 300.0 {
                 self.bail_stopping = true;
+            }
+            if !self.smacked {
+                let crossed = |at: f32| before < at && now >= at;
+                if crossed(10.0 / 60.0) {
+                    self.sounds.push(SkateSound::BailHit);
+                }
+                if crossed(fall * 0.75) {
+                    self.sounds.push(SkateSound::BailFoley);
+                }
             }
             let friction = if self.smacked {
                 15.0
