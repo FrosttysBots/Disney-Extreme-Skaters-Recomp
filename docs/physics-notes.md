@@ -120,7 +120,15 @@ on-ground update switches on.
   skater's up (`+0x375C`, kept at landing) more than 60 degrees off
   straight up (0x80117600) and off the ground's normal (0x80117594).
   Ported, out of vert air (`Physics_Spine_Lean_stat`, 3, is the vert
-  version, not ported).
+  version, not ported). Nothing else levels the pitch on the way up: the
+  matrix flies off a slope as it was (0x80124240, in ordinary air, only
+  rights its roll, about the facing, unless that's within 0.95 of
+  vertical), so leaving a kicker nose up stays nose up. Falling, though
+  (0x800EF5A0), with ground no steeper than 0.2 within 500 below, a
+  skater whose up is under 0.9 high is turned back towards upright at
+  `Physics_recover_rate_stat` (2 radians a second), so a lean only bails
+  if it's built up well above the ground. Ported: the take-off's pitch
+  (its roll dropped at once) and the recovery.
 - **Grind start's leftovers** (0x80109150–0x801094FC): two lines 5 to
   each side of the rail (`Rail_Bad_Ledge_Side_Dist`), from
   `Physics_Ground_Snap_Up` above to `Rail_Bad_Ledge_Drop_Down_Dist`

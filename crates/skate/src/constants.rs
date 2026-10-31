@@ -185,6 +185,10 @@ pub struct Physics {
     /// `Physics_Air_No_Lean_Time` (seconds).
     pub air_lean: f32,
     pub air_no_lean_time: f32,
+    /// Falling towards ground, how fast a skater tipped over is turned
+    /// back towards upright (`Physics_recover_rate_stat`, radians a
+    /// second).
+    pub recover_rate: f32,
     pub air_ramp_rotate_time: f32,
     /// How fast a 180 spin tap turns, radians a second.
     pub air_tap_turn_speed: f32,
@@ -375,6 +379,7 @@ impl Physics {
             air_no_rotate_time: plain("Physics_Air_No_Rotate_Time", 100.0) / 1000.0,
             air_lean: scaled("Physics_Air_Lean_stat", 1.0),
             air_no_lean_time: plain("Physics_Air_No_Lean_Time", 200.0) / 1000.0,
+            recover_rate: scaled("Physics_recover_rate_stat", 2.0),
             air_ramp_rotate_time: plain("Physics_Air_Ramp_Rotate_Time", 50.0) / 1000.0,
             air_tap_turn_speed: scaled("Physics_air_tap_turn_speed_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),

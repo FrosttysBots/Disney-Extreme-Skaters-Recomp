@@ -2900,6 +2900,7 @@ impl Skater {
             // the jump can catch the floor from below (rounding puts the
             // feet a hair under it) and push the skater through it.
             self.position += up;
+            self.launch_lean();
             self.up = Vec3::Y;
             self.set_action(Action::Air);
             return;
@@ -3117,6 +3118,7 @@ impl Skater {
                 self.air_time = 0.0;
                 self.manual = false;
                 self.take_off_vert(p, world);
+                self.launch_lean();
                 self.up = Vec3::Y;
                 self.set_action(Action::Air);
                 return;
@@ -3183,6 +3185,23 @@ impl Skater {
             self.wall_lean_push(input, p, world);
         }
         self.set_action(action);
+    }
+
+    /// Off the ground (not into vert air): the skater keeps the slope's
+    /// pitch, leaning as it took off (the game's matrix flies on as it
+    /// was; 0x80124240 only rights its roll), and the drawn tilt hands
+    /// that pitch over to [`Skater::lean`].
+    fn launch_lean(&mut self) {
+        if self.vert.is_some() {
+            return;
+        }
+        let forward = self.forward();
+        let up = self.up.normalize_or(Vec3::Y);
+        self.lean = up.dot(forward).atan2(up.y);
+        let left = Vec3::Y.cross(forward).normalize_or(Vec3::X);
+        self.shown_up =
+            (Quat::from_axis_angle(left, -self.lean) * self.shown_up).normalize_or(Vec3::Y);
+        self.tilt = (self.up, self.shown_up, 0.0);
     }
 
     /// Pushed off walls in a bail (main.dol 0x800FA3B8, the bail scripts'
@@ -3520,6 +3539,22 @@ impl Skater {
                 0.0
             };
             self.lean += rate * STEP;
+        }
+        // Recovering (0x800EF5A0): falling with ground (not steeper than
+        // 0.2) within 500 below, a skater tipped more than its up's 0.9
+        // high is turned back towards upright at `recover_rate`, till
+        // it's that upright.
+        let upright = 0.9f32.acos();
+        if self.action == Action::Air
+            && self.vert.is_none()
+            && self.velocity.y <= 0.0
+            && self.lean.abs() > upright
+            && world
+                .ray(self.position, self.position - Vec3::Y * 500.0)
+                .is_some_and(|hit| hit.normal.y >= 0.2)
+        {
+            let back = (self.lean.abs() - p.recover_rate * STEP).max(upright);
+            self.lean = back * self.lean.signum();
         }
         self.since_car_plant = (self.since_car_plant + STEP).min(f32::MAX);
         // Landing within the next 0.2 seconds (`GetAirTimeLeft`)?
@@ -4458,40 +4493,65 @@ mod tests {
     }
 
     #[test]
+    fn taking_off_a_slope_keeps_its_pitch_as_a_lean() {
+        // Going up a 30 degree kicker (heading +Z, the ground's normal
+        // tipped back towards -Z).
+        let mut skater = Skater::new(Vec3::ZERO, 0.0);
+        let normal = Vec3::new(0.0, 30f32.to_radians().cos(), -30f32.to_radians().sin());
+        skater.up = normal;
+        skater.shown_up = normal;
+        let drawn_up = |s: &Skater| s.placement().transform_vector3(Vec3::Y);
+        let before = drawn_up(&skater);
+        skater.launch_lean();
+        skater.up = Vec3::Y;
+        // Nose up by the slope, drawn the same.
+        assert!(
+            (skater.lean + 30f32.to_radians()).abs() < 1e-4,
+            "{}",
+            skater.lean
+        );
+        assert!(
+            drawn_up(&skater).distance(before) < 1e-4,
+            "{} {}",
+            drawn_up(&skater),
+            before
+        );
+    }
+
+    #[test]
     fn leaning_too_far_in_the_air_bails_the_landing() {
         let p = physics();
         let world = floor_and_wall();
-        // A long flight (about two seconds), holding up for `hold`.
-        let fly = |hold: f32| {
-            let mut skater = Skater::new(Vec3::new(500.0, 50.0, -800.0), 0.0);
+        // Up held the whole flight, from `height` up.
+        let fly = |height: f32| {
+            let mut skater = Skater::new(Vec3::new(500.0, height, -800.0), 0.0);
             skater.on_ground = false;
             skater.auto_kick = false;
             skater.set_action(Action::Air);
-            skater.velocity = Vec3::new(0.0, 900.0, 100.0);
-            let mut time = 0.0;
+            skater.velocity = Vec3::new(0.0, 600.0, 100.0);
             let mut most = 0.0f32;
-            for _ in 0..300 {
+            for _ in 0..600 {
                 let input = Input {
-                    push: time < hold,
+                    push: true,
                     ..Input::default()
                 };
                 skater.update(input, &p, &world, STEP);
                 most = most.max(skater.lean);
-                time += STEP;
                 if skater.on_ground {
                     break;
                 }
             }
             (skater.action, most)
         };
-        // Up for 1.5 s: past 60 degrees forward (1 radian a second after
-        // the first 0.2), down in a bail.
-        let (action, most) = fly(1.5);
-        assert!(most > 1.1, "{most}");
+        // From high up, leant past 60 degrees (1 radian a second after the
+        // first 0.2) before the ground's near: down in a bail.
+        let (action, most) = fly(2500.0);
+        assert!(most > 1.2, "{most}");
         assert_eq!(action, Action::Bail);
-        // A little lean lands.
-        let (action, most) = fly(0.6);
-        assert!(most > 0.3 && most < 0.5, "{most}");
+        // A hop: falling towards the ground, recovering (2 radians a
+        // second) beats the lean, back to upright enough to land.
+        let (action, most) = fly(50.0);
+        assert!(most < 0.6, "{most}");
         assert_ne!(action, Action::Bail);
     }
 
