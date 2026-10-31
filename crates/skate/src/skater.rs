@@ -289,6 +289,8 @@ const CREEP_SPEED: f32 = 50.0;
 const VERT_PUSH_TIME: f32 = 0.13;
 const BREAK_AIR_SPEED_SCALE: f32 = 0.75;
 const BREAK_AIR_UP_SCALE: f32 = 0.75;
+/// And tips forward (`Skater_Break_Vert_forward_tilt`, degrees).
+const BREAK_VERT_FORWARD_TILT: f32 = 45.0;
 
 /// How long a message stays on screen.
 const MESSAGE_TIME: f32 = 1.5;
@@ -2900,7 +2902,7 @@ impl Skater {
             // the jump can catch the floor from below (rounding puts the
             // feet a hair under it) and push the skater through it.
             self.position += up;
-            self.launch_lean();
+            self.launch_lean(false);
             self.up = Vec3::Y;
             self.set_action(Action::Air);
             return;
@@ -3117,8 +3119,11 @@ impl Skater {
                 self.ollied = false;
                 self.air_time = 0.0;
                 self.manual = false;
-                self.take_off_vert(p, world);
-                self.launch_lean();
+                let broke = self.take_off_vert(p, world);
+                self.launch_lean(broke);
+                if broke {
+                    self.lean += BREAK_VERT_FORWARD_TILT.to_radians();
+                }
                 self.up = Vec3::Y;
                 self.set_action(Action::Air);
                 return;
@@ -3190,9 +3195,11 @@ impl Skater {
     /// Off the ground (not into vert air): the skater keeps the slope's
     /// pitch, leaning as it took off (the game's matrix flies on as it
     /// was; 0x80124240 only rights its roll), and the drawn tilt hands
-    /// that pitch over to [`Skater::lean`].
-    fn launch_lean(&mut self) {
-        if self.vert.is_some() {
+    /// that pitch over to [`Skater::lean`]. Not off a vert face (vert air
+    /// keeps the skater upright here), unless `breaking` out over the lip.
+    fn launch_lean(&mut self, breaking: bool) {
+        let vert_face = self.ground_flags & ngc_collision::face_flags::VERT != 0;
+        if self.vert.is_some() || (vert_face && !breaking) {
             return;
         }
         let forward = self.forward();
@@ -3329,26 +3336,32 @@ impl Skater {
     /// `vert_push_out` out from the lip, to come back down onto the ramp.
     /// Holding the spine button (`Held R2`/`L2`, the revert button here),
     /// it aims a spine transfer to the ramp on the other side instead.
-    fn take_off_vert(&mut self, p: &Physics, world: &World) {
+    /// Whether it broke out of vert (over the lip, not into vert air).
+    fn take_off_vert(&mut self, p: &Physics, world: &World) -> bool {
         use ngc_collision::face_flags::VERT;
         let out = Vec3::new(self.up.x, 0.0, self.up.z);
         if self.ground_flags & VERT == 0 || self.velocity.y <= 0.0 || out.length() < 0.5 {
-            return;
+            return false;
         }
         let out = out.normalize();
         if self.last_input.revert && self.spine_transfer(out, p, world) {
-            return;
+            return false;
         }
         // Breaking out of vert (0x800F156C): up held longer than
         // `Skater_vert_push_time` (130 ms), and not steering, launches out
         // over the lip instead of straight up: a `break_air_speed_scale`
         // of the speed over towards the deck, the rise times
-        // `break_air_up_scale`.
-        if self.last_input.push && self.since_up >= VERT_PUSH_TIME && self.last_input.turn == 0.0 {
+        // `break_air_up_scale`, tipped forward
+        // `Skater_Break_Vert_forward_tilt` (whose caller adds it to the
+        // lean). Not with a trick button held (Square, or with the
+        // simplified controls Triangle and Circle too).
+        let input = self.last_input;
+        let tricking = input.flip || (self.simplified && (input.grab || input.grind));
+        if input.push && self.since_up >= VERT_PUSH_TIME && input.turn == 0.0 && !tricking {
             let speed = self.velocity.length();
             self.velocity -= out * speed * BREAK_AIR_SPEED_SCALE;
             self.velocity.y *= BREAK_AIR_UP_SCALE;
-            return;
+            return true;
         }
         let speed = self.velocity.length();
         let kept = self.velocity - out * self.velocity.dot(out);
@@ -3375,6 +3388,7 @@ impl Skater {
             let mirrored = forward - out * 2.0 * forward.dot(out);
             self.autoturn = Some(mirrored.x.atan2(mirrored.z));
         }
+        false
     }
 
     /// A spine transfer (main.dol 0x800F1CD8, in the vert takeoff): the
@@ -4502,7 +4516,7 @@ mod tests {
         skater.shown_up = normal;
         let drawn_up = |s: &Skater| s.placement().transform_vector3(Vec3::Y);
         let before = drawn_up(&skater);
-        skater.launch_lean();
+        skater.launch_lean(false);
         skater.up = Vec3::Y;
         // Nose up by the slope, drawn the same.
         assert!(

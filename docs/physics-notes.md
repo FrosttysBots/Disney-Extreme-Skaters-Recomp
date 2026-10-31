@@ -471,8 +471,19 @@ on-ground update switches on.
   quite vertical), not counted as spin (`ANGLE=20 cargo run --release
   -p desa_viewer --example vert_ramps`).
   Vert air falls by `Physics_Vert_hang_Stat` (0x800FC634). On the Hub's quarter pipes
-  (`cargo run --release -p desa_viewer --example vert_ramps`), 24 of the
-  25 runs that leave the lip come back down onto the ramp (4 before).
+  (`cargo run --release -p desa_viewer --example vert_ramps`), 23 of the
+  25 runs that leave the lip come back down onto the ramp (4 before),
+  2 on the deck.
+  Breaking out of vert (0x800F140C's start, then 0x800F156C): up held
+  longer than `Skater_vert_push_time` (130 ms), with neither Left nor
+  Right nor a trick button held (Square; Triangle and Circle too with
+  the simplified controls), or L1 and R1 together, and the skater goes
+  over the lip instead of into vert air: `physics_break_air_speed_scale`
+  (0.75) of the speed against the ramp's normal, the rise times
+  `physics_break_air_up_scale` (0.75), and the matrix, still the
+  ramp's, tipped `Skater_Break_Vert_forward_tilt` (45 degrees) forward.
+  Ported, but for L1 and R1 (no such buttons here); the tilt is the lean
+  above, so recovering brings it upright before the deck.
 - **Wall rides** (state 2, 0x800FE664; started by 0x800FDB6C from the
   air wall code) need the face flagged wall-ridable, the grind button
   held or pressed within `Wall_Ride_Triangle_Window`, `Wall_Ride_Delay`
