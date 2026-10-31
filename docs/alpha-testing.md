@@ -114,6 +114,9 @@ skater is and what it's doing.
   each gate adding its seconds.
 - Toy cars (Andy's Room): jump into one near its roof for a "Car Plant"
   and a boost up and on; run into a fast one and it knocks you over.
+- Rails that come and go: a level's rails that its scripts create later
+  (Zurg's stepping stones once he's beaten, the goals' own rails) can't
+  be grinded until they're there.
 - Moving things are solid: the toy cars, the Hub's crane and airplane,
   the UFOs, Zurg's platform and the lifeboat, in their real shapes.
 - Rails on things that move: grind the toy cars' roofs, the Treehouse's
