@@ -175,6 +175,12 @@ pub struct Physics {
     pub ground_rotation: f32,
     pub ground_sharp_rotation: f32,
     pub air_rotation: f32,
+    /// A held spin doesn't turn till the button's been down
+    /// `Physics_Air_No_Rotate_Time`, then builds up to full by
+    /// `Physics_Air_Ramp_Rotate_Time` (seconds; on the disc the ramp ends
+    /// before the wait does, so it's all or nothing).
+    pub air_no_rotate_time: f32,
+    pub air_ramp_rotate_time: f32,
     /// How fast a 180 spin tap turns, radians a second.
     pub air_tap_turn_speed: f32,
     pub ground_snap_up: f32,
@@ -361,6 +367,8 @@ impl Physics {
             ground_rotation: plain("Physics_Ground_Rotation", 1.8),
             ground_sharp_rotation: plain("Physics_Ground_Sharp_Rotation", 3.6),
             air_rotation: scaled("Physics_Air_Rotation_stat", 7.125),
+            air_no_rotate_time: plain("Physics_Air_No_Rotate_Time", 100.0) / 1000.0,
+            air_ramp_rotate_time: plain("Physics_Air_Ramp_Rotate_Time", 50.0) / 1000.0,
             air_tap_turn_speed: scaled("Physics_air_tap_turn_speed_stat", 7.125),
             ground_snap_up: plain("Physics_Ground_Snap_Up", 13.0),
             air_snap_up: plain("Physics_Air_Snap_Up", 15.0),

@@ -301,14 +301,24 @@ fn real_skater_on_the_hub() {
     // Spinning all the way down lands sideways: at speed, the yaw bail.
     let mut sideways = Skater::new(start.position, facing.x.atan2(facing.z));
     sideways.tricks = trickster.tricks.clone();
-    for _ in 0..90 {
-        sideways.update(crouch, &physics, &world, 1.0 / 60.0);
-    }
-    sideways.update(Input::default(), &physics, &world, 1.0 / 60.0);
     let spin = Input {
         turn: 1.0,
         ..Input::default()
     };
+    // (The spin held from just before the ollie: a held spin waits
+    // `Physics_Air_No_Rotate_Time` to start.)
+    for frame in 0..90 {
+        let input = if frame < 84 {
+            crouch
+        } else {
+            Input {
+                crouch: true,
+                ..spin
+            }
+        };
+        sideways.update(input, &physics, &world, 1.0 / 60.0);
+    }
+    sideways.update(spin, &physics, &world, 1.0 / 60.0);
     for frame in 0..240 {
         sideways.update(spin, &physics, &world, 1.0 / 60.0);
         if frame > 2 && sideways.on_ground {

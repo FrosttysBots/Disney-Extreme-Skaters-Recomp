@@ -182,8 +182,11 @@ on-ground update switches on.
 - **Air spins** (0x800EE4CC): left or right spins at
   `Physics_Air_Rotation_stat`; in a tap-turn mode (skater `+0x3A40`) each
   tap queues half a turn (pi, at `+0x3A48`) taken at
-  `Physics_air_tap_turn_speed_stat`. Ported, both (the taps with the
-  Controls option's 180 spin taps).
+  `Physics_air_tap_turn_speed_stat`. A held spin waits till the button's
+  been down (0x800EBFF0) `Physics_Air_No_Rotate_Time` (100 ms), then
+  ramps to full by `Physics_Air_Ramp_Rotate_Time` (50: already past, so
+  it's straight to full). Ported, all (the taps with the Controls
+  option's 180 spin taps).
 - **Braking** (0x800F418C, `Physics_Brake_Acceleration` by name): unless
   0x800F34D0 says it can't, the velocity is slowed by the brake rate times
   the frame time along itself; below twice that, or if it would reverse,

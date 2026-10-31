@@ -3507,9 +3507,19 @@ impl Skater {
                     .ray(self.position, self.position + Vec3::Y * fall)
                     .is_some());
         self.air_tricks(input);
-        // Spinning at the air rotation stat (0x800EE4CC); the turn counts
-        // towards the latest trick's spin.
-        let mut turn = input.turn * p.air_rotation * STEP;
+        // Spinning at the air rotation stat (0x800EE4CC), once the turn's
+        // been held `air_no_rotate_time`; the turn counts towards the
+        // latest trick's spin.
+        let held = self.turn_time;
+        let rate = if held <= p.air_no_rotate_time {
+            0.0
+        } else if held < p.air_ramp_rotate_time {
+            p.air_rotation * (held - p.air_no_rotate_time)
+                / (p.air_ramp_rotate_time - p.air_no_rotate_time)
+        } else {
+            p.air_rotation
+        };
+        let mut turn = input.turn * rate * STEP;
         if self.spin_taps {
             if self.pressed_within(Press::Revert, 0.0) {
                 let way = if input.turn != 0.0 {
