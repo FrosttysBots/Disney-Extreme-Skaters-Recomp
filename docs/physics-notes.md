@@ -81,8 +81,9 @@ on-ground update switches on.
   long once held `Skate_wall_lean_push_time` (0.4 s), less before. Into
   a wall, the skater moves by how far it went in, along the wall's
   normal (0x80009D00), unless a line 1 up that way hits something.
-  Ported. Just before it, 0x800F9AAC feels 15 (`Skater_side_collide_
-  length`) to each side at 16 up through 0x800F9BAC, nudging off walls
+  Ported. Just before it, 0x800F9AAC feels 15
+  (`Skater_side_collide_length`) to each side at 16 up through
+  0x800F9BAC, nudging off walls
   and turning away (0x800F6860) when no turn's held, and puts the
   skater back if both sides hit; not ported.
 - **Cars** (0x8010D6F4, the skater meeting a vehicle): in the air with
