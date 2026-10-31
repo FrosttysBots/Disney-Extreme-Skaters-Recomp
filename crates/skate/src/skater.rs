@@ -2939,6 +2939,15 @@ impl Skater {
                             target += hit.normal * (1.0 - feet);
                         }
                     }
+                    // Turned off it into another wall (0x800F7618: a line
+                    // the new way, `forward_collision_length` long): turned
+                    // right round from the way it came instead.
+                    let from = target + lift;
+                    if world.ray(from, from + forward * p.forward_collision_length).is_some() {
+                        self.heading += PI - turn;
+                        let flat = self.forward();
+                        forward = (flat - up * flat.dot(up)).normalize_or(flat);
+                    }
                 }
             }
         }
@@ -4257,6 +4266,72 @@ mod tests {
             repaired_fields: 0,
             repaired_bsp_fields: 0,
         })
+    }
+
+    /// The floor, and walls along x = 0 and z = 0 meeting in a corner
+    /// (the skater's side: x and z below 0).
+    fn corner() -> World {
+        use ngc_collision::{BspNode, BspTree, Collision, CollisionObject, Face};
+        let face = |indices: [u16; 3]| Face {
+            flags: 0,
+            terrain: 0,
+            indices,
+        };
+        World::new(Collision {
+            objects: vec![CollisionObject {
+                checksum: 1,
+                flags: 0,
+                bbox: [-2000.0, 0.0, -2000.0, 2000.0, 400.0, 2000.0],
+                vertices: vec![
+                    [-2000.0, 0.0, -2000.0],
+                    [2000.0, 0.0, -2000.0],
+                    [2000.0, 0.0, 2000.0],
+                    [-2000.0, 0.0, 2000.0],
+                    [0.0, 0.0, -1000.0],
+                    [0.0, 400.0, -1000.0],
+                    [0.0, 400.0, 1000.0],
+                    [0.0, 0.0, 1000.0],
+                    [-1000.0, 0.0, 0.0],
+                    [-1000.0, 400.0, 0.0],
+                    [1000.0, 400.0, 0.0],
+                    [1000.0, 0.0, 0.0],
+                ],
+                intensities: Vec::new(),
+                faces: vec![
+                    face([0, 1, 2]),
+                    face([0, 2, 3]),
+                    face([4, 5, 6]),
+                    face([4, 6, 7]),
+                    face([8, 9, 10]),
+                    face([8, 10, 11]),
+                ],
+                skipped_faces: 0,
+                bsp: BspTree {
+                    nodes: vec![BspNode::Leaf { first: 0, count: 6 }],
+                    faces: vec![0, 1, 2, 3, 4, 5],
+                },
+            }],
+            repaired_fields: 0,
+            repaired_bsp_fields: 0,
+        })
+    }
+
+    #[test]
+    fn rolling_into_a_corner_turns_right_round() {
+        let p = physics();
+        let world = corner();
+        // Straight into the corner, 45 degrees to both walls.
+        let mut skater = Skater::new(Vec3::new(-200.0, 0.0, -200.0), std::f32::consts::FRAC_PI_4);
+        skater.on_ground = true;
+        skater.auto_kick = false;
+        skater.velocity = Vec3::new(1.0, 0.0, 1.0).normalize() * 400.0;
+        for _ in 0..90 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        // Out of it, heading back the way it came.
+        let away = skater.position.x.min(skater.position.z);
+        assert!(away < -40.0, "{} {:?}", skater.position, skater.velocity);
+        assert!(skater.velocity.x < 0.0 && skater.velocity.z < 0.0, "{:?}", skater.velocity);
     }
 
     #[test]

@@ -238,9 +238,13 @@ on-ground update switches on.
     speed (a sound, perhaps).
   - The skater is put at the hit point, back down to its feet, plus 6
     along the wall's normal. Then a second line along the new direction:
-    if that hits a wall too and `+0x37BC` is set (a corner?), it turns by
-    180 degrees less the bounce.
-  Ported: all but the corner case, the script event and the sound; the
+    if that hits a wall too and `+0x37BC` is set (0x800F7618; set once
+    when the skater's made, read in 63 places: the local player, by the
+    look of it), it turns by 180 degrees less the bounce: right round
+    from the way it came, so a corner sends it back out.
+  Ported: all but the script event and the sound (the second line is
+  `Skater_First_Forward_Collision_Length` along the new way, from the
+  forward line's height); the
   bounce's sign is chosen to turn away from the wall rather than read
   from the matrix. The air version is 0x800F847C (it reads
   `Skater_Min_Distance_To_Wall`), called from what looks like the air
