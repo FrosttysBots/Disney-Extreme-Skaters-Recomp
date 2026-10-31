@@ -315,6 +315,9 @@ on-ground update switches on.
     when the skater's made, read in 63 places: the local player, by the
     look of it), it turns by 180 degrees less the bounce: right round
     from the way it came, so a corner sends it back out.
+    Ported at any speed (the port's own stop for a skater under 50,
+    from before the corner turn was ported, is gone: 90 random runs a
+    level fall and get stuck no more without it).
   The sound (0x8010E340) is the terrain's bonk (sound table entry 4) at
   a volume of 100 times the speed over a stat (checksum 0xCC5E87AA)
   that no script defines, so always 100 (0x8010DEBC).

@@ -280,9 +280,6 @@ const LIP_TWEAK: u32 = 10;
 /// collision.
 const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0, -1.5)];
 
-/// Slower than this into a wall the skater just stops against it.
-const CREEP_SPEED: f32 = 50.0;
-
 /// Breaking out of vert air: up held this long at the lip, and how much of
 /// the speed goes over the lip and up (`Skater_vert_push_time`,
 /// `physics_break_air_speed_scale`, `physics_break_air_up_scale`).
@@ -2948,12 +2945,6 @@ impl Skater {
                     // Skatable ground ahead, like the curve of a ramp:
                     // step onto it.
                     target = hit.point + hit.normal * 0.1;
-                } else if speed.abs() < CREEP_SPEED && !self.pushing {
-                    // Barely moving (rolled into a wall by a slope, say):
-                    // just stopped, not turned (a push still turns it away), which in a corner would turn
-                    // it off one wall then the other, frame after frame.
-                    speed = 0.0;
-                    target = self.position;
                 } else {
                     let (turn, angle) = wall_bounce(forward, up, hit.normal, p);
                     self.heading += turn;
@@ -4710,6 +4701,23 @@ mod tests {
         assert!(off(0.1) > 100.0, "{}", off(0.1));
         // Past `Skater_Late_Jump_Slop` (333 ms), only falling.
         assert!(off(0.5) < 0.0, "{}", off(0.5));
+    }
+
+    #[test]
+    fn creeping_into_a_wall_glances_off_it() {
+        let p = physics();
+        let world = floor_and_wall();
+        // At 30, 45 degrees into the wall at x = 0.
+        let mut skater = Skater::new(Vec3::new(-25.0, 1.0, 0.0), std::f32::consts::FRAC_PI_4);
+        skater.auto_kick = false;
+        skater.velocity = skater.forward() * 30.0;
+        for _ in 0..60 {
+            skater.update(Input::default(), &p, &world, STEP);
+        }
+        // Turned along it (the game bounces at any speed), still rolling.
+        assert!(skater.forward().x < 0.5, "{:?}", skater.forward());
+        assert!(skater.velocity.length() > 1.0, "{:?}", skater.velocity);
+        assert!(skater.position.x < 0.0);
     }
 
     #[test]
