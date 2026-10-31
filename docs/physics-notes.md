@@ -108,6 +108,14 @@ on-ground update switches on.
   wall met it turns towards that wall's normal at `Rotate` radians a
   second, no further. Ported (the skater's bails, with the scripts'
   values).
+- **Mashing in a bail** (`BashOn`, `+0x7F8`; 0x8011CF6C each frame from
+  0x8010B440): button events (presses and releases, types 1 and 2 in
+  the skater's event buffer, 0x8011B248) in the last `BashPeriod` (400
+  ms) are counted and used up, and the animation plays at `1 +
+  BashSpeedupFactor` (0.2) each, at most `BashMaxPercentSpeedup` (100%)
+  more (0x800C1C10). Being used up, each event speeds a single frame:
+  mashing at ten presses a second takes about 7% off a bail. Not
+  ported.
 - **Cars** (0x8010D6F4, the skater meeting a vehicle): in the air with
   the feet no more than `min_car_height_diff` (60) below its top
   (`min_car_height_downwards`, 30, falling), `CarPlant`: "Car Plant" for
