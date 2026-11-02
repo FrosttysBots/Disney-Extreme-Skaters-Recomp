@@ -220,7 +220,15 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
     Ok((w, h))
 }
 
+// (Unused when the game build takes this file in as a module.)
+#[allow(dead_code)]
 fn main() -> Result<()> {
+    run(false)
+}
+
+/// Runs the viewer, or with `game` the game alone: no panel, debug keys or
+/// markers, booting through the opening movies into the main menu.
+pub fn run(game: bool) -> Result<()> {
     let args = Args::parse();
     let mut settings = Settings::load();
     let data_path = args
@@ -235,8 +243,14 @@ fn main() -> Result<()> {
     }
 
     let mut app = App::new(&mut settings);
+    if game {
+        app.set_game_mode();
+    }
     if let Some(path) = data_path {
         app.open_data(&path);
+    } else if game {
+        // Nothing to play: the panel, to open the disc.
+        app.model.panel_open = true;
     }
     // The game's opening, as it boots (`startup_loading_screen`): the
     // publisher's, Disney Interactive's and Toys for Bob's logos, then
@@ -258,7 +272,7 @@ fn main() -> Result<()> {
     // As the game boots: the Skate Shop and its main menu (unless a level
     // was asked for, or the panel says not to). Else the last level
     // viewed, else the hub.
-    let main_menu = args.level.is_none() && app.model.start_menu;
+    let main_menu = game || (args.level.is_none() && app.model.start_menu);
     if main_menu {
         app.open_main_menu();
     } else if let Some(level) = args
@@ -2037,6 +2051,8 @@ struct Gpu {
 
 struct App<'a> {
     settings: &'a mut Settings,
+    /// The game alone (the game build): no panel, debug keys or markers.
+    game: bool,
     gpu: Option<Gpu>,
     data: Option<GameData>,
     level: Option<LoadedLevel>,
@@ -2226,6 +2242,7 @@ impl<'a> App<'a> {
         let start_menu = settings.best.get("start_menu") != Some(&0);
         App {
             settings,
+            game: false,
             gpu: None,
             data: None,
             level: None,
@@ -2534,12 +2551,11 @@ impl<'a> App<'a> {
                 if let Some(screen) = &mut self.screen {
                     screen.screen.clear();
                     screen.screen.level = Some(qb::checksum(&format!("load_{}", info.id)));
-                    if std::mem::take(&mut self.main_menu_pending) && shop {
-                        screen
-                            .screen
-                            .run(qb::checksum("launch_main_menu"), Vec::new());
-                    }
                 }
+                if !shop {
+                    self.main_menu_pending = false;
+                }
+                self.launch_pending_main_menu();
                 if !shop {
                     self.settings.last_skated = Some(info.id.clone());
                 }
@@ -2677,6 +2693,8 @@ impl<'a> App<'a> {
             return;
         }
         let Some(name) = self.movie_queue.pop_front() else {
+            // The opening's over: the main menu, if it was waiting.
+            self.launch_pending_main_menu();
             return;
         };
         let (Some(source), Some(ffmpeg)) = (
@@ -2702,6 +2720,26 @@ impl<'a> App<'a> {
                 });
             }
             Err(err) => self.model.message = Some(format!("{name}: {err:#}")),
+        }
+    }
+
+    /// The main menu waiting on the Skate Shop's loading, once it's loaded
+    /// and the opening movies are over (the game boots into it after the
+    /// intro).
+    fn launch_pending_main_menu(&mut self) {
+        let shop = self
+            .level
+            .as_ref()
+            .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"));
+        if !self.main_menu_pending || !shop || self.movie.is_some() || !self.movie_queue.is_empty()
+        {
+            return;
+        }
+        self.main_menu_pending = false;
+        if let Some(screen) = &mut self.screen {
+            screen
+                .screen
+                .run(qb::checksum("launch_main_menu"), Vec::new());
         }
     }
 
@@ -5282,6 +5320,15 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The game alone: the panel shut, and no rails, spawn markers or map.
+    fn set_game_mode(&mut self) {
+        self.game = true;
+        self.model.panel_open = false;
+        self.model.show_rails = false;
+        self.model.show_spawns = false;
+        self.model.character.show_map = false;
+    }
+
     /// The game's main menu (`launch_main_menu`), in the Skate Shop as the
     /// game has it: there now, or once the shop's loaded.
     fn open_main_menu(&mut self) {
@@ -6901,7 +6948,11 @@ impl<'a> App<'a> {
 
     fn init(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
         let attributes = Window::default_attributes()
-            .with_title("DESA Map Viewer")
+            .with_title(if self.game {
+                "Disney's Extreme Skate Adventure"
+            } else {
+                "DESA Map Viewer"
+            })
             .with_inner_size(LogicalSize::new(1400.0, 850.0));
         let window = Arc::new(event_loop.create_window(attributes)?);
         let instance = wgpu::Instance::default();
@@ -6957,7 +7008,7 @@ impl<'a> App<'a> {
     fn update(&mut self, dt: f32) {
         // The keys drive the skater instead while skating (paused, they fly
         // the camera round for pictures).
-        if self.skating.is_some() && !self.model.character.paused {
+        if (self.skating.is_some() && !self.model.character.paused) || self.game {
             return;
         }
         let typing = self
@@ -7323,7 +7374,7 @@ impl<'a> App<'a> {
             }
             return;
         }
-        if code == KeyCode::KeyM && !repeat && self.skating.is_some() {
+        if code == KeyCode::KeyM && !repeat && self.skating.is_some() && !self.game {
             self.model.character.show_map = !self.model.character.show_map;
             return;
         }
@@ -7359,6 +7410,13 @@ impl<'a> App<'a> {
                 KeyCode::Enter | KeyCode::NumpadEnter if !repeat => self.take_warp(),
                 KeyCode::Escape if !repeat => self.stay_here(),
                 _ => {}
+            }
+            return;
+        }
+        // The game alone: Esc pauses, and the viewer's own keys do nothing.
+        if self.game {
+            if code == KeyCode::Escape && !repeat && self.skating.is_some() {
+                self.toggle_pause();
             }
             return;
         }

@@ -85,6 +85,13 @@ folders above it; otherwise use **Open disc image...** in the panel. It
 remembers the disc, the last level, the character and the camera speed in
 `%APPDATA%\desa-map-viewer\settings.txt`.
 
+The same build makes `target/release/desa-game.exe`: the game on its own,
+without the viewer's panel, debug keys, rails, spawn markers or map. It
+plays the opening movies, then comes up in the main menu (Esc pauses
+while skating). It shares the viewer's settings, so a disc opened in
+either is found by both; with no disc found it shows the panel to open
+one.
+
 The side panel lists the 11 levels and has toggles for the sky, rails
 (magenta tubes), spawn points (green = player 1 start, blue = others) and
 collision, a brighten slider for dark areas, camera speed, and every

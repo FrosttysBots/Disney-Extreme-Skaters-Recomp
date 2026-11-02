@@ -7,7 +7,9 @@ character. This page is for anyone trying it out.
 
 ## Getting started
 
-1. Open the Map Viewer with your disc image (see the README's quick start).
+1. Open the Map Viewer with your disc image (see the README's quick start),
+   or `desa-game.exe` to play without the viewer's panel and debug keys
+   (it goes the game's way below).
 2. Pick a level (the Hub is a good start; not the Skate Shop, which is
    the game's menu room) and a character.
 3. Press **Skate**. AutoKick is on: the skater pushes by itself (untick
