@@ -10,11 +10,23 @@ use crate::Skeleton;
 
 /// Model-space matrix for every bone, from parent-relative transforms.
 pub fn model_space(skeleton: &Skeleton, local: &[(Quat, Vec3)]) -> Vec<Mat4> {
+    model_space_scaled(skeleton, local, &[])
+}
+
+/// Like [`model_space`], with bones scaled (`scales[i]` for bone `i`, 1 if
+/// missing): a bone's scale scales what hangs off it too, as the created
+/// skater's body shape scales its head.
+pub fn model_space_scaled(
+    skeleton: &Skeleton,
+    local: &[(Quat, Vec3)],
+    scales: &[Vec3],
+) -> Vec<Mat4> {
     let mut world: Vec<Option<Mat4>> = vec![None; skeleton.bones.len()];
     fn resolve(
         i: usize,
         skeleton: &Skeleton,
         local: &[(Quat, Vec3)],
+        scales: &[Vec3],
         world: &mut Vec<Option<Mat4>>,
     ) -> Mat4 {
         if let Some(m) = world[i] {
@@ -24,17 +36,18 @@ pub fn model_space(skeleton: &Skeleton, local: &[(Quat, Vec3)]) -> Vec<Mat4> {
             .get(i)
             .copied()
             .unwrap_or((Quat::IDENTITY, Vec3::ZERO));
-        let own = Mat4::from_rotation_translation(rotation, translation);
+        let scale = scales.get(i).copied().unwrap_or(Vec3::ONE);
+        let own = Mat4::from_scale_rotation_translation(scale, rotation, translation);
         let m = match skeleton.bones[i].parent {
             // Guard against malformed cycles: a bone can't be its own ancestor.
-            Some(p) if p != i => resolve(p, skeleton, local, world) * own,
+            Some(p) if p != i => resolve(p, skeleton, local, scales, world) * own,
             _ => own,
         };
         world[i] = Some(m);
         m
     }
     (0..skeleton.bones.len())
-        .map(|i| resolve(i, skeleton, local, &mut world))
+        .map(|i| resolve(i, skeleton, local, scales, &mut world))
         .collect()
 }
 

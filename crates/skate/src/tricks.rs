@@ -10,7 +10,9 @@
 //! held and plays back out. Both turn bailing on (`BailOn`): landing before
 //! the trick is nearly over (`trickslack` frames from the end) is a bail.
 //!
-//! Only the default ("Hawk") controls are read.
+//! The default ("Hawk") controls are read, or the simplified ones
+//! ([`TrickBook::with_controls`]), where any trick button (`Squirgle`)
+//! does the trick for the direction held.
 
 use qb::vm::Program;
 use qb::{Value, checksum};
@@ -157,6 +159,8 @@ pub struct TrickBook {
     /// How long each animation runs, in seconds, from whoever has the
     /// character's animations loaded (see [`TrickBook::set_durations`]).
     durations: Vec<(u32, f32)>,
+    /// Read for the simplified controls (any trick button).
+    pub simplified: bool,
 }
 
 impl TrickBook {
@@ -166,9 +170,12 @@ impl TrickBook {
     pub fn trick_list(&self) -> Vec<String> {
         let dir = |d: Option<Dir>| d.map_or(String::new(), |d| format!(" + {d:?}"));
         let button = |b: Button| match b {
+            _ if self.simplified => "Trick",
             Button::Flip => "Flip",
             Button::Grab => "Grab",
         };
+        // (The simplified controls give both buttons the same tricks.)
+        let shown = |b: Button| !self.simplified || b == Button::Flip;
         // (Diagonals only repeat a neighbour's trick: left out.)
         let straight = |d: Option<Dir>| {
             !matches!(
@@ -178,11 +185,15 @@ impl TrickBook {
         };
         let mut lines = Vec::new();
         lines.push("In the air:".to_string());
-        for &(b, i) in &self.neutral {
+        for &(b, i) in self.neutral.iter().filter(|(b, _)| shown(*b)) {
             let t = &self.tricks[i];
             lines.push(format!("  {}: {} ({})", button(b), t.name, t.score));
         }
-        for &(b, d, i) in self.air.iter().filter(|(_, d, _)| straight(Some(*d))) {
+        for &(b, d, i) in self
+            .air
+            .iter()
+            .filter(|(b, d, _)| straight(Some(*d)) && shown(*b))
+        {
             let t = &self.tricks[i];
             lines.push(format!(
                 "  {}{}: {} ({})",
@@ -192,23 +203,33 @@ impl TrickBook {
                 t.score
             ));
         }
-        lines.push("Grinds (Grind at a rail):".to_string());
+        let (grind, grab) = if self.simplified {
+            ("Trick", "Trick")
+        } else {
+            ("Grind", "Grab")
+        };
+        lines.push(format!("Grinds ({grind} at a rail):"));
         for (d, t) in self.grinds.iter().filter(|(d, _)| straight(*d)) {
-            lines.push(format!("  Grind{}: {} ({})", dir(*d), t.name, t.score));
+            lines.push(format!("  {grind}{}: {} ({})", dir(*d), t.name, t.score));
         }
-        lines.push("Manuals (Up, Down; then Grab + direction):".to_string());
+        lines.push(format!("Manuals (Up, Down; then {grab} + direction):"));
         for (d, t) in &self.manuals {
-            let how = if d.is_none() {
-                "Up, Down".to_string()
-            } else {
-                format!("Grab{}", dir(*d))
+            let how = match d {
+                None if self.simplified => "Up, Down, or Trick twice".to_string(),
+                None => "Up, Down".to_string(),
+                Some(_) => format!("{grab}{}", dir(*d)),
             };
             lines.push(format!("  {how}: {} ({})", t.name, t.score));
         }
-        lines.push("Lips (Grind at a coping):".to_string());
+        lines.push(format!("Lips ({grind} at a coping):"));
         for (d, t) in self.lips.iter().filter(|(d, _)| straight(*d)) {
-            lines.push(format!("  Grind{}: {} ({})", dir(*d), t.name, t.score));
+            lines.push(format!("  {grind}{}: {} ({})", dir(*d), t.name, t.score));
         }
+        lines.push("Wallrides (jump at a wall alongside, holding Grind):".to_string());
+        lines.push(
+            "  FS / BS Wallride (200); let go of crouch: Wallie (250), with Up: Wallplant (500)"
+                .to_string(),
+        );
         lines.push("Specials (special meter full):".to_string());
         if let Some((a, b, i)) = self.special_air {
             let t = &self.tricks[i];
@@ -231,7 +252,21 @@ impl TrickBook {
     /// The tricks of `character` (such as `jessie`), from the scripts in
     /// `program`, with its stats.
     pub fn new(program: &Program, character: &str, stats: &Stats) -> Self {
-        let mut book = TrickBook::default();
+        Self::with_controls(program, character, stats, false)
+    }
+
+    /// The tricks for the default controls, or the simplified ones (the
+    /// entries flagged `Simplified`, by any trick button).
+    pub fn with_controls(
+        program: &Program,
+        character: &str,
+        stats: &Stats,
+        simplified: bool,
+    ) -> Self {
+        let mut book = TrickBook {
+            simplified,
+            ..TrickBook::default()
+        };
         let Some(table) = profile(program, character)
             .and_then(|p| p.get(checksum("default_trick_mapping")))
             .and_then(Value::as_name)
@@ -268,6 +303,7 @@ impl TrickBook {
             .unwrap_or_default();
         for entry in triggers {
             let hawk = entry.has_flag(checksum("Hawk"));
+            let simple = entry.has_flag(checksum("Simplified"));
             let Some(trigger) = entry.get(checksum("trigger")) else {
                 continue;
             };
@@ -279,6 +315,27 @@ impl TrickBook {
             };
             let names: Vec<u32> = items.iter().filter_map(|(_, v)| v.as_name()).collect();
             if names.first() != Some(&checksum("AirTrickLogic")) {
+                continue;
+            }
+            let squirgle = checksum("Squirgle");
+            if simplified {
+                if !simple || names.get(1) != Some(&squirgle) {
+                    continue;
+                }
+                let Some(i) = add(&mut book, slot_name) else {
+                    continue;
+                };
+                for button in [Button::Flip, Button::Grab] {
+                    match names.get(2) {
+                        Some(&n) if n == squirgle => book.neutral.push((button, i)),
+                        Some(&n) => {
+                            if let Some(dir) = Dir::from_name(n) {
+                                book.air.push((button, dir, i));
+                            }
+                        }
+                        None => {}
+                    }
+                }
                 continue;
             }
             let button = match names.get(1) {
@@ -303,11 +360,11 @@ impl TrickBook {
                 book.air.push((button, dir, i));
             }
         }
-        // A bare grab: the up grab.
+        // A bare grab: the up grab (the simplified controls have their own).
         if let Some(&(_, _, i)) = book
             .air
             .iter()
-            .find(|(b, d, _)| *b == Button::Grab && *d == Dir::Up)
+            .find(|(b, d, _)| *b == Button::Grab && *d == Dir::Up && !simplified)
         {
             book.neutral.push((Button::Grab, i));
         }
@@ -440,6 +497,31 @@ impl TrickBook {
             .find(|(d, _)| dir.is_some() && *d == dir)
             .or_else(|| list.iter().find(|(d, _)| d.is_none()))
             .map(|(_, t)| t.clone())
+    }
+
+    /// The trick in an air slot named by its checksum (`Air_CircleU`,
+    /// `Air_SquareDL`, `Air_Square`...: a Skatetris goal's list), if it's
+    /// a button with one direction or none.
+    pub fn slot_trick(&self, slot: u32) -> Option<usize> {
+        let dirs = [
+            ("", None),
+            ("U", Some(Dir::Up)),
+            ("D", Some(Dir::Down)),
+            ("L", Some(Dir::Left)),
+            ("R", Some(Dir::Right)),
+            ("UL", Some(Dir::UpLeft)),
+            ("UR", Some(Dir::UpRight)),
+            ("DL", Some(Dir::DownLeft)),
+            ("DR", Some(Dir::DownRight)),
+        ];
+        for (button, name) in [(Button::Flip, "Square"), (Button::Grab, "Circle")] {
+            for (suffix, dir) in dirs {
+                if checksum(&format!("Air_{name}{suffix}")) == slot {
+                    return self.air_trick(button, dir);
+                }
+            }
+        }
+        None
     }
 
     /// The trick for a button pressed with a direction held (or none).

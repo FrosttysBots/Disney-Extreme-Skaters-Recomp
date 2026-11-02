@@ -7,7 +7,7 @@
 //! original names.
 //!
 //! - [`token`] reads the token stream.
-//! - [`decompile`] turns tokens back into readable script source.
+//! - [`decompile()`] turns tokens back into readable script source.
 //! - [`value`] parses top-level data definitions, such as a level's
 //!   `NodeArray`, into structured values.
 

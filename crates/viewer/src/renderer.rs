@@ -166,12 +166,32 @@ struct GpuLevel {
     batches: Vec<GpuBatch>,
     /// Kept for rebinding passes to other textures.
     views: Vec<wgpu::TextureView>,
+    /// Each slot's texture checksum, for swapping one by name.
+    checksums: Vec<u32>,
     params: wgpu::Buffer,
 }
 
 struct Globals {
     buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+}
+
+/// A particle quad's corner: where, its texture coordinate, and its tint.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ParticleVertex {
+    pub position: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: [u8; 4],
+}
+
+/// Particles to draw with one texture: its index (in
+/// [`Renderer::set_particle_textures`]'s list), whether they add light or
+/// blend over, and their quads' triangles.
+pub struct ParticleBatch {
+    pub texture: usize,
+    pub additive: bool,
+    pub vertices: Vec<ParticleVertex>,
 }
 
 pub struct Renderer {
@@ -187,6 +207,11 @@ pub struct Renderer {
     character: Option<GpuLevel>,
     /// Extra meshes drawn with the level, and whether each is shown.
     layers: Vec<(GpuLevel, bool)>,
+    /// Pictures shown over layers' own textures (a movie on a screen in
+    /// the level), by layer: the texture and its size.
+    layer_pictures: std::collections::HashMap<usize, (wgpu::Texture, u32, u32)>,
+    /// Textures uploaded to swap in on layers (by checksum).
+    swap_views: std::collections::HashMap<u32, wgpu::TextureView>,
     pass_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     collision: Option<(wgpu::Buffer, u32)>,
@@ -196,11 +221,19 @@ pub struct Renderer {
     shadow: Option<(wgpu::Buffer, u32)>,
     color_overlay: wgpu::RenderPipeline,
     color_solid: wgpu::RenderPipeline,
+    /// Particles: their pipelines (additive, blended), texture layout and
+    /// textures, and this frame's draws.
+    particle_pipelines: [wgpu::RenderPipeline; 2],
+    particle_layout: wgpu::BindGroupLayout,
+    particle_textures: Vec<wgpu::BindGroup>,
+    particles: Vec<(wgpu::Buffer, u32, usize, bool)>,
     pub collision_view: CollisionView,
     pub show_sky: bool,
     /// When set, frames are drawn from this camera instead of the one
     /// passed to `render` / `encode` (for playing camera paths).
     pub scripted_camera: Option<ScriptedCamera>,
+    /// The character left out of frames (hidden by a goal's cutscene).
+    pub hide_character: bool,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
@@ -277,6 +310,36 @@ impl Renderer {
         let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
         let color_overlay = make_collision_pipeline(&device, &globals_layout, color_format, true);
         let color_solid = make_collision_pipeline(&device, &globals_layout, color_format, false);
+        let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("particle"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let particle_pipelines = [true, false].map(|additive| {
+            make_particle_pipeline(
+                &device,
+                &globals_layout,
+                &particle_layout,
+                color_format,
+                additive,
+            )
+        });
 
         Self {
             device,
@@ -289,6 +352,8 @@ impl Renderer {
             sky,
             character: None,
             layers: Vec::new(),
+            layer_pictures: std::collections::HashMap::new(),
+            swap_views: std::collections::HashMap::new(),
             pass_layout,
             sampler,
             collision,
@@ -296,9 +361,14 @@ impl Renderer {
             shadow: None,
             color_overlay,
             color_solid,
+            particle_pipelines,
+            particle_layout,
+            particle_textures: Vec::new(),
+            particles: Vec::new(),
             collision_view: CollisionView::Hidden,
             show_sky: true,
             scripted_camera: None,
+            hide_character: false,
             min_light: 0.0,
             depth: None,
         }
@@ -311,6 +381,49 @@ impl Renderer {
     /// Replaces the rail and spawn geometry (empty hides it).
     pub fn set_markers(&mut self, vertices: &[ColorVertex]) {
         self.markers = color_buffer(&self.device, "markers", vertices);
+    }
+
+    /// The particles' textures, by index (the first is used where one's
+    /// missing).
+    pub fn set_particle_textures(&mut self, textures: &[TextureData]) {
+        self.particle_textures = textures
+            .iter()
+            .map(|data| {
+                let view = upload_texture(&self.device, &self.queue, data);
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("particle"),
+                    layout: &self.particle_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                })
+            })
+            .collect();
+    }
+
+    /// This frame's particles.
+    pub fn set_particles(&mut self, batches: &[ParticleBatch]) {
+        self.particles = batches
+            .iter()
+            .filter(|b| !b.vertices.is_empty())
+            .map(|b| {
+                let buffer = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("particles"),
+                        contents: bytemuck::cast_slice(&b.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                (buffer, b.vertices.len() as u32, b.texture, b.additive)
+            })
+            .collect();
     }
 
     /// The character's shadow (translucent, drawn over the level), or
@@ -356,6 +469,105 @@ impl Renderer {
     pub fn show_layer(&mut self, id: Option<usize>, shown: bool) {
         if let Some(layer) = id.and_then(|id| self.layers.get_mut(id)) {
             layer.1 = shown;
+        }
+    }
+
+    /// Draws every pass of a layer with this picture (RGBA, `width` by
+    /// `height`) instead of its own textures: a movie's frame on a screen
+    /// in the level. The same size as before, only the pixels change.
+    pub fn show_on_layer(&mut self, id: Option<usize>, width: u32, height: u32, rgba: &[u8]) {
+        let Some(id) = id.filter(|&i| i < self.layers.len()) else {
+            return;
+        };
+        if rgba.len() < (width * height * 4) as usize || width == 0 || height == 0 {
+            return;
+        }
+        let fresh =
+            !matches!(self.layer_pictures.get(&id), Some((_, w, h)) if (*w, *h) == (width, height));
+        if fresh {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("layer picture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let (layer, _) = &mut self.layers[id];
+            for pass in layer.batches.iter_mut().flat_map(|b| &mut b.passes) {
+                pass.bind_group = pass_bind_group(
+                    &self.device,
+                    &self.pass_layout,
+                    &view,
+                    &self.sampler,
+                    &layer.params,
+                    pass.params_slot,
+                );
+            }
+            self.layer_pictures.insert(id, (texture, width, height));
+        }
+        let (texture, ..) = &self.layer_pictures[&id];
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba[..(width * height * 4) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Draws every pass, in the level and its layers, whose texture is
+    /// one of `from` (a texture's checksums) with `texture` instead (a
+    /// script swapping it: Pizza's arcade screens), or with its own again
+    /// (`None`).
+    pub fn swap_texture(&mut self, from: &[u32], texture: Option<&crate::level::TextureData>) {
+        if let Some(t) = texture {
+            if !self.swap_views.contains_key(&t.checksum) {
+                let view = upload_texture(&self.device, &self.queue, t);
+                self.swap_views.insert(t.checksum, view);
+            }
+        }
+        let swapped = texture.map(|t| &self.swap_views[&t.checksum]);
+        let (device, layout, sampler) = (&self.device, &self.pass_layout, &self.sampler);
+        let levels = std::iter::once(&mut self.world).chain(self.layers.iter_mut().map(|(l, _)| l));
+        for level in levels {
+            let Some(slot) = level.checksums.iter().position(|c| from.contains(c)) else {
+                continue;
+            };
+            let Some(view) = swapped.or(level.views.get(slot)) else {
+                continue;
+            };
+            for pass in level.batches.iter_mut().flat_map(|b| &mut b.passes) {
+                if pass.texture == slot {
+                    pass.bind_group = pass_bind_group(
+                        device,
+                        layout,
+                        view,
+                        sampler,
+                        &level.params,
+                        pass.params_slot,
+                    );
+                }
+            }
         }
     }
 
@@ -531,7 +743,7 @@ impl Renderer {
                     draw(&mut pass, layer, &self.world_pipelines);
                 }
             }
-            if let Some(character) = &self.character {
+            if let Some(character) = self.character.as_ref().filter(|_| !self.hide_character) {
                 pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
                 draw(&mut pass, character, &self.world_pipelines);
             }
@@ -540,6 +752,20 @@ impl Renderer {
                 pass.set_pipeline(&self.color_overlay);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
+            }
+            // Particles, over everything else, without hiding what's
+            // behind them.
+            if !only_collision && !self.particle_textures.is_empty() {
+                for (buffer, count, texture, additive) in &self.particles {
+                    let group = self
+                        .particle_textures
+                        .get(*texture)
+                        .unwrap_or(&self.particle_textures[0]);
+                    pass.set_pipeline(&self.particle_pipelines[usize::from(!*additive)]);
+                    pass.set_bind_group(1, group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..*count, 0..1);
+                }
             }
             if let Some((buffer, count)) = &self.markers {
                 pass.set_pipeline(&self.color_solid);
@@ -584,6 +810,71 @@ fn color_buffer(
 
 /// Draws colored triangles: translucent over the level (`overlay`), or
 /// solid on their own.
+fn make_particle_pipeline(
+    device: &wgpu::Device,
+    globals_layout: &wgpu::BindGroupLayout,
+    particle_layout: &wgpu::BindGroupLayout,
+    color_format: wgpu::TextureFormat,
+    additive: bool,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("particle.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("particle"),
+        bind_group_layouts: &[globals_layout, particle_layout],
+        push_constant_ranges: &[],
+    });
+    let blend = if additive {
+        wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        }
+    } else {
+        wgpu::BlendState::ALPHA_BLENDING
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("particle"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<ParticleVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Unorm8x4],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::GreaterEqual,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn make_collision_pipeline(
     device: &wgpu::Device,
     globals_layout: &wgpu::BindGroupLayout,
@@ -842,6 +1133,7 @@ fn upload_level(
         indices,
         batches,
         views,
+        checksums: level.textures.iter().map(|t| t.checksum).collect(),
         params: params_buffer,
     }
 }
@@ -1077,6 +1369,15 @@ pub fn save_png(
     let mut pixels = Vec::with_capacity((row * height) as usize);
     for line in mapped.chunks(padded_row as usize) {
         pixels.extend_from_slice(&line[..row as usize]);
+    }
+    // A window's frame is often blue-green-red: put red first.
+    if matches!(
+        target.format(),
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
     }
     let file = File::create(out).with_context(|| format!("could not create {}", out.display()))?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);

@@ -1,6 +1,7 @@
 //! Grind sparks: the board throws sparks while grinding (`SparksOn` in the
 //! `Grind` script, for grinds but not slides), drawn as short glowing
-//! streaks that fall and fade.
+//! streaks that fall and fade. And splashes: a burst of droplets where the
+//! skater goes into water (with the game's `bigsplash`).
 use glam::Vec3;
 use skate::{Action, Skater};
 
@@ -17,6 +18,9 @@ const NEAR: f32 = 60.0;
 /// A streak's length (seconds of its travel) and width (inches).
 const STREAK: f32 = 0.025;
 const WIDTH: f32 = 0.8;
+/// Droplets in a splash, and chunks when something's smashed.
+const SPLASH: usize = 90;
+const SHATTER: usize = 50;
 
 struct Spark {
     position: Vec3,
@@ -25,6 +29,10 @@ struct Spark {
     carried: Vec3,
     age: f32,
     life: f32,
+    /// A water droplet, not a spark.
+    water: bool,
+    /// A chunk of something broken.
+    debris: bool,
 }
 
 pub struct Sparks {
@@ -78,6 +86,8 @@ impl Sparks {
                     // Spread over the frame so they don't come out in clumps.
                     age: start * dt,
                     life,
+                    water: false,
+                    debris: false,
                 });
             }
         } else {
@@ -89,6 +99,46 @@ impl Sparks {
             spark.position += spark.velocity * dt;
         }
         self.sparks.retain(|s| s.age < s.life);
+    }
+
+    /// A splash where the skater went into water: droplets thrown up and
+    /// out, falling back.
+    pub fn splash(&mut self, at: Vec3) {
+        for _ in 0..SPLASH {
+            let angle = self.random() * std::f32::consts::TAU;
+            let out = 40.0 + 160.0 * self.random();
+            let up = 150.0 + 260.0 * self.random();
+            let life = 0.6 + 0.6 * self.random();
+            let from = 10.0 * self.random();
+            self.sparks.push(Spark {
+                position: at + Vec3::new(angle.cos(), 0.0, angle.sin()) * from,
+                velocity: Vec3::new(angle.cos() * out, up, angle.sin() * out),
+                carried: Vec3::ZERO,
+                age: 0.0,
+                life,
+                water: true,
+                debris: false,
+            });
+        }
+    }
+
+    /// Something smashed: chunks thrown out and up, falling back.
+    pub fn shatter(&mut self, at: Vec3) {
+        for _ in 0..SHATTER {
+            let angle = self.random() * std::f32::consts::TAU;
+            let out = 60.0 + 200.0 * self.random();
+            let up = 120.0 + 220.0 * self.random();
+            let life = 0.7 + 0.6 * self.random();
+            self.sparks.push(Spark {
+                position: at,
+                velocity: Vec3::new(angle.cos() * out, up, angle.sin() * out),
+                carried: Vec3::ZERO,
+                age: 0.0,
+                life,
+                water: false,
+                debris: true,
+            });
+        }
     }
 
     /// No sparks (skating stopped).
@@ -113,12 +163,23 @@ impl Sparks {
             let tail = head - (spark.velocity - spark.carried) * STREAK;
             let along = head - tail;
             let across = along.cross(eye - head).normalize_or_zero() * WIDTH;
-            let color = [
-                255,
-                (240.0 - 120.0 * t) as u8,
-                (170.0 * (1.0 - t).powi(2)) as u8,
-                (255.0 * (1.0 - t * t) * near) as u8,
-            ];
+            let color = if spark.debris {
+                [200, 185, 160, (255.0 * (1.0 - t * t) * near) as u8]
+            } else if spark.water {
+                [
+                    (190.0 + 50.0 * (1.0 - t)) as u8,
+                    (225.0 + 30.0 * (1.0 - t)) as u8,
+                    255,
+                    (200.0 * (1.0 - t * t) * near) as u8,
+                ]
+            } else {
+                [
+                    255,
+                    (240.0 - 120.0 * t) as u8,
+                    (170.0 * (1.0 - t).powi(2)) as u8,
+                    (255.0 * (1.0 - t * t) * near) as u8,
+                ]
+            };
             let tail_color = [color[0], color[1], color[2], color[3] / 4];
             let v = |p: Vec3, color: [u8; 4]| ColorVertex {
                 position: p.to_array(),

@@ -18,7 +18,7 @@
 //! open later, invisible trigger boxes and most pedestrians, which goals
 //! create.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -29,6 +29,40 @@ use qb::{Definition, Symbols, Value, checksum, parse_definitions, tokenize};
 use crate::camera::FlyCamera;
 use crate::collision::ColorVertex;
 
+/// The rail segments in a node array (a model's own, `Veh_Viper_NodeArray`:
+/// rails that move with it), in mesh space about the model's origin, each
+/// with its start node's name.
+pub fn rails_in(nodes: &[Value]) -> Vec<(Vec3, Vec3, u32)> {
+    let key = checksum;
+    let rail =
+        |node: &Value| node.get(key("Class")).and_then(Value::as_name) == Some(key("RailNode"));
+    let position = |node: &Value| {
+        node.get(key("Position"))
+            .and_then(Value::as_vector)
+            .map(|[x, y, z]| Vec3::new(x, y, -z))
+    };
+    let mut out = Vec::new();
+    for node in nodes.iter().filter(|n| rail(n)) {
+        let Some(start) = position(node) else {
+            continue;
+        };
+        let name = node.get(key("Name")).and_then(Value::as_name).unwrap_or(0);
+        let links = node
+            .get(key("Links"))
+            .and_then(Value::as_array)
+            .unwrap_or_default();
+        for link in links {
+            let Some(target) = link.as_int().and_then(|i| nodes.get(i as usize)) else {
+                continue;
+            };
+            if let (true, Some(end)) = (rail(target), position(target)) {
+                out.push((start, end, name));
+            }
+        }
+    }
+    out
+}
+
 pub struct RailSegment {
     pub start: Vec3,
     pub end: Vec3,
@@ -36,6 +70,14 @@ pub struct RailSegment {
     pub kind: String,
     /// Its `TerrainType` (`TERRAIN_METALSMOOTH`...), as a name's checksum.
     pub terrain: Option<u32>,
+    /// The node it starts at, whose link it is (its `Name`, 0 for none).
+    pub node: u32,
+    /// Whether that node is flagged `LipOverride` (lips off it may be more
+    /// twisted).
+    pub lip_override: bool,
+    /// Whether that node's there from the start (`CreatedAtStart`), not
+    /// waiting for a script to create it.
+    pub created_at_start: bool,
 }
 
 pub struct Spawn {
@@ -132,6 +174,11 @@ pub struct PathNode {
     /// In mesh space; `None` for nodes without a position.
     pub position: Option<Vec3>,
     pub links: Vec<usize>,
+    /// Run by what reaches it along a path (`SpawnObjScript`: Zurg's UFO
+    /// speeding up for the launch).
+    pub spawn_script: Option<u32>,
+    /// Its heading (`Angles` y, radians), as `ObjectNode::heading`.
+    pub heading: f32,
 }
 
 impl ObjectNode {
@@ -149,6 +196,10 @@ impl ObjectNode {
 #[derive(Default)]
 pub struct LevelNodes {
     pub rails: Vec<RailSegment>,
+    /// The game's rail chain: each rail node's position, and those of its
+    /// next and previous nodes, which grinding follows where rails fork
+    /// (see [`skate::rails::Rails::chain`]).
+    pub rail_chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>,
     pub spawns: Vec<Spawn>,
     pub objects: Vec<ObjectNode>,
     /// Name checksums of scene sectors that aren't there at the start.
@@ -159,6 +210,72 @@ pub struct LevelNodes {
     /// trigger faces: the node's name (its collision object's checksum)
     /// and the `TriggerScript`.
     pub geometry_scripts: Vec<(u32, u32)>,
+    /// Rail nodes that run a script when the skater grinds (or lip
+    /// tricks) the rail from them: the node's name and its
+    /// `TriggerScript` (rail gaps, a goal's grind).
+    pub rail_scripts: Vec<(u32, u32)>,
+    /// Particle emitters (`ParticleEmitter`): where, their `TriggerScript`
+    /// (which makes the particle system), whether there at the start, and
+    /// how far off they're drawn (`CutOff`).
+    pub emitters: Vec<Emitter>,
+    /// Every named node's name as written, by its checksum (for `create
+    /// prefix = "..."`).
+    pub labels: HashMap<u32, String>,
+    /// Bouncy objects (`LevelObject ... Bouncy`): knocked flying when the
+    /// skater runs into them.
+    pub bouncies: Vec<Bouncy>,
+    /// The level's own pieces that scripts can move, turn, make and take
+    /// away (`LevelObject`s that aren't bouncy: Beach's cargo doors,
+    /// Pizza's alien heads).
+    pub movers: Vec<Mover>,
+}
+
+/// A `LevelObject` node that isn't bouncy: where it's placed (mesh space),
+/// which way (its `Angles` heading), and whether it's there at the start.
+#[derive(Clone, Debug)]
+pub struct Mover {
+    pub name: u32,
+    pub position: Vec3,
+    pub heading: f32,
+    pub created_at_start: bool,
+    /// What it runs while it's there (`TriggerScript`: Hub's sodas spin
+    /// and wait to be got).
+    pub script: Option<u32>,
+}
+
+impl Mover {
+    /// As `ObjectNode::rotation`.
+    pub fn rotation(&self) -> Quat {
+        Quat::from_rotation_y(-self.heading)
+    }
+}
+
+/// A bouncy object's node and how it bounces (`UpMagnitude`,
+/// `Bounciness`, `MinBounceVel`, `Gravity`, `ConstRot`, `BounceSound`).
+#[derive(Clone, Debug)]
+pub struct Bouncy {
+    pub name: u32,
+    pub position: Vec3,
+    pub created_at_start: bool,
+    pub up: f32,
+    pub bounciness: f32,
+    pub min_bounce: f32,
+    pub gravity: f32,
+    pub spin: f32,
+    pub sound: Option<u32>,
+    /// Run when the skater knocks it (`CollideScript`: a counter goal's
+    /// thing got).
+    pub collide_script: Option<u32>,
+}
+
+/// A `ParticleEmitter` node.
+#[derive(Clone, Debug)]
+pub struct Emitter {
+    pub name: u32,
+    pub position: Vec3,
+    pub script: u32,
+    pub created_at_start: bool,
+    pub cutoff: f32,
 }
 
 impl LevelNodes {
@@ -210,16 +327,67 @@ impl LevelNodes {
                         .filter_map(|l| usize::try_from(l).ok())
                         .filter(|&l| l < nodes.len())
                         .collect(),
+                    spawn_script: node.get(key("SpawnObjScript")).and_then(Value::as_name),
+                    heading: node
+                        .get(key("Angles"))
+                        .and_then(Value::as_vector)
+                        .map_or(0.0, |a| a[1]),
                 })
                 .collect(),
             ..LevelNodes::default()
         };
+        for node in nodes.iter() {
+            if let (Some(name), Some(label)) = (
+                node.get(key("Name")).and_then(Value::as_name),
+                name_of(node, "Name"),
+            ) {
+                out.labels.insert(name, label);
+            }
+        }
+        // The game links rail nodes into a chain (main.dol 0x800E5C40, in
+        // the array's order, each node's first four links; 0x800E4400): a
+        // node's next is the first rail it links to, its previous the
+        // first linking to it, unless a later one is flagged
+        // `DefaultLine`.
+        let default_line: Vec<Option<bool>> = nodes
+            .iter()
+            .map(|n| (class_of(n) == Some(key("RailNode"))).then(|| n.has_flag(key("DefaultLine"))))
+            .collect();
+        let mut next = vec![None; nodes.len()];
+        let mut prev = vec![None; nodes.len()];
+        for a in 0..nodes.len() {
+            let Some(a_default) = default_line[a] else {
+                continue;
+            };
+            for &b in out.nodes[a].links.iter().take(4) {
+                let Some(b_default) = default_line[b] else {
+                    continue;
+                };
+                if next[a].is_none() || b_default {
+                    next[a] = Some(b);
+                }
+                if prev[b].is_none() || a_default {
+                    prev[b] = Some(a);
+                }
+            }
+        }
+        let at = |i: Option<usize>| i.and_then(|i| out.nodes[i].position);
+        out.rail_chain = (0..nodes.len())
+            .filter(|&i| default_line[i].is_some())
+            .filter_map(|i| Some((out.nodes[i].position?, at(next[i]), at(prev[i]))))
+            .collect();
         for (index, node) in nodes.iter().enumerate() {
             let Some(pos) = position(node).map(Vec3::from) else {
                 continue;
             };
             match class_of(node) {
                 Some(c) if c == key("RailNode") => {
+                    if let (Some(name), Some(script)) = (
+                        node.get(key("Name")).and_then(Value::as_name),
+                        node.get(key("TriggerScript")).and_then(Value::as_name),
+                    ) {
+                        out.rail_scripts.push((name, script));
+                    }
                     let kind = name_of(node, "Type").unwrap_or_default();
                     let links = node
                         .get(key("Links"))
@@ -238,11 +406,52 @@ impl LevelNodes {
                                 end: end.into(),
                                 kind: kind.clone(),
                                 terrain: node.get(key("TerrainType")).and_then(Value::as_name),
+                                node: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                                lip_override: node.has_flag(key("LipOverride")),
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
                             });
                         }
                     }
                 }
                 Some(c) if c == key("LevelGeometry") || c == key("LevelObject") => {
+                    if c == key("LevelObject") && !node.has_flag(key("Bouncy")) {
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.movers.push(Mover {
+                                name,
+                                position: pos,
+                                heading: node
+                                    .get(key("Angles"))
+                                    .and_then(Value::as_vector)
+                                    .map_or(0.0, |a| a[1]),
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
+                                script: node.get(key("TriggerScript")).and_then(Value::as_name),
+                            });
+                        }
+                    }
+                    if node.has_flag(key("Bouncy")) {
+                        let get =
+                            |k: &str, d: f32| node.get(key(k)).and_then(Value::as_f32).unwrap_or(d);
+                        if let Some(name) = node.get(key("Name")).and_then(Value::as_name) {
+                            out.bouncies.push(Bouncy {
+                                name,
+                                position: pos,
+                                created_at_start: node.has_flag(key("CreatedAtStart")),
+                                up: get("UpMagnitude", 24.0),
+                                bounciness: get("Bounciness", 0.5),
+                                min_bounce: get("MinBounceVel", 1.0),
+                                gravity: get("Gravity", 32.0),
+                                spin: get("ConstRot", 180.0),
+                                sound: node
+                                    .get(key("BounceSound"))
+                                    .and_then(Value::as_name)
+                                    .filter(|s| *s != 0),
+                                collide_script: node
+                                    .get(key("CollideScript"))
+                                    .and_then(Value::as_name)
+                                    .filter(|s| *s != 0),
+                            });
+                        }
+                    }
                     if let (Some(name), Some(script)) = (
                         node.get(key("Name")).and_then(Value::as_name),
                         node.get(key("TriggerScript")).and_then(Value::as_name),
@@ -283,6 +492,20 @@ impl LevelNodes {
                         script: node.get(key("TriggerScript")).and_then(Value::as_name),
                     });
                 }
+                Some(c) if c == key("ParticleEmitter") => {
+                    if let Some(script) = node.get(key("TriggerScript")).and_then(Value::as_name) {
+                        out.emitters.push(Emitter {
+                            name: node.get(key("Name")).and_then(Value::as_name).unwrap_or(0),
+                            position: pos,
+                            script,
+                            created_at_start: node.has_flag(key("CreatedAtStart")),
+                            cutoff: node
+                                .get(key("CutOff"))
+                                .and_then(Value::as_f32)
+                                .unwrap_or(500.0),
+                        });
+                    }
+                }
                 Some(c) if c == key("Restart") => {
                     let heading = node
                         .get(key("Angles"))
@@ -308,7 +531,8 @@ impl LevelNodes {
     }
 
     /// The spawn a level starts at: the first `Player1` restart, otherwise
-    /// the first restart.
+    /// the first restart, as the game picks one for a single player
+    /// (main.dol 0x800B5644).
     pub fn start(&self) -> Option<&Spawn> {
         self.spawns
             .iter()

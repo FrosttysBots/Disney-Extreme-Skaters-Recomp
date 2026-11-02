@@ -27,7 +27,8 @@ fn real_characters() {
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
     let mut data = GameData::open(Path::new(&path)).unwrap();
     let characters = data.characters();
-    assert_eq!(characters.len(), 12);
+    // The twelve Disney skaters and the created kid, boy and girl.
+    assert_eq!(characters.len(), 14);
 
     let mut poses = 0;
     for info in &characters {
@@ -67,4 +68,71 @@ fn real_characters() {
         }
     }
     println!("{} characters, {poses} poses", characters.len());
+}
+
+/// The created kid's wardrobe: the Skate Shop's parts with the game's
+/// own outfit picked, and every choice of each dressing the kid.
+#[test]
+#[ignore = "needs the game data"]
+fn real_kid_wardrobe() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    // (The parts' textures by the names the lists swap.)
+    assert!(desa_viewer::level::texture_checksums("girl_a1.png").contains(&0x78ea_0038));
+    for girl in [false, true] {
+        let slots = data.kid_wardrobe(girl).unwrap();
+        for slot in &slots {
+            println!(
+                "{girl} {}: {} choices, {:?}",
+                slot.label,
+                slot.choices.len(),
+                slot.choices[slot.picked].name
+            );
+        }
+        let picked = |label: &str| {
+            let slot = slots.iter().find(|s| s.label == label).unwrap();
+            slot.choices[slot.picked].name.clone()
+        };
+        assert!(slots.len() >= 10);
+        assert!(!picked("Hair").is_empty());
+        assert!(slots[0].choices.len() >= 5, "skins");
+        let outfit: Vec<_> = slots.iter().map(|s| s.worn()).collect();
+        // Coloured: the hair tinted (the shop's hue, saturation, value).
+        let mut red = outfit.clone();
+        red[1].color = Some([0.0, 100.0, 50.0]);
+        let tinted = data.load_kid(girl, &red).unwrap();
+        assert!(red[1].colorable);
+        assert!(tinted.part_tints.contains(&Some([128, 0, 0])));
+        Character::from_files(&tinted).unwrap();
+        let files = data.load_kid(girl, &outfit).unwrap();
+        let mut kid = Character::from_files(&files).unwrap();
+        // Its body shape (the head 0.9), on its skeleton's bones.
+        let (_, shape) = data.kid_wardrobe_and_shape(girl).unwrap();
+        assert!(shape.contains(&(qb::checksum("head"), [0.9, 0.9, 0.9])));
+        let shape: Vec<_> = shape
+            .into_iter()
+            .map(|(b, s)| (b, glam::Vec3::from(s)))
+            .collect();
+        kid.set_body_shape(&shape);
+        assert!(
+            !kid.bone_scales.is_empty(),
+            "no bone named in the body shape"
+        );
+        assert!(
+            files.parts.len() >= 5,
+            "{girl}: {} parts",
+            files.parts.len()
+        );
+        // Every choice loads.
+        for (i, slot) in slots.iter().enumerate() {
+            for choice in &slot.choices {
+                let mut outfit = outfit.clone();
+                outfit[i] = choice.clone();
+                let files = data.load_kid(girl, &outfit).unwrap();
+                Character::from_files(&files)
+                    .unwrap_or_else(|e| panic!("{} {}: {e:#}", slot.label, choice.name));
+            }
+        }
+    }
 }

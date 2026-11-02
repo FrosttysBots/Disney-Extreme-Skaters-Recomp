@@ -35,6 +35,14 @@ pub enum GameData {
     Folder(PathBuf),
 }
 
+/// The screen's sprites and fonts, by lowercase name (see
+/// [`GameData::ui_files`]).
+#[derive(Clone, Debug, Default)]
+pub struct UiFiles {
+    pub images: HashMap<String, Vec<u8>>,
+    pub fonts: HashMap<String, Vec<u8>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelInfo {
     /// The archive name, e.g. `ToyStory_Bedroom`.
@@ -66,14 +74,95 @@ pub struct LevelFiles {
     pub key_tables: Option<(Vec<u8>, Vec<u8>)>,
     /// The level's own scripts (every `.qb` in `X.prg`).
     pub scripts: Vec<Vec<u8>>,
+    /// Particle textures (`images/particles/NAME.img.ngc`) by name's
+    /// checksum, as `CreateParticleSystem ... texture = NAME` names them.
+    pub particle_images: HashMap<u32, Vec<u8>>,
 }
 
 /// The raw files for one playable character.
+/// A choice for one of the created kid's parts, from the Skate Shop's
+/// lists (`skater_m_hair`, `hat`...): its name as the shop shows it, its
+/// mesh, and the textures it swaps (`replace = "hair_boy_1_a1.png" with =
+/// "textures/boy/hair_boy_1_a2"`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KidPart {
+    pub name: String,
+    /// Its `desc_id` in its list (`Buzzcut`, `#"Skin 4"`), as the game's
+    /// menus name it.
+    pub desc_id: u32,
+    /// Another `desc_id` it goes by (a skin's body: `BoyBody2` for `#"Skin
+    /// 3"`), or 0.
+    pub alias: u32,
+    pub mesh: Option<String>,
+    pub swaps: Vec<(String, String)>,
+    /// Whether the shop lets its colour be changed (not `no_color`).
+    pub colorable: bool,
+    /// The colour picked for it, as the shop's sliders give it: hue in
+    /// degrees, saturation and value out of 100 (`h`, `S`, `v`); `None`
+    /// keeps its own (`use_default_hsv`).
+    pub color: Option<[f32; 3]>,
+}
+
+/// A part's colour (`SetPlayerAppearanceColor h S v`) as the game sets it
+/// on the part's materials (0x8006D4BC): the hue, saturation and value
+/// to RGB, out of 255, where 128 leaves the part as it is.
+pub fn kid_part_tint([h, s, v]: [f32; 3]) -> [u8; 3] {
+    let (s, v) = (s / 100.0, v / 100.0);
+    let h = h.rem_euclid(360.0) / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|c| ((c + m) * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
+}
+
+/// One of the created kid's parts: its choices and the one picked (the
+/// game's own to start, `appearance_reset_boy` or `_girl`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KidSlot {
+    pub label: &'static str,
+    /// The list's name (`skater_m_hair`, `hat`), as the game's menus
+    /// name the part.
+    pub list: u32,
+    pub choices: Vec<KidPart>,
+    pub picked: usize,
+    /// Its colour picked (see [`KidPart::color`]).
+    pub color: Option<[f32; 3]>,
+}
+
+impl KidSlot {
+    /// The choice picked, in the colour picked.
+    pub fn worn(&self) -> KidPart {
+        KidPart {
+            color: self.color.filter(|_| self.choices[self.picked].colorable),
+            ..self.choices[self.picked].clone()
+        }
+    }
+}
+
+/// Bones scaled, by their names (a body shape: `head = (0.9, 0.9, 0.9)`).
+pub type BodyShape = Vec<(u32, [f32; 3])>;
+
 pub struct CharacterFiles {
     pub skin: Vec<u8>,
     pub textures: Option<Vec<u8>>,
     /// The skateboard, skinned to the character's skeleton.
     pub board: Option<(Vec<u8>, Option<Vec<u8>>)>,
+    /// More of the model, skinned to the same skeleton: the created
+    /// kid's clothes and hair.
+    pub parts: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    /// The colour each of those is tinted (see [`kid_part_tint`]).
+    pub part_tints: Vec<Option<[u8; 3]>>,
+    /// Textures (`.img.ngc` files) for checksums the model's own texture
+    /// file hasn't: the created girl's head.
+    pub extra_textures: Vec<(u32, Vec<u8>)>,
     pub skeleton: Vec<u8>,
     /// `standardkeyq.bin` and `standardkeyt.bin`.
     pub key_tables: (Vec<u8>, Vec<u8>),
@@ -92,7 +181,10 @@ fn collect_models(archive: &Archive, models: &mut HashMap<String, Vec<u8>>) -> R
         else {
             continue;
         };
-        if [".mdl", ".skin", ".tex"].iter().any(|s| key.ends_with(s)) {
+        if [".mdl", ".skin", ".tex", ".col"]
+            .iter()
+            .any(|s| key.ends_with(s))
+        {
             models.insert(key.to_string(), e.contents()?.into_owned());
         }
     }
@@ -277,6 +369,7 @@ impl GameData {
         let mut models = HashMap::new();
         let mut animations: HashMap<String, Vec<u8>> = HashMap::new();
         let mut scripts = Vec::new();
+        let mut particle_images = HashMap::new();
         let (nodes, cameras) = match self.read_archive(&format!("{id}.prg"))? {
             Some(data) => {
                 let archive =
@@ -284,8 +377,16 @@ impl GameData {
                 let nodes = entry(&archive, &|p| p.ends_with(&format!("/{name}.qb")))?;
                 collect_models(&archive, &mut models)?;
                 for e in archive.entries() {
-                    if e.path().to_ascii_lowercase().ends_with(".qb") {
+                    let path = e.path().replace('\\', "/").to_ascii_lowercase();
+                    if path.ends_with(".qb") {
                         scripts.push(e.contents()?.into_owned());
+                    }
+                    if let Some(name) = path
+                        .split("images/particles/")
+                        .nth(1)
+                        .and_then(|n| n.strip_suffix(".img.ngc"))
+                    {
+                        particle_images.insert(qb::checksum(name), e.contents()?.into_owned());
                     }
                 }
                 let mut cameras = Vec::new();
@@ -331,6 +432,7 @@ impl GameData {
             skeletons,
             key_tables,
             scripts,
+            particle_images,
         })
     }
 
@@ -419,15 +521,24 @@ impl GameData {
             .filter_map(|name| {
                 let lower = name.to_ascii_lowercase();
                 let id = lower.strip_prefix("anims_")?.strip_suffix(".prg")?;
-                // The created skater is assembled from parts in
-                // skaterparts.prg, so its archive has animations but no model.
-                (id != "kid").then(|| name[6..6 + id.len()].to_string())
+                // (The created skater, the kid, has animations here but its
+                // model's made of parts in skaterparts.prg: see
+                // `load_character`.)
+                Some(name[6..6 + id.len()].to_string())
             })
             .map(|id| LevelInfo {
                 title: title(&id),
                 id,
             })
             .collect();
+        // The created kid as a girl too (the skater select's first kid),
+        // on the kid's animations.
+        if characters.iter().any(|c| c.id.eq_ignore_ascii_case("kid")) {
+            characters.push(LevelInfo {
+                title: "Kid (Girl)".into(),
+                id: "kid_girl".into(),
+            });
+        }
         characters.sort_by(|a, b| a.title.cmp(&b.title));
         characters
     }
@@ -488,23 +599,60 @@ impl GameData {
         Ok(out)
     }
 
+    /// The goal pedestrians' voice lines (`streams/goalpeds/NAME`): where
+    /// each is in `streams.wad`, by its name's checksum (as goal scripts
+    /// name them: `S_Stream = hench_beach_Letter_S`).
+    pub fn goal_streams(&mut self) -> Result<HashMap<u32, (u64, u64)>> {
+        let prefix = r"\streams\goalpeds\";
+        let Some(index) = self.stream_file("streams.hed", None)? else {
+            return Ok(HashMap::new());
+        };
+        let mut out = HashMap::new();
+        let mut at = 0;
+        while at + 8 <= index.len() {
+            let offset = u32::from_le_bytes(index[at..at + 4].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(index[at + 4..at + 8].try_into().unwrap()) as u64;
+            at += 8;
+            let Some(end) = index[at..].iter().position(|&b| b == 0) else {
+                break;
+            };
+            let name = String::from_utf8_lossy(&index[at..at + end]).to_ascii_lowercase();
+            at = (at + end + 4) & !3;
+            if name.is_empty() {
+                break;
+            }
+            if let Some(stem) = name.strip_prefix(prefix) {
+                out.insert(qb::checksum(stem), (offset, size));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One voice line out of `streams.wad`.
+    pub fn stream(&mut self, (offset, size): (u64, u64)) -> Result<Option<Vec<u8>>> {
+        self.stream_file("streams.wad", Some((offset, size)))
+    }
+
     /// A file of the `streams` folder, or a range of it.
     fn stream_file(&mut self, name: &str, range: Option<(u64, u64)>) -> Result<Option<Vec<u8>>> {
         use std::io::{Read, Seek, SeekFrom};
         let data = match self {
             GameData::Disc { disc, .. } => {
-                let path = disc
+                let file = disc
                     .fst()
                     .files()
                     .find(|n| n.path.to_ascii_lowercase() == format!("streams/{name}"))
-                    .map(|n| n.path.clone());
-                let Some(path) = path else { return Ok(None) };
-                let whole = disc.read_file(&path)?;
+                    .and_then(|n| Some((n.path.clone(), n.file_range()?)));
+                let Some((path, (start, length))) = file else {
+                    return Ok(None);
+                };
                 match range {
-                    Some((offset, size)) => whole
-                        .get(offset as usize..(offset + size) as usize)
-                        .map(<[u8]>::to_vec),
-                    None => Some(whole),
+                    // Just the part wanted, straight off the disc.
+                    Some((offset, size)) if offset + size <= length => {
+                        Some(disc.read_range(start + offset, size)?)
+                    }
+                    Some(_) => None,
+                    None => Some(disc.read_file(&path)?),
                 }
             }
             GameData::Folder(dir) => {
@@ -526,6 +674,108 @@ impl GameData {
             }
         };
         Ok(data)
+    }
+
+    /// Where a movie is (`movies/NAME.bik`, ignoring case): the disc's
+    /// range of it, or the file in an extracted folder (`movies` beside
+    /// `pre`).
+    pub fn movie(&self, name: &str) -> Option<crate::movie::MovieSource> {
+        let file = format!("{}.bik", name.to_ascii_lowercase());
+        match self {
+            GameData::Disc { path, disc } => {
+                let (offset, size) = disc
+                    .fst()
+                    .files()
+                    .find(|n| n.path.to_ascii_lowercase() == format!("movies/{file}"))?
+                    .file_range()?;
+                Some(crate::movie::MovieSource {
+                    path: path.clone(),
+                    offset,
+                    size,
+                })
+            }
+            GameData::Folder(dir) => {
+                let movies = dir.parent()?.join("movies");
+                let path = fs::read_dir(&movies).ok()?.find_map(|e| {
+                    let e = e.ok()?;
+                    e.file_name()
+                        .to_str()?
+                        .eq_ignore_ascii_case(&file)
+                        .then(|| e.path())
+                })?;
+                let size = fs::metadata(&path).ok()?.len();
+                Some(crate::movie::MovieSource {
+                    path,
+                    offset: 0,
+                    size,
+                })
+            }
+        }
+    }
+
+    /// The screen's pieces: the panel sprites (`images/PanelSprites/...`,
+    /// by lowercase file name without `.img.ngc`) and fonts (by lowercase
+    /// name without `.fnt.ngc`) of the archives named, later ones over
+    /// earlier (`panelsprites.prg` for every level, then a theme's:
+    /// `hubpanel.prg`). Languages' own copies (`French/`...) are left out.
+    pub fn ui_files(&mut self, archives: &[&str]) -> Result<UiFiles> {
+        let mut out = UiFiles::default();
+        for name in archives {
+            let Some(data) = self.read_archive(name)? else {
+                continue;
+            };
+            let archive =
+                Archive::parse(&data).with_context(|| format!("could not read {name}"))?;
+            for e in archive.entries() {
+                let path = e.path().to_ascii_lowercase().replace('\\', "/");
+                if ["/french/", "/german/", "/italian/", "/spanish/"]
+                    .iter()
+                    .any(|l| path.contains(l))
+                {
+                    continue;
+                }
+                let file = path.rsplit('/').next().unwrap_or(&path).to_string();
+                if let Some(image) = file.strip_suffix(".img.ngc") {
+                    out.images
+                        .insert(image.to_string(), e.contents()?.into_owned());
+                } else if let Some(font) = file.strip_suffix(".fnt.ngc") {
+                    out.fonts
+                        .insert(font.to_string(), e.contents()?.into_owned());
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The movies on the disc (`movies/*.bik`), by name, sorted.
+    pub fn movies(&self) -> Vec<String> {
+        let mut names: Vec<String> = match self {
+            GameData::Disc { disc, .. } => disc
+                .fst()
+                .files()
+                .filter(|n| {
+                    let p = n.path.to_ascii_lowercase();
+                    p.starts_with("movies/") && p.ends_with(".bik")
+                })
+                .map(|n| n.name.trim_end_matches(".bik").to_string())
+                .collect(),
+            GameData::Folder(dir) => dir
+                .parent()
+                .and_then(|d| fs::read_dir(d.join("movies")).ok())
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| {
+                            let name = e.ok()?.file_name().into_string().ok()?;
+                            name.to_ascii_lowercase()
+                                .ends_with(".bik")
+                                .then(|| name[..name.len() - 4].to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        names.sort_by_key(|n| n.to_ascii_lowercase());
+        names
     }
 
     /// A streamed music track (`music/dtk/NAME.dtk`, ignoring case), or
@@ -582,7 +832,215 @@ impl GameData {
         Ok(out)
     }
 
+    /// The created kid's parts (as a boy or a girl) and their choices, from
+    /// the Skate Shop's lists. The skin's choices are the bodies they put on
+    /// (`SetPart part = body desc_id = BoyBody1`...).
+    pub fn kid_wardrobe(&mut self, girl: bool) -> Result<Vec<KidSlot>> {
+        Ok(self.kid_wardrobe_and_shape(girl)?.0)
+    }
+
+    /// [`GameData::kid_wardrobe`], and the kid's body shape as the Skate
+    /// Shop makes it (`body_shape = cak_scale_info`: its bones scaled by
+    /// name, `head = (0.9, 0.9, 0.9)`; the overall `scale` left out).
+    pub fn kid_wardrobe_and_shape(&mut self, girl: bool) -> Result<(Vec<KidSlot>, BodyShape)> {
+        use qb::{Value, checksum};
+        let mut program = qb::vm::Program::new();
+        for file in self.global_scripts()? {
+            let _ = program.add(&file);
+        }
+        for file in self.load_level("SkateShop")?.scripts {
+            let _ = program.add(&file);
+        }
+        let text = |v: &Value| match v {
+            Value::String(s) | Value::LocalString(s) => Some(s.clone()),
+            _ => None,
+        };
+        let id_of = |v: &Value| v.get(checksum("desc_id")).and_then(Value::as_name);
+        // An entry with the structs it names filled in (`common_deck_
+        // graphic_params`: the texture a deck replaces).
+        let expand = |entry: &Value| -> Value {
+            let Value::Struct(items) = entry else {
+                return entry.clone();
+            };
+            let mut out = Vec::new();
+            for (k, v) in items {
+                match (k, v) {
+                    (None, Value::Name(n)) => match program.value(*n) {
+                        Some(Value::Struct(base)) => out.extend(base.iter().cloned()),
+                        _ => out.push((None, v.clone())),
+                    },
+                    _ => out.push((*k, v.clone())),
+                }
+            }
+            Value::Struct(out)
+        };
+        let part = |entry: &Value| -> KidPart {
+            let entry = &expand(entry);
+            let field = |name: &str| entry.get(checksum(name)).and_then(text);
+            let name = entry
+                .get(checksum("frontend_desc"))
+                .and_then(|v| text(v).or_else(|| program.value(v.as_name()?).and_then(text)))
+                .unwrap_or_default();
+            let mut swaps = Vec::new();
+            for n in ["", "1", "2", "3", "4", "5"] {
+                let from = field(&format!("replace{n}"));
+                if let (Some(from), Some(to)) = (from, field(&format!("with{n}"))) {
+                    swaps.push((from, to));
+                }
+            }
+            KidPart {
+                name,
+                desc_id: id_of(entry).unwrap_or(0),
+                alias: 0,
+                colorable: field("mesh").is_some() && !entry.has_flag(checksum("no_color")),
+                mesh: field("mesh"),
+                swaps,
+                color: None,
+            }
+        };
+        let list = |name: &str| -> Vec<Value> {
+            program
+                .value(checksum(name))
+                .and_then(Value::as_array)
+                .map(<[Value]>::to_vec)
+                .unwrap_or_default()
+        };
+        let reset = program
+            .value(checksum(if girl {
+                "appearance_reset_girl"
+            } else {
+                "appearance_reset_boy"
+            }))
+            .cloned();
+        let picked_in = |array: &str| id_of(reset.as_ref()?.get(checksum(array))?);
+        let sex = if girl { "f" } else { "m" };
+        let bodies = list("body");
+        let mut slots = Vec::new();
+        // The skin: the bodies (`BoyBody`, `BoyBody1`...), by the order the
+        // skins come in.
+        let head = format!("skater_{sex}_head");
+        let skins = list(&head);
+        let body_name = if girl { "GirlBody" } else { "BoyBody" };
+        let mut skin_choices = Vec::new();
+        for (i, skin) in skins.iter().enumerate() {
+            let id = if i == 0 {
+                body_name.to_string()
+            } else {
+                format!("{body_name}{i}")
+            };
+            let Some(body) = bodies.iter().find(|b| id_of(b) == Some(checksum(&id))) else {
+                continue;
+            };
+            skin_choices.push(KidPart {
+                name: part(skin).name,
+                desc_id: id_of(skin).unwrap_or(0),
+                alias: id_of(body).unwrap_or(0),
+                ..part(body)
+            });
+        }
+        let skin_picked = picked_in(&head)
+            .and_then(|id| skins.iter().position(|s| id_of(s) == Some(id)))
+            .unwrap_or(0);
+        slots.push(KidSlot {
+            label: "Skin",
+            list: checksum(&head),
+            choices: skin_choices
+                .into_iter()
+                .map(|c| KidPart {
+                    colorable: false,
+                    ..c
+                })
+                .collect(),
+            picked: skin_picked,
+            color: None,
+        });
+        for (label, array) in [
+            ("Hair", format!("skater_{sex}_hair")),
+            ("Shirt", format!("skater_{sex}_torso")),
+            ("Legs", format!("skater_{sex}_legs")),
+            ("Shoes", "shoes".into()),
+            ("Socks", format!("skater_{sex}_socks")),
+            ("Hat", "hat".into()),
+            ("Glasses", "glasses".into()),
+            ("Face paint", "face_paints".into()),
+            ("Accessory", "accessories".into()),
+            ("Elbow pads", format!("skater_{sex}_elbowpads")),
+            ("Knee pads", format!("skater_{sex}_kneepads")),
+            ("Backpack", format!("skater_{sex}_backpack")),
+            ("Hat logo", "hat_logo".into()),
+            ("Front logo", "front_logo".into()),
+            ("Back logo", "back_logo".into()),
+            ("Deck", "deck_graphic".into()),
+            ("Griptape", "griptape".into()),
+        ] {
+            // (The decks the kid can have: its own and the blank, not the
+            // other skaters', `skater = buzz`.)
+            let entries: Vec<Value> = list(&array)
+                .into_iter()
+                .filter(|e| {
+                    e.get(checksum("skater"))
+                        .and_then(Value::as_name)
+                        .is_none_or(|s| s == checksum("kid") || s == checksum("none"))
+                })
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            let choices: Vec<KidPart> = entries.iter().map(part).collect();
+            // Not in the game's set-up: the first that's nothing at all.
+            let picked = picked_in(&array)
+                .and_then(|id| entries.iter().position(|e| id_of(e) == Some(id)))
+                .or_else(|| {
+                    choices
+                        .iter()
+                        .position(|c| c.mesh.is_none() && c.swaps.is_empty())
+                })
+                .unwrap_or(0);
+            // (Its colour in the game's set-up, if not its own.)
+            let color = reset
+                .as_ref()
+                .and_then(|r| r.get(checksum(&array)))
+                .filter(|p| p.get(checksum("use_default_hsv")).and_then(Value::as_int) == Some(0))
+                .and_then(|p| {
+                    let n = |k: &str| p.get(checksum(k)).and_then(Value::as_f32);
+                    Some([n("h")?, n("S")?, n("v")?])
+                });
+            slots.push(KidSlot {
+                label,
+                list: checksum(&array),
+                choices,
+                picked,
+                color,
+            });
+        }
+        let shape = match reset
+            .as_ref()
+            .and_then(|r| r.get(checksum("body_shape")))
+            .and_then(Value::as_name)
+            .and_then(|n| program.value(n))
+        {
+            Some(Value::Struct(items)) => items
+                .iter()
+                .filter_map(|(k, v)| Some((k.filter(|k| *k != checksum("scale"))?, v.as_vector()?)))
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok((slots, shape))
+    }
+
+    /// The created kid dressed in `outfit` (a choice for each slot of
+    /// [`GameData::kid_wardrobe`], the skin first).
+    pub fn load_kid(&mut self, girl: bool, outfit: &[KidPart]) -> Result<CharacterFiles> {
+        self.load_dressed(if girl { "kid_girl" } else { "kid" }, Some(outfit))
+    }
+
     pub fn load_character(&mut self, id: &str) -> Result<CharacterFiles> {
+        self.load_dressed(id, None)
+    }
+
+    fn load_dressed(&mut self, id: &str, outfit: Option<&[KidPart]>) -> Result<CharacterFiles> {
+        let girl = id.eq_ignore_ascii_case("kid_girl");
+        let id = if girl { "kid" } else { id };
         let name = id.to_ascii_lowercase();
         let data = self
             .read_archive(&format!("anims_{id}.prg"))?
@@ -590,11 +1048,120 @@ impl GameData {
         let archive =
             Archive::parse(&data).with_context(|| format!("could not read anims_{id}.prg"))?;
         let file = |suffix: &str| entry(&archive, &|p| p.ends_with(&format!("/{name}{suffix}")));
-        let skin = file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;
-        let textures = file(".tex.ngc")?;
-        let board = match file("board.skin.ngc")? {
-            Some(board) => Some((board, file("board.tex.ngc")?)),
-            None => None,
+        let mut parts = Vec::new();
+        let mut part_tints = Vec::new();
+        let mut extra_textures = Vec::new();
+        let (skin, textures, board) = if name == "kid" {
+            // The kid as the career starts it (`appearance_kid`: the boy's
+            // body, `KidBody`, on the kid's board), from the created
+            // skater's parts.
+            let kit = self
+                .read_archive("skaterparts.prg")?
+                .context("skaterparts.prg is missing")?;
+            let kit = Archive::parse(&kit).context("could not read skaterparts.prg")?;
+            let part = |path: &str| entry(&kit, &|p| p.eq_ignore_ascii_case(path));
+            let body = if girl { "girl/girl" } else { "boy/boy" };
+            let skin = part(&format!("models/{body}.skin.ngc"))?
+                .with_context(|| format!("skaterparts.prg has no {body}.skin"))?;
+            let deck = if girl {
+                "girl/girlboard"
+            } else {
+                "boy/boyboard"
+            };
+            let board = match part(&format!("models/{deck}.skin.ngc"))? {
+                Some(board) => Some((board, part(&format!("models/{deck}.tex.ngc"))?)),
+                None => None,
+            };
+            // Dressed as the game's created skater starts (its default
+            // boy and girl, CASMENU.q), the meshes the Skate Shop's part
+            // lists give them. The boy: Buzzcut, Shortsleeve 1, Cargo
+            // Pants 1, Tennis Shoes 1, Skate Helmet 1, Elbow Pads 1. The
+            // girl: Pigtails 1, Shortsleeve 1, Shorts 3, Flipflops 1,
+            // Skate Helmet 2, Elbow and Knee Pads 1.
+            let pieces: &[&str] = if girl {
+                &[
+                    "girl/hair_girl_2",
+                    "girl/shirt_girl_1",
+                    "girl/pants_girl_1",
+                    "boy/shoe_4",
+                    "boy/hat_12",
+                    "boy/pads_elbows",
+                    "boy/pads_knees",
+                ]
+            } else {
+                &[
+                    "boy/hair_boy_1",
+                    "boy/shirt_boy_1",
+                    "boy/pants_boy_2",
+                    "boy/shoe_8",
+                    "boy/hat_12",
+                    "boy/pads_elbows",
+                ]
+            };
+            // The girl's head isn't in her girl.tex (its `girl_a1.png`,
+            // 6563d500, is always swapped for the skin chosen): Skin 4's,
+            // the default girl's (GirlBody3: `textures/girl/girl_a4`).
+            if girl {
+                if let Some(head) = part("textures/girl/girl_a4.img.ngc")? {
+                    extra_textures.push((0x6563_d500, head));
+                }
+            }
+            if let Some(outfit) = outfit {
+                // Dressed as picked: the skin's body, the other parts'
+                // meshes, and every texture they swap.
+                let (skin_part, rest) = outfit.split_first().context("no skin picked")?;
+                let mesh_of = |mesh: &str| mesh.strip_suffix(".skin").unwrap_or(mesh).to_string();
+                let body = skin_part
+                    .mesh
+                    .as_deref()
+                    .map_or(format!("models/{body}"), mesh_of);
+                let skin = part(&format!("{body}.skin.ngc"))?
+                    .with_context(|| format!("skaterparts.prg has no {body}.skin"))?;
+                for piece in rest {
+                    let Some(mesh) = piece.mesh.as_deref().map(mesh_of) else {
+                        continue;
+                    };
+                    if let Some(skin) = part(&format!("{mesh}.skin.ngc"))? {
+                        parts.push((skin, part(&format!("{mesh}.tex.ngc"))?));
+                        part_tints.push(piece.color.map(kid_part_tint));
+                    }
+                }
+                // (The girl's missing head texture as the skin picked has it.)
+                extra_textures.clear();
+                if girl {
+                    let head = skin_part
+                        .swaps
+                        .iter()
+                        .find(|(from, _)| from.eq_ignore_ascii_case("girl_a1.png"))
+                        .map_or("textures/girl/girl_a1", |(_, to)| to.as_str());
+                    if let Some(head) = part(&format!("{head}.img.ngc"))? {
+                        extra_textures.push((0x6563_d500, head));
+                    }
+                }
+                for (from, to) in outfit.iter().flat_map(|p| &p.swaps) {
+                    if let Some(image) = part(&format!("{to}.img.ngc"))? {
+                        for sum in crate::level::texture_checksums(from) {
+                            extra_textures.push((sum, image.clone()));
+                        }
+                    }
+                }
+                (skin, part(&format!("{body}.tex.ngc"))?, board)
+            } else {
+                for piece in pieces {
+                    if let Some(mesh) = part(&format!("models/{piece}.skin.ngc"))? {
+                        parts.push((mesh, part(&format!("models/{piece}.tex.ngc"))?));
+                    }
+                }
+                (skin, part(&format!("models/{body}.tex.ngc"))?, board)
+            }
+        } else {
+            let skin =
+                file(".skin.ngc")?.with_context(|| format!("anims_{id}.prg has no model"))?;
+            let board = match file("board.skin.ngc")? {
+                Some(board) => Some((board, file("board.tex.ngc")?)),
+                None => None,
+            };
+            (skin, file(".tex.ngc")?, board)
         };
         let mut animations = Vec::new();
         for e in archive.entries() {
@@ -626,6 +1193,9 @@ impl GameData {
             skin,
             textures,
             board,
+            parts,
+            part_tints,
+            extra_textures,
             skeleton,
             key_tables,
             animations,
@@ -694,5 +1264,19 @@ mod tests {
         assert_eq!(title("PrideRock"), "Pride Rock");
         assert_eq!(title("beach"), "Beach");
         assert_eq!(title("HUB"), "Hub");
+    }
+}
+
+#[cfg(test)]
+mod kid_tests {
+    use super::kid_part_tint;
+
+    #[test]
+    fn tints() {
+        // Grey at half value leaves a part as it is (128).
+        assert_eq!(kid_part_tint([0.0, 0.0, 50.0]), [128, 128, 128]);
+        assert_eq!(kid_part_tint([0.0, 100.0, 50.0]), [128, 0, 0]);
+        assert_eq!(kid_part_tint([120.0, 100.0, 50.0]), [0, 128, 0]);
+        assert_eq!(kid_part_tint([240.0, 50.0, 50.0]), [64, 64, 128]);
     }
 }

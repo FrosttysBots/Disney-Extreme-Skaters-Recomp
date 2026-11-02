@@ -130,6 +130,16 @@ impl Rumble {
         self.pulses.retain(|p| p.until > now);
     }
 
+    /// A quarter-second rumble the menus ask for (`VibrateController`):
+    /// the strong motor or the weak one, at `level` (0 to 1).
+    pub fn menu_pulse(&mut self, gilrs: &mut Gilrs, strong: bool, level: f32) {
+        if strong {
+            self.pulse(gilrs, level, 0.0, 0.25);
+        } else {
+            self.pulse(gilrs, 0.0, level, 0.25);
+        }
+    }
+
     /// Stops all rumbling.
     pub fn stop(&mut self) {
         self.pulses.clear();
