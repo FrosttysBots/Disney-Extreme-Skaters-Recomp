@@ -18,7 +18,7 @@ character. This page is for anyone trying it out.
 Or go the game's way: its main menu in the Skate Shop (Play Game or Free
 Skate; Exit Game, after Options, closes it), then its skater select on the shop's stage (left and right
 change the character, with their stats, theme and clip on the TV, the
-film strip round the stage turning their picture to the front; L and
+film strip round the stage turning their picture to the front, lit by the stage's light; L and
 R, or Q and E, turn them round; Enter picks), then its level select
 (as in the game, only the character's own world: the Toy Story three
 for Jessie; the panel's level list goes anywhere).

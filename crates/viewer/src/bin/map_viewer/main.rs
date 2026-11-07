@@ -719,6 +719,12 @@ fn load_level(
     // The level's moving pieces, each in a layer of its own, shown while
     // its object is there and put where it is.
     let mut movers = Vec::new();
+    // The stage's light (the Skate Shop's, where its camera stands over
+    // the stage), for the film strip that turns there.
+    let stage_light = camera_paths
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("Camera_stage"))
+        .map(|(_, path)| path_camera(path, path_length(path)).position);
     for (i, m) in nodes.movers.iter().enumerate() {
         let Ok(mesh) =
             Level::from_bytes_filtered(&files.scene, files.textures.as_deref(), |s| s == m.name)
@@ -759,15 +765,37 @@ fn load_level(
                 );
             }
         }
+        // A piece turning round its middle with no normals of its own (the
+        // skater select's film strip, round the stage): lit from the
+        // stage's camera, the panel facing it bright, those turned away
+        // dim, as the game's light on the stage has it.
+        let carousel = base.iter().all(|v| v.normal == [0.0; 3]) && {
+            let (lo, hi) = base.iter().fold(
+                (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())),
+            );
+            (lo.x..=hi.x).contains(&m.position.x) && (lo.z..=hi.z).contains(&m.position.z)
+        };
+        let spot = stage_light.filter(|_| carousel);
         movers.push(MoverState {
             object: behaviour.mover(i),
+            spot,
             name: m.name,
             layer,
             base,
             local,
             pivot: m.position,
             placed: m.rotation(),
-            last: (m.created_at_start, m.position, m.rotation()),
+            // (Lit, it's put on the first update.)
+            last: (
+                m.created_at_start,
+                if spot.is_some() {
+                    Vec3::NAN
+                } else {
+                    m.position
+                },
+                m.rotation(),
+            ),
         });
     }
     // The breakable sectors, shown until broken, and where each is.
@@ -1050,10 +1078,16 @@ impl LoadedLevel {
                 let moved: Vec<desa_viewer::level::Vertex> = m
                     .base
                     .iter()
-                    .map(|v| desa_viewer::level::Vertex {
-                        position: (now.1 + turn * (Vec3::from(v.position) - m.pivot)).to_array(),
-                        normal: (turn * Vec3::from(v.normal)).to_array(),
-                        ..*v
+                    .map(|v| {
+                        let position = now.1 + turn * (Vec3::from(v.position) - m.pivot);
+                        desa_viewer::level::Vertex {
+                            position: position.to_array(),
+                            normal: (turn * Vec3::from(v.normal)).to_array(),
+                            color: m.spot.map_or(v.color, |spot| {
+                                spot_lit(v.color, position - now.1, spot - now.1)
+                            }),
+                            ..*v
+                        }
                     })
                     .collect();
                 self.renderer.update_layer(m.layer, 0, &moved);
@@ -1268,8 +1302,32 @@ struct BouncyState {
 /// `create`, `kill`): its object, name, layer and vertices as stored,
 /// where and how it was placed, and how it was last drawn (there?, where,
 /// how turned).
+/// A vertex's colour lit by a light on the stage: how squarely it faces
+/// the light round the piece's middle (from the middle, out to it and to
+/// the light) — the panel facing it brighter than it's stored, those
+/// turned away into the shade.
+fn spot_lit(color: [u8; 4], out: Vec3, light: Vec3) -> [u8; 4] {
+    let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
+    let facing = flat(out).dot(flat(light)).max(0.0);
+    let k = STAGE_SHADE + (STAGE_LIT - STAGE_SHADE) * facing.powi(4);
+    let channel = |c: u8| (f32::from(c) * k).round().clamp(0.0, 255.0) as u8;
+    [
+        channel(color[0]),
+        channel(color[1]),
+        channel(color[2]),
+        color[3],
+    ]
+}
+
+/// How bright the stage's light makes the panel facing it, and those
+/// turned away (of their colours as stored).
+const STAGE_LIT: f32 = 1.6;
+const STAGE_SHADE: f32 = 0.55;
+
 struct MoverState {
     object: usize,
+    /// The light it's lit by as it turns, if it's lit (see `spot_lit`).
+    spot: Option<Vec3>,
     name: u32,
     /// Whether its geometry (and collision) is in its own space, put
     /// where it is (else in the level's, moved from where it was).
