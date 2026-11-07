@@ -758,6 +758,24 @@ on-ground update switches on.
   about 27 of 27,000 still fall out, at ledge edges over pits and drops
   and at rails out of reach below the levels. How the game avoids this
   (one-sided collision, perhaps) isn't known yet.
+- **Up a vert face** (this crate's, not the game's own way): the game
+  keeps the skater's whole orientation and turns it onto each face; here
+  the board's way is a flat heading tilted onto the ground, which a face
+  near vertical makes a poor measure of (the heading nearly into the
+  face, a small change of it swings the board right round, and past
+  vertical it points the board back down; on a face exactly vertical no
+  heading points it up at all). So the board's way is carried from face
+  to face (`board`, the heading set from it with `heading_for`), turns
+  (steering, the slow turn on slopes) are about the ground's normal
+  (`turn_on_ground`), and on a face exactly vertical the carried way is
+  the board's. And across a face steeper than about 75 degrees, not
+  climbing it, the board turns downhill at any speed: the speed is kept
+  along the board, so gravity across it only sped it up, and a skater
+  carving round the bedroom's bathtub went round level forever.
+  `cargo run --release -p desa_viewer --example vert_check [data] [level]`
+  rolls at every quarter pipe: the bedroom's went from 80 of 164 into
+  vert air to 137 (the rest too tall for that speed, or blocked at the
+  top), the Hub's from 142 of 173 to 170.
 
 ## Next
 

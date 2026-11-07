@@ -280,6 +280,11 @@ const LIP_TWEAK: u32 = 10;
 /// collision.
 const SEAM_PROBES: [(f32, f32); 4] = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0, -1.5)];
 
+/// A face this steep or more (its normal's height, about 75 degrees) with
+/// the board not climbing it turns the board downhill at any speed (see
+/// the slow turn on slopes in the ground step).
+const ACROSS_VERT_COSINE: f32 = 0.25;
+
 /// Breaking out of vert air: up held this long at the lip, and how much of
 /// the speed goes over the lip and up (`Skater_vert_push_time`,
 /// `physics_break_air_speed_scale`, `physics_break_air_up_scale`).
@@ -382,6 +387,10 @@ pub struct Skater {
     pub grind: Option<Grind>,
     /// The rail node last reached on this rail (see [`Rails::nodes`]).
     rail_node: Option<u32>,
+    /// The board's way along the ground, carried from face to face, for
+    /// when the heading can't say it: straight up a face exactly vertical
+    /// (see `board_way`).
+    board: Option<Vec3>,
     /// Riding a wall, and how long since the last wallride began.
     pub wall: Option<WallRide>,
     since_wallride: f32,
@@ -602,6 +611,7 @@ impl Skater {
             crouch_time: 0.0,
             grind: None,
             rail_node: None,
+            board: None,
             wall: None,
             since_wallride: f32::MAX,
             wallride_anywhere: true,
@@ -863,11 +873,51 @@ impl Skater {
         }
     }
 
+    /// Turns the board `angle` about the ground's normal (positive to the
+    /// left, as a heading's), on the ground: on flat ground a turn of the
+    /// heading, and on a steep face the board's way turned that much on
+    /// it (see `heading_for`).
+    fn turn_on_ground(&mut self, angle: f32) {
+        if angle == 0.0 {
+            return;
+        }
+        let up = self.up.normalize_or(Vec3::Y);
+        let board = self.board_way(self.forward(), up);
+        let turned = Quat::from_axis_angle(up, angle) * board;
+        // (Straight up a face exactly vertical no heading says it: the
+        // heading's left into the face, and the board kept.)
+        if let Some(heading) = heading_for(turned, up) {
+            self.heading = heading;
+        } else if up.y.abs() > 1e-4 || up == Vec3::Y {
+            self.heading += angle;
+        }
+        self.board = Some(turned);
+    }
+
+    /// The board's way along ground with normal `up`: the level way `flat`
+    /// (the heading's) tilted onto it; or, on a face exactly vertical
+    /// (where no heading tilts the board up or down it) or where that
+    /// hardly leaves a way, the way carried onto it (`board`).
+    fn board_way(&self, flat: Vec3, up: Vec3) -> Vec3 {
+        let along = flat - up * flat.dot(up);
+        if along.length() < 0.05 || up.y.abs() < 1e-3 {
+            if let Some(board) = self.board.filter(|b| b.dot(up).abs() < 0.05) {
+                return board;
+            }
+            // (None carried yet: the way it's going along the face.)
+            let going = self.velocity - up * self.velocity.dot(up);
+            if along.length() < 0.05 && going.length() > 1.0 {
+                return going.normalize();
+            }
+        }
+        along.normalize_or(flat)
+    }
+
     /// `GetSlope` and `DoCrouch_slope`: the slope along the board, and a
     /// crouched bump when it changes by more than 5 degrees in a frame.
     fn follow_slope(&mut self, crouched: bool) {
         let flat = self.forward();
-        let along = (flat - self.up * flat.dot(self.up)).normalize_or(flat);
+        let along = self.board_way(flat, self.up);
         let slope = along.y.clamp(-1.0, 1.0).asin().to_degrees();
         let change = slope - self.slope;
         self.slope = slope;
@@ -1117,9 +1167,24 @@ impl Skater {
             (0.0, 1.0)
         };
         let yaw = Quat::from_rotation_y(self.heading + spin);
-        let tilt = Quat::from_rotation_arc(Vec3::Y, self.shown_up.normalize_or(Vec3::Y));
+        let shown_up = self.shown_up.normalize_or(Vec3::Y);
+        let tilt = Quat::from_rotation_arc(Vec3::Y, shown_up);
         let lean = Quat::from_rotation_x(self.lean);
-        Mat4::from_scale_rotation_translation(Vec3::splat(scale), tilt * yaw * lean, self.position)
+        // On a face too steep for the heading to say the board's way (see
+        // `board_way`), turned to that way.
+        let turned = (self.on_ground && shown_up.y.abs() < 0.05)
+            .then(|| {
+                let board = self.board_way(self.forward(), self.up);
+                let board = (board - shown_up * board.dot(shown_up)).try_normalize()?;
+                Some(Quat::from_mat3(&glam::Mat3::from_cols(
+                    shown_up.cross(board),
+                    shown_up,
+                    board,
+                )))
+            })
+            .flatten()
+            .unwrap_or(tilt * yaw);
+        Mat4::from_scale_rotation_translation(Vec3::splat(scale), turned * lean, self.position)
     }
 
     /// Advances `dt` seconds in fixed steps.
@@ -1743,7 +1808,7 @@ impl Skater {
         self.flipped = !self.flipped;
         let flat = self.forward();
         let up = self.up;
-        let forward = (flat - up * flat.dot(up)).normalize_or(flat);
+        let forward = self.board_way(flat, up);
         self.velocity = forward * self.velocity.length();
         self.set_action(Action::Revert { frontside });
     }
@@ -2715,17 +2780,26 @@ impl Skater {
         if self.velocity.length() < 10.0 && self.turn_time < 0.6 {
             rate *= self.turn_time / 0.6;
         }
-        self.heading -= input.turn * rate * STEP;
+        self.turn_on_ground(-input.turn * rate * STEP);
         // Slow on steep ground (0x800F3564: under `max_sloped_turn_speed`,
         // the ground's normal under `max_sloped_turn_cosine` high), the
         // board turns towards straight downhill at `slow_turn_on_slopes`
         // (about the ground's normal: a turn of the heading), never past
         // it: crawling up a quarter pipe, the skater turns round.
+        // (And this crate's: across a face nearly vertical, not climbing
+        // it, at any speed. The speed here is kept along the board, so
+        // gravity across it only speeds it up: riding round the inside of
+        // the bedroom's bathtub, the skater went round and round, level,
+        // never coming down.)
         let speed_now = self.velocity.length();
-        if speed_now < p.max_sloped_turn_speed && self.up.y < p.max_sloped_turn_cosine {
-            let up = self.up.normalize_or(Vec3::Y);
+        let up = self.up.normalize_or(Vec3::Y);
+        let across_vert =
+            up.y < ACROSS_VERT_COSINE && self.board_way(self.forward(), up).y < ACROSS_VERT_COSINE;
+        if (speed_now < p.max_sloped_turn_speed && self.up.y < p.max_sloped_turn_cosine)
+            || across_vert
+        {
             let down = (-Vec3::Y + up * up.y).normalize_or_zero();
-            let board = Quat::from_rotation_arc(Vec3::Y, up) * self.forward();
+            let board = self.board_way(self.forward(), up);
             let way = if speed_now < 0.001 {
                 board
             } else {
@@ -2734,13 +2808,13 @@ impl Skater {
             if down != Vec3::ZERO {
                 let angle = up.dot(way.cross(down)).atan2(way.dot(down));
                 let step = p.slow_turn_on_slopes * STEP;
-                self.heading += angle.clamp(-step, step);
+                self.turn_on_ground(angle.clamp(-step, step));
             }
         }
         let up = self.up;
         // Forward along the surface.
         let flat = self.forward();
-        let forward = (flat - up * flat.dot(up)).normalize_or(flat);
+        let forward = self.board_way(flat, up);
         let mut velocity = self.velocity;
 
         // Gravity along the ground plane, sideways too (main.dol 0x800FB3E4).
@@ -2881,7 +2955,7 @@ impl Skater {
         let forward = if bailing {
             velocity = self.extra_push(velocity, p, world);
             let flat = self.forward();
-            (flat - up * flat.dot(up)).normalize_or(flat)
+            self.board_way(flat, up)
         } else {
             forward
         };
@@ -2949,7 +3023,7 @@ impl Skater {
                     let (turn, angle) = wall_bounce(forward, up, hit.normal, p);
                     self.heading += turn;
                     let flat = self.forward();
-                    forward = (flat - up * flat.dot(up)).normalize_or(flat);
+                    forward = self.board_way(flat, up);
                     let before = speed.abs();
                     let dont_slow = p.wall_bounce_dont_slow_angle.to_radians();
                     if angle.abs() > dont_slow {
@@ -2994,7 +3068,7 @@ impl Skater {
                     {
                         self.heading += PI - turn;
                         let flat = self.forward();
-                        forward = (flat - up * flat.dot(up)).normalize_or(flat);
+                        forward = self.board_way(flat, up);
                     }
                 }
             }
@@ -3076,6 +3150,19 @@ impl Skater {
                 } else {
                     hit.normal
                 };
+                // The board carried over onto it (the game keeps the
+                // skater's whole orientation, turned onto each new face):
+                // the heading for the board's way along this ground.
+                // Kept as a flat heading tilted onto the ground, a steep
+                // face would otherwise turn a small change of heading into
+                // a large one of the board's way (up a quarter pipe, the
+                // board swung sideways), and past vertical point the board
+                // back down.
+                let board = (forward - self.up * forward.dot(self.up)).normalize_or_zero();
+                if let Some(heading) = heading_for(board, self.up) {
+                    self.heading = heading;
+                }
+                self.board = Some(board).filter(|b| *b != Vec3::ZERO);
                 self.velocity = forward * speed;
                 self.follow_slope(input.crouch);
             }
@@ -3238,7 +3325,7 @@ impl Skater {
         const ROTATE: f32 = 6.0;
         let up = self.up.normalize_or(Vec3::Y);
         let flat = self.forward();
-        let forward = (flat - up * flat.dot(up)).normalize_or(flat);
+        let forward = self.board_way(flat, up);
         let left = up.cross(forward).normalize_or_zero();
         let from = self.position + up * p.side_collide_height;
         let (mut sum, mut nearest, mut last) = (Vec3::ZERO, 1.0f32, None);
@@ -3862,8 +3949,7 @@ impl Skater {
                     self.flipped = !self.flipped;
                     let flat = self.forward();
                     let up = self.up;
-                    self.velocity =
-                        (flat - up * flat.dot(up)).normalize_or(flat) * self.velocity.length();
+                    self.velocity = self.board_way(flat, up) * self.velocity.length();
                 }
                 // Landing in a manual (up-down pressed just before) keeps
                 // the combo going; otherwise it ends.
@@ -4074,6 +4160,31 @@ fn is_wall(hit: &Hit, p: &Physics) -> bool {
 /// normal, folded to within a right angle, so 90 degrees is head-on and 0
 /// is skimming along it. The turn is that times
 /// `wall_bounce_angle_multiplier`, away from the wall.
+/// The heading whose way tilted onto ground with normal `up` (as
+/// `Skater::forward` is, less its part along `up`) is `board`, a way along
+/// that ground: the level way that, less its part along `up`, leaves
+/// `board`. On flat ground the board's own heading; going up a vert face
+/// one nearly into it (and past vertical, out of it). None if `board`
+/// isn't along the ground or is straight up a face exactly vertical.
+fn heading_for(board: Vec3, up: Vec3) -> Option<f32> {
+    if board == Vec3::ZERO || board.dot(up).abs() > 0.01 {
+        return None;
+    }
+    // board + up * k, level: k = -board.y / up.y.
+    let level = if up.y.abs() > 1e-4 {
+        board - up * (board.y / up.y)
+    } else if board.y.abs() < 1e-3 {
+        board
+    } else {
+        return None;
+    };
+    let level = Vec3::new(level.x, 0.0, level.z);
+    if level.length_squared() < 1e-12 {
+        return None;
+    }
+    Some(level.x.atan2(level.z))
+}
+
 fn wall_bounce(forward: Vec3, up: Vec3, normal: Vec3, p: &Physics) -> (f32, f32) {
     let side = up.cross(forward).normalize_or(Vec3::X);
     let mut angle = side.dot(normal).clamp(-1.0, 1.0).acos();
@@ -4906,6 +5017,30 @@ mod tests {
     }
 
     #[test]
+    fn the_heading_for_a_way_up_a_steep_face_tilts_back_onto_it() {
+        let tilted = |heading: f32, up: Vec3| {
+            let flat = Vec3::new(heading.sin(), 0.0, heading.cos());
+            (flat - up * flat.dot(up)).normalize()
+        };
+        // Flat: the board's own heading.
+        let h = heading_for(Vec3::new(1.0, 0.0, 1.0).normalize(), Vec3::Y).unwrap();
+        assert!((h - std::f32::consts::FRAC_PI_4).abs() < 1e-5);
+        // Up a face nearly vertical (facing +X), a little to the side.
+        let up = Vec3::new(1.0, 0.03, 0.0).normalize();
+        let board = Vec3::new(-0.03, 1.0, 0.2);
+        let board = (board - up * board.dot(up)).normalize();
+        let h = heading_for(board, up).unwrap();
+        assert!(tilted(h, up).angle_between(board) < 1e-3);
+        // Past vertical (leaning over, facing a little down), still up it.
+        let up = Vec3::new(1.0, -0.02, 0.0).normalize();
+        let board = (Vec3::Y - up * up.y).normalize();
+        let h = heading_for(board, up).unwrap();
+        assert!(tilted(h, up).angle_between(board) < 1e-3);
+        // Exactly vertical, straight up: no heading says it.
+        assert_eq!(heading_for(Vec3::Y, Vec3::X), None);
+    }
+
+    #[test]
     fn slow_on_a_steep_wall_turns_downhill() {
         let p = physics();
         let world = floor_and_wall();
@@ -4914,18 +5049,28 @@ mod tests {
         skater.on_ground = true;
         skater.up = Vec3::X;
         skater.velocity = Vec3::new(0.0, 100.0, 50.0);
-        let before = skater.heading;
+        // (Straight into the wall, the heading says no way up it: the
+        // board's way, turned about the wall's normal, is what turns.)
+        // (The test's wall isn't ground to stand on: the skater's off it
+        // by the step's end, the board's way as it was turned kept.)
+        let board = |s: &Skater| s.board.unwrap_or_else(|| s.board_way(s.forward(), s.up));
+        let before = board(&skater);
         skater.update(Input::default(), &p, &world, STEP);
-        // Turned (by at most `Skater_Slow_Turn_on_slopes` a frame).
-        let turned = (skater.heading - before).abs();
-        assert!(turned > 0.0 && turned <= p.slow_turn_on_slopes * STEP + 1e-4);
-        // Not when fast.
+        // Turned (by at most `Skater_Slow_Turn_on_slopes` a frame), down.
+        let turned = before.angle_between(board(&skater));
+        assert!(
+            turned > 0.0 && turned <= p.slow_turn_on_slopes * STEP + 1e-4,
+            "{turned}"
+        );
+        assert!(board(&skater).y < before.y);
+        // Not when fast, climbing.
         let mut fast = Skater::new(Vec3::new(1.0, 200.0, 0.0), -FRAC_PI_2);
         fast.on_ground = true;
         fast.up = Vec3::X;
         fast.velocity = Vec3::new(0.0, 500.0, 200.0);
+        let before = board(&fast);
         fast.update(Input::default(), &p, &world, STEP);
-        assert_eq!(fast.heading, -FRAC_PI_2);
+        assert!(fast.board.is_none_or(|b| before.angle_between(b) < 1e-3));
     }
 
     #[test]
