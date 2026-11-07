@@ -2057,6 +2057,10 @@ struct App<'a> {
     /// In the game alone, the panel's message shown on screen instead, and
     /// since when (it goes after a few seconds).
     notice: Option<(String, Instant)>,
+    /// The camera path playing is the menus' (`playskaterCamAnim ...
+    /// play_hold`): held on its last frame when it ends, not handed to the
+    /// free camera (whose view's wider).
+    camera_hold: bool,
     /// The Video Options' values as last shown in its menu.
     video_labels: Option<[String; 4]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
@@ -2255,6 +2259,7 @@ impl<'a> App<'a> {
             settings,
             game: false,
             notice: None,
+            camera_hold: false,
             video_labels: None,
             video_pending: None,
             next_frame: Instant::now(),
@@ -2538,6 +2543,7 @@ impl<'a> App<'a> {
                 self.model.character.map_image = level.minimap.as_ref().map(|m| {
                     egui::ColorImage::from_rgba_unmultiplied([m.width, m.height], &m.pixels)
                 });
+                self.camera_hold = false;
                 self.model.camera_paths = ui::CameraPathModel {
                     paths: level
                         .camera_paths
@@ -2589,6 +2595,7 @@ impl<'a> App<'a> {
     }
 
     fn play_camera_path(&mut self, index: usize) {
+        self.camera_hold = false;
         self.model.camera_paths.playing = Some(index);
         self.model.camera_paths.time = 0.0;
     }
@@ -2781,6 +2788,7 @@ impl<'a> App<'a> {
 
     /// Stops a camera path, leaving the free camera where the path was.
     fn stop_camera_path(&mut self) {
+        self.camera_hold = false;
         self.model.camera_paths.playing = None;
         self.cutscene = false;
         if let Some(level) = &mut self.level {
@@ -2803,7 +2811,10 @@ impl<'a> App<'a> {
         let time = &mut self.model.camera_paths.time;
         level.renderer.scripted_camera = Some(path_camera(path, *time));
         if *time >= path_length(path) {
-            self.stop_camera_path();
+            // (The menus' held there, as the game's `play_hold`.)
+            if !self.camera_hold {
+                self.stop_camera_path();
+            }
         } else {
             *time = (*time + dt).min(path_length(path));
         }
@@ -2909,13 +2920,17 @@ impl<'a> App<'a> {
             }
         }
         let skating = self.skating.is_some();
+        // No songs under a movie, nor before the main menu's up (the
+        // opening's movies, the shop loading behind them).
+        let movie = self.movie.is_some() || !self.movie_queue.is_empty() || self.main_menu_pending;
         // In the Skate Shop's menus the soundtrack plays too (the game's
         // `SetCDToMusic`), but for a song they ask for themselves.
         let shop = self
             .level
             .as_ref()
             .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"))
-            && self.menu_track.is_none();
+            && self.menu_track.is_none()
+            && !movie;
         let (Some(audio), Some(data)) = (&mut self.audio, &mut self.data) else {
             return;
         };
@@ -2934,7 +2949,7 @@ impl<'a> App<'a> {
         } else if let Some((name, started)) = self
             .menu_track
             .as_mut()
-            .filter(|_| !skating && self.model.character.music)
+            .filter(|_| !skating && !movie && self.model.character.music)
         {
             // The menus' song, over and over (a new one in place of the
             // last).
@@ -5539,6 +5554,7 @@ impl<'a> App<'a> {
             if let Some(index) = index {
                 self.model.camera_paths.playing = Some(index);
                 self.model.camera_paths.time = 0.0;
+                self.camera_hold = true;
             }
         }
         self.shop_staged = true;
@@ -5959,6 +5975,7 @@ impl<'a> App<'a> {
             if let Some(index) = index {
                 self.model.camera_paths.playing = Some(index);
                 self.model.camera_paths.time = 0.0;
+                self.camera_hold = true;
             }
         }
         // Movies over the whole screen (the Options' Movies).
