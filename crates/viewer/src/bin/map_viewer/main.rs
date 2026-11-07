@@ -2576,9 +2576,12 @@ impl<'a> App<'a> {
                 }
                 self.settings.last_level = Some(info.id);
                 self.settings.save();
-                // Arrived through a warp: skating on.
+                // Arrived through a warp: skating on (its sounds with it);
+                // else the level's sounds and songs now, for its menus.
                 if std::mem::take(&mut self.skate_on_load) {
                     self.toggle_skate();
+                } else {
+                    self.start_audio();
                 }
             }
             Err(err) => self.model.message = Some(format!("{err:#}")),
@@ -2806,8 +2809,8 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Loads the level's sounds for skating (with a window and a sound
-    /// device).
+    /// Loads the level's sounds, songs and ambience (with a window and a
+    /// sound device): as it loads, and again to skate.
     fn start_audio(&mut self) {
         if self.gpu.is_none() {
             return;
@@ -6120,12 +6123,15 @@ impl<'a> App<'a> {
                 }
                 continue;
             }
-            if name == c("unpausegame") && self.model.character.paused {
-                // The menu away; the panel stays.
-                self.model.character.paused = false;
-                if let Some(screen) = &mut self.screen {
-                    screen.screen.destroy_id("pause_menu");
-                    screen.screen.destroy_id("current_menu_anchor");
+            if name == c("unpausegame") {
+                // The menu away; the panel stays. (Not paused, nothing: the
+                // level select's choice asks it too, on its way.)
+                if self.model.character.paused {
+                    self.model.character.paused = false;
+                    if let Some(screen) = &mut self.screen {
+                        screen.screen.destroy_id("pause_menu");
+                        screen.screen.destroy_id("current_menu_anchor");
+                    }
                 }
             } else {
                 // Saving, loading and two players aren't the viewer's.
@@ -7078,6 +7084,13 @@ impl<'a> App<'a> {
         });
         self.last_frame = Instant::now();
         self.apply_video();
+        // Sound from the start: the opening movies', and the menus' (the
+        // level's sounds, if it's in already; else when it is).
+        if self.level.is_some() {
+            self.start_audio();
+        } else if self.audio.is_none() {
+            self.audio = audio::Audio::new();
+        }
         Ok(())
     }
 
@@ -8038,7 +8051,12 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     _ => continue,
                 };
                 if let (Some(pad), Some(screen)) = (pad, &mut app.screen) {
-                    screen.screen.pad(pad);
+                    // (As the app gives it: only when the menus take it.)
+                    if screen.screen.takes_pad() {
+                        screen.screen.pad(pad);
+                    } else {
+                        println!("menu: {key} not taken (no menu has the focus)");
+                    }
                 }
                 for _ in 0..30 {
                     app.update_game_hud();
@@ -8079,6 +8097,12 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         .and_then(|i| app.model.character.characters.get(i))
                         .map(|c| c.id.clone()),
                     level.id
+                );
+                println!(
+                    "menu: message {:?}, loading {:?}, pending {:?}",
+                    app.model.message,
+                    app.model.loading.clone(),
+                    app.pending
                 );
             }
         }

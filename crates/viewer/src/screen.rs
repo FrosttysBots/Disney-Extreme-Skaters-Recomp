@@ -592,12 +592,23 @@ impl Screen {
 
     /// Whether something on the screen has the focus (a menu, a speech
     /// box waiting for a press): the pad's for it, not the skater.
+    /// (Anywhere showing, as [`Screen::pad`] looks: the skater select's
+    /// focus is in a menu inside one that hasn't it.)
     pub fn takes_pad(&self) -> bool {
-        self.el(ROOT).is_some_and(|r| {
-            r.children
-                .iter()
-                .any(|c| self.el(*c).is_some_and(|c| c.focused && !c.hidden))
-        })
+        let mut stack: Vec<usize> = self
+            .el(ROOT)
+            .map(|r| r.children.clone())
+            .unwrap_or_default();
+        while let Some(i) = stack.pop() {
+            let Some(e) = self.el(i).filter(|e| !e.hidden) else {
+                continue;
+            };
+            if e.focused {
+                return true;
+            }
+            stack.extend(&e.children);
+        }
+        false
     }
 
     /// Whether anything's on the screen.

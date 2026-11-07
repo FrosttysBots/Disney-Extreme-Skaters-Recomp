@@ -439,6 +439,8 @@ fn real_select_skater_choose() {
     for _ in 0..90 {
         screen.update(&program, 1.0 / 60.0);
     }
+    // (The app gives the menus the pad only when they take it.)
+    assert!(screen.takes_pad(), "the skater select doesn't take the pad");
     screen.pad(desa_viewer::screen::Pad::Choose);
     for _ in 0..90 {
         screen.update(&program, 1.0 / 60.0);
