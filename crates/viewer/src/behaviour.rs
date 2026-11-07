@@ -294,6 +294,26 @@ pub struct Behaviour {
     spawning: Vec<(usize, Thread)>,
 }
 
+/// The viewer's own menus beside the game's (its Video Options:
+/// `video_menu.q`), over the game's scripts they build on, kept by other
+/// names for them to call.
+pub fn add_viewer_menus(program: &mut Program) {
+    let c = qb::checksum;
+    let kept = ["create_menu_bg", "main_menu_add_item"];
+    if !kept.iter().all(|name| program.has_script(c(name))) {
+        return;
+    }
+    for name in kept {
+        program.rename_script(c(name), c(&format!("viewer_disc_{name}")));
+    }
+    if let Err(e) = program.add_source(include_str!("video_menu.q")) {
+        eprintln!("warning: the viewer's menus didn't load: {e}");
+        for name in kept {
+            program.rename_script(c(&format!("viewer_disc_{name}")), c(name));
+        }
+    }
+}
+
 impl Behaviour {
     /// Starts the scripts of the objects there at the start. `scripts` are
     /// the `.qb` files to load (the game's shared ones, then the level's).
@@ -304,6 +324,7 @@ impl Behaviour {
                 eprintln!("warning: a script file didn't load: {e}");
             }
         }
+        add_viewer_menus(&mut program);
         let states = nodes
             .objects
             .iter()

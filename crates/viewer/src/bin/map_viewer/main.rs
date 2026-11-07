@@ -49,7 +49,7 @@ use desa_viewer::nodes::{LevelNodes, Spawn};
 use desa_viewer::objects::{self, LevelObjects};
 use desa_viewer::renderer::{self, Renderer, request_device};
 use desa_viewer::source::{GameData, LevelInfo};
-use settings::Settings;
+use settings::{FRAME_LIMITS, Settings, Video, WindowMode};
 
 const MOUSE_SENSITIVITY: f32 = 0.0025;
 const DEFAULT_SPEED: f32 = 1500.0;
@@ -1387,6 +1387,7 @@ impl ScreenUi {
             "view_goals_menu_start_goal",
             "really_change_level",
             "skip_track",
+            "viewer_video",
         ]);
         Some(ScreenUi {
             screen,
@@ -2056,6 +2057,10 @@ struct App<'a> {
     /// In the game alone, the panel's message shown on screen instead, and
     /// since when (it goes after a few seconds).
     notice: Option<(String, Instant)>,
+    /// The Video Options' values as last shown in its menu.
+    video_labels: Option<[String; 4]>,
+    /// When the next frame's due, under a frame limit.
+    next_frame: Instant,
     gpu: Option<Gpu>,
     data: Option<GameData>,
     level: Option<LoadedLevel>,
@@ -2247,6 +2252,8 @@ impl<'a> App<'a> {
             settings,
             game: false,
             notice: None,
+            video_labels: None,
+            next_frame: Instant::now(),
             gpu: None,
             data: None,
             level: None,
@@ -5990,6 +5997,28 @@ impl<'a> App<'a> {
                 );
             }
         }
+        // The Video Options' values, as they are.
+        if screen.screen.exists("video_display_text") {
+            let labels = video_labels(&self.settings.video, self.gpu.as_ref().map(|g| &g.window));
+            if self.video_labels.as_ref() != Some(&labels) {
+                let ids = [
+                    "video_display_text",
+                    "video_size_text",
+                    "video_vsync_text",
+                    "video_fps_text",
+                ];
+                for (id, label) in ids.iter().zip(&labels) {
+                    let props = qb::Value::Struct(vec![(
+                        Some(qb::checksum("text")),
+                        qb::Value::String(label.clone()),
+                    )]);
+                    screen.screen.set(id, &props, level.behaviour.program());
+                }
+                self.video_labels = Some(labels);
+            }
+        } else {
+            self.video_labels = None;
+        }
         let sounds = std::mem::take(&mut screen.screen.sounds);
         let requests = std::mem::take(&mut screen.screen.requests);
         self.model.character.game_menu = screen.screen.takes_pad();
@@ -6000,6 +6029,13 @@ impl<'a> App<'a> {
         }
         let c = qb::checksum;
         for (name, args) in requests {
+            if name == c("viewer_video") {
+                // The Video Options: a setting chosen or turned.
+                let option = args.get(c("option")).and_then(qb::Value::as_name);
+                let dir = args.get(c("dir")).and_then(qb::Value::as_int).unwrap_or(1);
+                self.change_video(option, dir);
+                continue;
+            }
             if name == c("skip_track") {
                 // The sound options' Skip Track: the next song.
                 if let Some(audio) = &mut self.audio {
@@ -7034,7 +7070,106 @@ impl<'a> App<'a> {
             egui_renderer,
         });
         self.last_frame = Instant::now();
+        self.apply_video();
         Ok(())
+    }
+
+    /// The Video Options to the window: its mode and size, and vsync.
+    fn apply_video(&mut self) {
+        use winit::window::Fullscreen;
+        let Some(gpu) = &mut self.gpu else { return };
+        let video = self.settings.video;
+        let window = &gpu.window;
+        match video.mode {
+            WindowMode::Windowed => {
+                window.set_fullscreen(None);
+                if let Some((w, h)) = video.size {
+                    let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                }
+            }
+            WindowMode::Borderless => {
+                window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+            }
+            WindowMode::Fullscreen => {
+                // The screen's mode of that size (else its own), at its
+                // fastest refresh.
+                let monitor = window.current_monitor();
+                let want = video
+                    .size
+                    .or_else(|| monitor.as_ref().map(|m| (m.size().width, m.size().height)));
+                let mode = monitor.as_ref().and_then(|m| {
+                    m.video_modes()
+                        .filter(|v| Some((v.size().width, v.size().height)) == want)
+                        .max_by_key(|v| (v.bit_depth(), v.refresh_rate_millihertz()))
+                });
+                window.set_fullscreen(Some(match mode {
+                    Some(mode) => Fullscreen::Exclusive(mode),
+                    None => Fullscreen::Borderless(monitor),
+                }));
+            }
+        }
+        let present = if video.vsync {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+        if gpu.config.present_mode != present {
+            gpu.config.present_mode = present;
+            gpu.surface.configure(&gpu.device, &gpu.config);
+        }
+    }
+
+    /// A Video Options setting turned (`dir` 1 the next value, -1 the one
+    /// before), put to the window and kept.
+    fn change_video(&mut self, option: Option<u32>, dir: i32) {
+        let c = qb::checksum;
+        let window = self.gpu.as_ref().map(|g| g.window.clone());
+        let video = &mut self.settings.video;
+        let turn = |at: usize, len: usize| (at as i32 + dir).rem_euclid(len as i32) as usize;
+        match option {
+            Some(o) if o == c("video_display") => {
+                let at = WindowMode::ALL
+                    .iter()
+                    .position(|&m| m == video.mode)
+                    .unwrap_or(0);
+                video.mode = WindowMode::ALL[turn(at, WindowMode::ALL.len())];
+            }
+            Some(o) if o == c("video_size") => {
+                let sizes = video_sizes(video.mode, window.as_ref());
+                if sizes.is_empty() || video.mode == WindowMode::Borderless {
+                    return;
+                }
+                let now = shown_size(video, window.as_ref());
+                // (From where it is, or the nearest if it's between.)
+                let at = match sizes.iter().position(|&s| s == now) {
+                    Some(at) => turn(at, sizes.len()),
+                    None => {
+                        let area = u64::from(now.0) * u64::from(now.1);
+                        let bigger = sizes
+                            .iter()
+                            .position(|&(w, h)| u64::from(w) * u64::from(h) > area);
+                        match (bigger, dir > 0) {
+                            (Some(i), true) => i,
+                            (Some(i), false) => i.saturating_sub(1),
+                            (None, _) => sizes.len() - 1,
+                        }
+                    }
+                };
+                video.size = Some(sizes[at]);
+            }
+            Some(o) if o == c("video_vsync") => video.vsync = !video.vsync,
+            Some(o) if o == c("video_fps") => {
+                let at = FRAME_LIMITS
+                    .iter()
+                    .position(|&f| f == video.frame_limit)
+                    .unwrap_or(0);
+                video.frame_limit = FRAME_LIMITS[turn(at, FRAME_LIMITS.len())];
+            }
+            _ => return,
+        }
+        self.next_frame = Instant::now();
+        self.apply_video();
+        self.settings.save();
     }
 
     fn update(&mut self, dt: f32) {
@@ -7664,10 +7799,80 @@ impl ApplicationHandler for App<'_> {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.gpu.is_none() {
+            return;
+        }
+        // Under a frame limit, the next frame when it's due.
+        let limit = self.settings.video.frame_limit;
+        if limit > 0 {
+            let period = std::time::Duration::from_secs_f64(1.0 / f64::from(limit));
+            let now = Instant::now();
+            if now < self.next_frame {
+                std::thread::sleep(self.next_frame - now);
+            }
+            // (Not catching up more than a frame behind.)
+            let behind = Instant::now().checked_sub(period).unwrap_or(now);
+            self.next_frame = self.next_frame.max(behind) + period;
+        }
         if let Some(gpu) = &self.gpu {
             gpu.window.request_redraw();
         }
     }
+}
+
+/// The sizes the Video Options offer: the screen's modes (in a window,
+/// those that fit on it), smallest first.
+fn video_sizes(mode: WindowMode, window: Option<&Arc<Window>>) -> Vec<(u32, u32)> {
+    let monitor = window.and_then(|w| w.current_monitor());
+    let mut sizes: Vec<(u32, u32)> = match &monitor {
+        Some(m) => m
+            .video_modes()
+            .map(|v| (v.size().width, v.size().height))
+            .collect(),
+        None => vec![(1280, 720), (1600, 900), (1920, 1080)],
+    };
+    if mode == WindowMode::Windowed {
+        if let Some(m) = &monitor {
+            let screen = m.size();
+            sizes.retain(|&(w, h)| w <= screen.width && h <= screen.height);
+        }
+    }
+    sizes.retain(|&(w, h)| w >= 640 && h >= 480);
+    sizes.sort_by_key(|&(w, h)| (u64::from(w) * u64::from(h), w));
+    sizes.dedup();
+    sizes
+}
+
+/// The size the window is (or full screen, will be): as set, else as it is.
+fn shown_size(video: &Video, window: Option<&Arc<Window>>) -> (u32, u32) {
+    let monitor = window.and_then(|w| w.current_monitor());
+    let screen = || {
+        monitor
+            .as_ref()
+            .map(|m| (m.size().width, m.size().height))
+            .unwrap_or((0, 0))
+    };
+    match (video.mode, video.size) {
+        (WindowMode::Borderless, _) | (WindowMode::Fullscreen, None) => screen(),
+        (_, Some(size)) => size,
+        (WindowMode::Windowed, None) => window
+            .map(|w| (w.inner_size().width, w.inner_size().height))
+            .unwrap_or((0, 0)),
+    }
+}
+
+/// The Video Options' items' text, as the settings are.
+fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 4] {
+    let (w, h) = shown_size(video, window);
+    [
+        format!("Display: {}", video.mode.name()),
+        format!("Size: {w} x {h}"),
+        format!("VSync: {}", if video.vsync { "On" } else { "Off" }),
+        match video.frame_limit {
+            0 => "Frame Limit: Off".to_string(),
+            n => format!("Frame Limit: {n}"),
+        },
+    ]
 }
 
 /// Renders the first frame of a level, panel included, without a window.

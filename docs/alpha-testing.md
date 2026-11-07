@@ -22,6 +22,12 @@ R, or Q and E, turn them round; Enter picks), then its level select
 (as in the game, only the character's own world: the Toy Story three
 for Jessie; the panel's level list goes anywhere).
 
+The window's settings are in the game's own menus: Options > **Video
+Options** in the Skate Shop (or the pause menu's Options > Screen Mode).
+Display (Windowed, Borderless or Fullscreen), Size (the screen's modes),
+VSync, and a Frame Limit (30 to 240, or off); Enter or right for the next
+value, left for the one before. They're kept for next time.
+
 ## Controls
 
 | Keyboard | Gamepad | What it does |

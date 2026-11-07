@@ -22,8 +22,57 @@ pub struct Settings {
     pub names: BTreeMap<String, String>,
     /// The gaps landed on each level, by name.
     pub gaps: BTreeMap<String, BTreeSet<String>>,
+    /// The Video Options: the window and how often it's drawn.
+    pub video: Video,
     /// Never saved (screenshots).
     pub read_only: bool,
+}
+
+/// How the window shows: in a window, over the whole screen without a
+/// border, or taking the screen over (its size the screen's mode).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowMode {
+    #[default]
+    Windowed,
+    Borderless,
+    Fullscreen,
+}
+
+impl WindowMode {
+    pub const ALL: [WindowMode; 3] = [Self::Windowed, Self::Borderless, Self::Fullscreen];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Windowed => "Windowed",
+            Self::Borderless => "Borderless",
+            Self::Fullscreen => "Fullscreen",
+        }
+    }
+}
+
+/// The frame limits offered (0: none).
+pub const FRAME_LIMITS: [u32; 6] = [0, 30, 60, 120, 144, 240];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Video {
+    pub mode: WindowMode,
+    /// The window's size (or, full screen, the screen mode's), in pixels;
+    /// `None`, as it opens.
+    pub size: Option<(u32, u32)>,
+    pub vsync: bool,
+    /// Frames a second at most (0: no limit).
+    pub frame_limit: u32,
+}
+
+impl Default for Video {
+    fn default() -> Self {
+        Video {
+            mode: WindowMode::Windowed,
+            size: None,
+            vsync: true,
+            frame_limit: 0,
+        }
+    }
 }
 
 fn settings_file() -> Option<PathBuf> {
@@ -54,6 +103,24 @@ impl Settings {
                     settings.last_character = Some(value.to_string())
                 }
                 "speed" => settings.speed = value.parse().ok(),
+                "video.mode" => {
+                    if let Some(mode) = WindowMode::ALL
+                        .into_iter()
+                        .find(|m| m.name().eq_ignore_ascii_case(value))
+                    {
+                        settings.video.mode = mode;
+                    }
+                }
+                "video.size" => {
+                    settings.video.size = value
+                        .split_once('x')
+                        .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+                        .filter(|&(w, h): &(u32, u32)| w >= 320 && h >= 240);
+                }
+                "video.vsync" => settings.video.vsync = value != "0",
+                "video.frame_limit" => {
+                    settings.video.frame_limit = value.parse().unwrap_or(0);
+                }
                 key if key.starts_with("gaps.") => {
                     settings.gaps.insert(
                         key["gaps.".len()..].to_string(),
@@ -110,6 +177,27 @@ impl Settings {
         if let Some(speed) = self.speed {
             text += &format!("speed={speed}\n");
         }
+        text += &format!(
+            "video.mode={}
+",
+            self.video.mode.name()
+        );
+        if let Some((w, h)) = self.video.size {
+            text += &format!(
+                "video.size={w}x{h}
+"
+            );
+        }
+        text += &format!(
+            "video.vsync={}
+",
+            u8::from(self.video.vsync)
+        );
+        text += &format!(
+            "video.frame_limit={}
+",
+            self.video.frame_limit
+        );
         for (level, gaps) in &self.gaps {
             let names: Vec<&str> = gaps.iter().map(String::as_str).collect();
             text += &format!("gaps.{level}={}\n", names.join("|"));

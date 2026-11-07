@@ -8,10 +8,12 @@
 //!
 //! - [`token`] reads the token stream.
 //! - [`decompile()`] turns tokens back into readable script source.
+//! - [`source::compile`] turns script source back into tokens.
 //! - [`value`] parses top-level data definitions, such as a level's
 //!   `NodeArray`, into structured values.
 
 pub mod decompile;
+pub mod source;
 pub mod token;
 pub mod value;
 pub mod vm;

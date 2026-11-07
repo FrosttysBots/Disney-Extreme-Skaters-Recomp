@@ -513,3 +513,74 @@ fn real_cheat_codes() {
     }
     assert!(screen.global_flags.contains(&always));
 }
+
+/// The viewer's Video Options, made by the game's menu scripts: in the
+/// shop's Options before Done, and the pause menu's Screen Mode; each
+/// setting asks the viewer (`viewer_video`), and Back goes back.
+#[test]
+#[ignore = "needs the game data"]
+fn real_video_options() {
+    use desa_viewer::screen::Pad;
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, _) = screen_from_disc(&mut data);
+    // (The shop's too: its Options.)
+    for file in &data.load_level("SkateShop").unwrap().scripts {
+        let _ = program.add(file);
+    }
+    desa_viewer::behaviour::add_viewer_menus(&mut program);
+    screen.listen(&["viewer_video"]);
+    let frames = |screen: &mut desa_viewer::screen::Screen, n| {
+        for _ in 0..n {
+            screen.update(&program, 1.0 / 60.0);
+        }
+    };
+
+    // The pause menu's Options: Screen Mode is the Video Options.
+    screen.run(qb::checksum("create_screen_menu"), Vec::new());
+    frames(&mut screen, 30);
+    for id in [
+        "video_display",
+        "video_size",
+        "video_vsync",
+        "video_fps",
+        "video_done",
+    ] {
+        assert!(screen.exists(id), "no {id}:\n{}", screen.describe());
+    }
+    assert!(screen.describe().contains("\"VIDEO\""));
+    // Chosen, and turned left: the viewer asked, with which and which way.
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 2);
+    screen.pad(Pad::Left);
+    frames(&mut screen, 2);
+    let asked: Vec<_> = screen
+        .requests
+        .iter()
+        .filter(|(n, _)| *n == qb::checksum("viewer_video"))
+        .map(|(_, args)| {
+            (
+                args.get(qb::checksum("option"))
+                    .and_then(qb::Value::as_name),
+                args.get(qb::checksum("dir")).and_then(qb::Value::as_int),
+            )
+        })
+        .collect();
+    let display = Some(qb::checksum("video_display"));
+    assert_eq!(asked, [(display, Some(1)), (display, Some(-1))]);
+    // Back: the Options.
+    screen.pad(Pad::Back);
+    frames(&mut screen, 30);
+    assert!(!screen.exists("video_menu"));
+    assert!(screen.exists("options_menu"), "{}", screen.describe());
+
+    // The shop's Options: Video Options just before Done.
+    screen.clear();
+    screen.run(qb::checksum("create_setup_options_menu"), Vec::new());
+    frames(&mut screen, 30);
+    let text = screen.describe();
+    let video = text.find("\"Video Options\"").expect("no Video Options");
+    let done = text.rfind("\"Done\"").expect("no Done");
+    assert!(video < done, "{text}");
+}

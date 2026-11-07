@@ -53,7 +53,30 @@ impl Program {
 
     /// Adds a `.qb` file's scripts and values (later files win).
     pub fn add(&mut self, data: &[u8]) -> Result<()> {
-        let tokens = tokenize(data)?;
+        self.add_tokens(&tokenize(data)?)
+    }
+
+    /// Adds scripts and values from script source (as the decompiler
+    /// writes it: [`crate::source::compile`]), later ones winning.
+    pub fn add_source(&mut self, source: &str) -> Result<()> {
+        self.add_tokens(&crate::source::compile(source)?)
+    }
+
+    /// Gives a script (and its defaults) another name, for one of the
+    /// same name to call it under that: false if there's no such script.
+    pub fn rename_script(&mut self, from: u32, to: u32) -> bool {
+        let Some(body) = self.scripts.remove(&from) else {
+            return false;
+        };
+        self.scripts.insert(to, body);
+        if let Some(defaults) = self.defaults.remove(&from) {
+            self.defaults.insert(to, defaults);
+        }
+        true
+    }
+
+    fn add_tokens(&mut self, tokens: &[(usize, Token)]) -> Result<()> {
+        let tokens = tokens.to_vec();
         self.names.add_tokens(&tokens);
         for def in parse_definitions(&tokens)? {
             match def {
