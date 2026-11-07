@@ -1328,7 +1328,7 @@ struct BouncyState {
 fn spot_lit(color: [u8; 4], out: Vec3, light: Vec3) -> [u8; 4] {
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
     let facing = flat(out).dot(flat(light)).max(0.0);
-    let k = STAGE_SHADE + (STAGE_LIT - STAGE_SHADE) * facing.powi(4);
+    let k = STAGE_SHADE + (STAGE_LIT - STAGE_SHADE) * facing.powi(8);
     let channel = |c: u8| (f32::from(c) * k).round().clamp(0.0, 255.0) as u8;
     [
         channel(color[0]),
@@ -1340,7 +1340,7 @@ fn spot_lit(color: [u8; 4], out: Vec3, light: Vec3) -> [u8; 4] {
 
 /// How bright the stage's light makes the panel facing it, and those
 /// turned away (of their colours as stored).
-const STAGE_LIT: f32 = 1.6;
+const STAGE_LIT: f32 = 2.6;
 const STAGE_SHADE: f32 = 0.55;
 
 struct MoverState {
