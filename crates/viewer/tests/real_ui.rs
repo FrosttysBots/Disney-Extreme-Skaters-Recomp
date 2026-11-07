@@ -545,6 +545,7 @@ fn real_video_options() {
         "video_size",
         "video_vsync",
         "video_fps",
+        "video_apply",
         "video_done",
     ] {
         assert!(screen.exists(id), "no {id}:\n{}", screen.describe());
@@ -569,6 +570,21 @@ fn real_video_options() {
         .collect();
     let display = Some(qb::checksum("video_display"));
     assert_eq!(asked, [(display, Some(1)), (display, Some(-1))]);
+    // Apply (four down): asked for by name.
+    screen.requests.clear();
+    for _ in 0..4 {
+        screen.pad(Pad::Down);
+        frames(&mut screen, 2);
+    }
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 2);
+    let apply = screen
+        .requests
+        .iter()
+        .find(|(n, _)| *n == qb::checksum("viewer_video"))
+        .and_then(|(_, args)| args.get(qb::checksum("option")))
+        .and_then(qb::Value::as_name);
+    assert_eq!(apply, Some(qb::checksum("video_apply")));
     // Back: the Options.
     screen.pad(Pad::Back);
     frames(&mut screen, 30);

@@ -2059,6 +2059,9 @@ struct App<'a> {
     notice: Option<(String, Instant)>,
     /// The Video Options' values as last shown in its menu.
     video_labels: Option<[String; 4]>,
+    /// The Video Options as changed in its menu, till Apply (or leaving
+    /// it, which forgets them).
+    video_pending: Option<Video>,
     /// When the next frame's due, under a frame limit.
     next_frame: Instant,
     gpu: Option<Gpu>,
@@ -2253,6 +2256,7 @@ impl<'a> App<'a> {
             game: false,
             notice: None,
             video_labels: None,
+            video_pending: None,
             next_frame: Instant::now(),
             gpu: None,
             data: None,
@@ -5999,7 +6003,8 @@ impl<'a> App<'a> {
         }
         // The Video Options' values, as they are.
         if screen.screen.exists("video_display_text") {
-            let labels = video_labels(&self.settings.video, self.gpu.as_ref().map(|g| &g.window));
+            let shown = self.video_pending.unwrap_or(self.settings.video);
+            let labels = video_labels(&shown, self.gpu.as_ref().map(|g| &g.window));
             if self.video_labels.as_ref() != Some(&labels) {
                 let ids = [
                     "video_display_text",
@@ -6017,7 +6022,9 @@ impl<'a> App<'a> {
                 self.video_labels = Some(labels);
             }
         } else {
+            // (Left without Apply: as they were.)
             self.video_labels = None;
+            self.video_pending = None;
         }
         let sounds = std::mem::take(&mut screen.screen.sounds);
         let requests = std::mem::take(&mut screen.screen.requests);
@@ -7120,11 +7127,20 @@ impl<'a> App<'a> {
     }
 
     /// A Video Options setting turned (`dir` 1 the next value, -1 the one
-    /// before), put to the window and kept.
+    /// before), shown till Apply puts them to the window and keeps them.
     fn change_video(&mut self, option: Option<u32>, dir: i32) {
         let c = qb::checksum;
+        if option == Some(c("video_apply")) {
+            if let Some(video) = self.video_pending.take() {
+                self.settings.video = video;
+                self.next_frame = Instant::now();
+                self.apply_video();
+                self.settings.save();
+            }
+            return;
+        }
         let window = self.gpu.as_ref().map(|g| g.window.clone());
-        let video = &mut self.settings.video;
+        let video = self.video_pending.get_or_insert(self.settings.video);
         let turn = |at: usize, len: usize| (at as i32 + dir).rem_euclid(len as i32) as usize;
         match option {
             Some(o) if o == c("video_display") => {
@@ -7165,11 +7181,8 @@ impl<'a> App<'a> {
                     .unwrap_or(0);
                 video.frame_limit = FRAME_LIMITS[turn(at, FRAME_LIMITS.len())];
             }
-            _ => return,
+            _ => {}
         }
-        self.next_frame = Instant::now();
-        self.apply_video();
-        self.settings.save();
     }
 
     fn update(&mut self, dt: f32) {
