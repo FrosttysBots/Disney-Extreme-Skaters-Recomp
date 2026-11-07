@@ -2053,6 +2053,9 @@ struct App<'a> {
     settings: &'a mut Settings,
     /// The game alone (the game build): no panel, debug keys or markers.
     game: bool,
+    /// In the game alone, the panel's message shown on screen instead, and
+    /// since when (it goes after a few seconds).
+    notice: Option<(String, Instant)>,
     gpu: Option<Gpu>,
     data: Option<GameData>,
     level: Option<LoadedLevel>,
@@ -2243,6 +2246,7 @@ impl<'a> App<'a> {
         App {
             settings,
             game: false,
+            notice: None,
             gpu: None,
             data: None,
             level: None,
@@ -5320,6 +5324,25 @@ impl<'a> App<'a> {
         }
     }
 
+    /// In the game alone, with the panel shut, the panel's latest message
+    /// to show on screen: for 4 seconds, then gone.
+    fn game_notice(&mut self) -> Option<String> {
+        if !self.game || self.model.panel_open {
+            return None;
+        }
+        let message = self.model.message.clone()?;
+        if self.notice.as_ref().is_none_or(|(m, _)| *m != message) {
+            self.notice = Some((message.clone(), Instant::now()));
+        }
+        let (_, since) = self.notice.as_ref()?;
+        if since.elapsed().as_secs_f32() > 4.0 {
+            self.model.message = None;
+            self.notice = None;
+            return None;
+        }
+        Some(message)
+    }
+
     /// The game alone: the panel shut, and no rails, spawn markers or map.
     fn set_game_mode(&mut self) {
         self.game = true;
@@ -7145,6 +7168,7 @@ impl<'a> App<'a> {
         self.update_screen(dt);
         self.update_screen_movie();
         let arrows = self.hud_arrow_angles();
+        let notice = self.game_notice();
         let Some(gpu) = &mut self.gpu else { return };
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
@@ -7157,6 +7181,9 @@ impl<'a> App<'a> {
                 screen.paint(ctx);
             }
             paint_hud_arrows(ctx, &arrows);
+            if let Some(notice) = &notice {
+                ui::notice(ctx, notice);
+            }
             if let Some(playing) = movie {
                 if playing.draw(ctx) {
                     actions.push(ui::Action::SkipMovie);

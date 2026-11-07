@@ -272,6 +272,23 @@ Skating: W push, S brake, A/D steer,
   right stick look round, Start pause),
   Esc stop";
 
+/// A message for the player (the game build's stand-in for the panel's),
+/// at the top of the screen.
+pub fn notice(ctx: &egui::Context, text: &str) {
+    egui::Area::new(egui::Id::new("notice"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 24.0])
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new(text)
+                    .size(18.0)
+                    .strong()
+                    .color(egui::Color32::WHITE)
+                    .background_color(egui::Color32::from_black_alpha(160)),
+            );
+        });
+}
+
 /// The score (top right) and the combo (bottom centre, above the balance
 /// meter).
 fn trick_text(ctx: &egui::Context, score: u32, combo: Option<&str>) {
