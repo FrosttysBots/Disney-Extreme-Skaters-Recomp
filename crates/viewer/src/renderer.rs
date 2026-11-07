@@ -678,7 +678,7 @@ impl Renderer {
             Some(c) => (
                 Mat4::from_rotation_translation(c.rotation, c.position).inverse(),
                 Mat4::from_quat(c.rotation.conjugate()),
-                c.fov_y,
+                crate::camera::fit_fov(c.fov_y, aspect),
             ),
             None => (
                 camera.view(),

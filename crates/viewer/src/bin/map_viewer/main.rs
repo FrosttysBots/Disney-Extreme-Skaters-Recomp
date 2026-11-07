@@ -5581,10 +5581,19 @@ impl<'a> App<'a> {
                 self.stage_turn = (self.stage_turn + step) % std::f32::consts::TAU;
             }
         }
-        // (Or where the menus have moved it: the Edit Skater set.)
+        // (Or where the menus have moved it: the Edit Skater set. Only a
+        // kid's the skater on the stage: for the others the game's
+        // `manifest_cur_skater` sends the skater off to `TRG_Start_P1`
+        // and makes the character's ped stand there instead, `disney_skater
+        // > LAST_CAK`, which is what the viewer shows.)
+        let last_cak = program
+            .value(c("LAST_CAK"))
+            .and_then(qb::Value::as_int)
+            .unwrap_or(1);
         let moved = self
             .screen
             .as_ref()
+            .filter(|_| now <= last_cak)
             .and_then(|s| s.screen.skater_node)
             // (Back to its place on the stage: as the stage has it.)
             .filter(|&id| Some(id) != stage_id)

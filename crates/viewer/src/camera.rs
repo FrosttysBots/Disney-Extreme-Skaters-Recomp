@@ -23,6 +23,19 @@ pub fn vertical_fov(horizontal: f32) -> f32 {
     2.0 * ((horizontal / 2.0).tan() * 0.75).atan()
 }
 
+/// A camera path's vertical field of view for a window `aspect` wide: as
+/// it is up to 16:9 (wider than the game's 4:3 screen, seeing more at the
+/// sides), and no wider than that beyond, narrowed to keep 16:9's view
+/// across, so a very wide window doesn't see past the sides of a set made
+/// for the game's screen (the Skate Shop's stage).
+pub fn fit_fov(fov_y: f32, aspect: f32) -> f32 {
+    const WIDEST: f32 = 16.0 / 9.0;
+    if aspect <= WIDEST {
+        return fov_y;
+    }
+    2.0 * ((fov_y / 2.0).tan() * WIDEST / aspect).atan()
+}
+
 /// A free-flying camera in the game's Y-up, right-handed space.
 /// Yaw 0 looks down -Z; positive yaw turns right, positive pitch looks up.
 #[derive(Clone, Copy, Debug)]
@@ -122,5 +135,16 @@ mod tests {
         assert!(again.position.abs_diff_eq(cam.position, 0.5));
         assert!((again.yaw - cam.yaw).abs() < 1e-3 && (again.pitch - cam.pitch).abs() < 1e-3);
         assert!(FlyCamera::parse("1,2,3").is_err());
+    }
+
+    #[test]
+    fn a_very_wide_window_sees_no_more_across_than_16_by_9() {
+        let fov_y = vertical_fov(72f32.to_radians());
+        let across = |aspect: f32| 2.0 * ((fit_fov(fov_y, aspect) / 2.0).tan() * aspect).atan();
+        // Up to 16:9: as it is.
+        assert_eq!(fit_fov(fov_y, 4.0 / 3.0), fov_y);
+        assert_eq!(fit_fov(fov_y, 16.0 / 9.0), fov_y);
+        // Wider: no more across than 16:9 sees.
+        assert!((across(2000.0 / 844.0) - across(16.0 / 9.0)).abs() < 1e-5);
     }
 }

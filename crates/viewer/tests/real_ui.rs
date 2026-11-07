@@ -394,6 +394,75 @@ fn real_select_skater() {
     assert!(screen.exists("select_skater_anchor"));
 }
 
+/// Choosing a character at the skater select (Woody, a Disney character)
+/// goes on to the level select (`chose_skater`'s
+/// `launch_level_select_menu`).
+#[test]
+#[ignore = "needs the game data"]
+fn real_select_skater_choose() {
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, _images) = screen_from_disc(&mut data);
+    let shop = data.load_level("SkateShop").unwrap();
+    for file in &shop.scripts {
+        let _ = program.add(file);
+    }
+    screen.level = Some(qb::checksum("load_skateshop"));
+    let who = std::env::var("SKATER").map_or(7, |s| s.parse().unwrap());
+    program.change(qb::checksum("disney_skater"), qb::Value::Integer(who));
+    screen.character = Some("jessie".into());
+    let menu = std::env::var("FROM_MENU").ok();
+    if let Some(downs) = menu {
+        screen.run(qb::checksum("launch_main_menu"), Vec::new());
+        for _ in 0..90 {
+            screen.update(&program, 1.0 / 60.0);
+        }
+        for _ in 0..downs.parse::<u32>().unwrap() {
+            screen.pad(desa_viewer::screen::Pad::Down);
+            for _ in 0..10 {
+                screen.update(&program, 1.0 / 60.0);
+            }
+        }
+        screen.pad(desa_viewer::screen::Pad::Choose);
+        for _ in 0..180 {
+            screen.update(&program, 1.0 / 60.0);
+        }
+        println!(
+            "after main menu: select_skater {}",
+            screen.exists("select_skater_anchor")
+        );
+        println!("{}", screen.describe());
+    } else {
+        screen.run(qb::checksum("launch_select_skater_menu"), Vec::new());
+    }
+    for _ in 0..90 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    screen.pad(desa_viewer::screen::Pad::Choose);
+    for _ in 0..90 {
+        screen.update(&program, 1.0 / 60.0);
+    }
+    println!("{}", screen.describe());
+    let mut symbols = qb::Symbols::new();
+    for file in data.global_scripts().unwrap().iter().chain(&shop.scripts) {
+        if let Ok(t) = qb::tokenize(file) {
+            symbols.add_tokens(&t);
+        }
+    }
+    let mut unknown: Vec<_> = screen
+        .unknown
+        .iter()
+        .map(|(n, c)| (symbols.name(*n), *c))
+        .collect();
+    unknown.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    println!("unknown {unknown:?}");
+    assert!(
+        !screen.exists("select_skater_anchor"),
+        "the skater select's gone"
+    );
+}
+
 /// A cheat code typed as the Cheat Codes keyboard hands it on
 /// (`TryCheatString`): the game's hash finds it in `Cheat_Array_Gamecube`
 /// and its script runs (the Lion King movie unlocked); a wrong one
