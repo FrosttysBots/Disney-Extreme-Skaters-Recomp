@@ -26,9 +26,14 @@ for Jessie; the panel's level list goes anywhere).
 The window's settings are in the game's own menus: Options > **Video
 Options** in the Skate Shop (or the pause menu's Options > Screen Mode).
 Display (Windowed, Borderless or Fullscreen), Size (the screen's modes),
-VSync, and a Frame Limit (30 to 240, or off); Enter or right for the next
+Aspect Ratio (Auto fills the window; 4:3, 16:10, 16:9, 21:9 or 32:9 draw
+the picture at that shape with black bars round it), VSync, and a Frame Limit (30 to 240, or off); Enter or right for the next
 value, left for the one before, then **Apply** to put them to the window
 (leaving without it changes nothing). They're kept for next time.
+
+Left idle on the main menu, the game's demo movie plays after two minutes
+(the game's own wait is 30 seconds); any key starts the wait again, and
+it stops once you leave the main menu.
 
 ## Controls
 

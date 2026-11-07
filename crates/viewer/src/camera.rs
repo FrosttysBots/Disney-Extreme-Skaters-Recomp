@@ -23,6 +23,27 @@ pub fn vertical_fov(horizontal: f32) -> f32 {
     2.0 * ((horizontal / 2.0).tan() * 0.75).atan()
 }
 
+/// Where the picture goes in a `width` by `height` window: all of it, or,
+/// at a shape of its own (`aspect`, width over height), as large as fits,
+/// in the middle (black bars at the sides or above and below). As `(x, y,
+/// width, height)`.
+pub fn picture_box(width: f32, height: f32, aspect: Option<f32>) -> (f32, f32, f32, f32) {
+    let Some(aspect) = aspect.filter(|a| *a > 0.0 && width > 0.0 && height > 0.0) else {
+        return (0.0, 0.0, width, height);
+    };
+    let (w, h) = if width / height > aspect {
+        ((height * aspect).round(), height)
+    } else {
+        (width, (width / aspect).round())
+    };
+    (
+        ((width - w) / 2.0).floor(),
+        ((height - h) / 2.0).floor(),
+        w,
+        h,
+    )
+}
+
 /// A camera path's vertical field of view for a window `aspect` wide: as
 /// it is up to 16:9 (wider than the game's 4:3 screen, seeing more at the
 /// sides), and no wider than that beyond, narrowed to keep 16:9's view
@@ -135,6 +156,25 @@ mod tests {
         assert!(again.position.abs_diff_eq(cam.position, 0.5));
         assert!((again.yaw - cam.yaw).abs() < 1e-3 && (again.pitch - cam.pitch).abs() < 1e-3);
         assert!(FlyCamera::parse("1,2,3").is_err());
+    }
+
+    #[test]
+    fn the_picture_box_fits_its_shape_in_the_middle() {
+        // As the window is: all of it.
+        assert_eq!(
+            picture_box(2560.0, 1080.0, None),
+            (0.0, 0.0, 2560.0, 1080.0)
+        );
+        // 16:9 on a 21:9 screen: bars at the sides.
+        assert_eq!(
+            picture_box(2560.0, 1080.0, Some(16.0 / 9.0)),
+            (320.0, 0.0, 1920.0, 1080.0)
+        );
+        // 21:9 on a 16:9 screen: bars above and below.
+        let (x, y, w, h) = picture_box(1920.0, 1080.0, Some(21.0 / 9.0));
+        assert_eq!((x, w), (0.0, 1920.0));
+        assert_eq!(h, 823.0);
+        assert_eq!(y, 128.0);
     }
 
     #[test]

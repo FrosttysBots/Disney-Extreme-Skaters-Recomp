@@ -426,6 +426,10 @@ pub struct Screen {
     /// Scripts to stop once the frame's have run: an element's (of one
     /// name, if named).
     stopping: Vec<(usize, Option<u32>)>,
+    /// Spawned scripts stopped by name (`KillSpawnedScript`) this frame,
+    /// and those running as it began (whether there was one to stop).
+    killing: Vec<u32>,
+    alive: Vec<u32>,
 }
 
 const ROOT: usize = 0;
@@ -492,6 +496,8 @@ impl Screen {
             global_flags: std::collections::HashSet::new(),
             flags_changed: false,
             stopping: Vec::new(),
+            killing: Vec::new(),
+            alive: Vec::new(),
         }
     }
 
@@ -644,6 +650,7 @@ impl Screen {
         }
         let mut running = std::mem::take(&mut self.running);
         running.append(&mut self.starting);
+        self.alive = running.iter().filter_map(|r| r.thread.script()).collect();
         for r in &mut running {
             // (A script goes on when its element's gone: an item's choice
             // takes its menu away, then makes the next.)
@@ -670,6 +677,9 @@ impl Screen {
             }
         }
         running.retain(|r| !r.thread.is_finished());
+        for name in std::mem::take(&mut self.killing) {
+            running.retain(|r| r.thread.script() != Some(name));
+        }
         for (i, only) in std::mem::take(&mut self.stopping) {
             running
                 .retain(|r| r.element != i || only.is_some_and(|n| r.thread.script() != Some(n)));
@@ -681,6 +691,14 @@ impl Screen {
     /// A pad event: to the deepest focused element, then up through its
     /// parents till one takes it.
     pub fn pad(&mut self, pad: Pad) {
+        // A key pressed starts the main menu's idle timer again (the
+        // viewer's: the game's ran from the menu's making).
+        let idle = checksum("attract_mode_timer");
+        for r in self.running.iter_mut().chain(&mut self.starting) {
+            if r.thread.script() == Some(idle) {
+                r.thread = Thread::new(idle, Vec::new());
+            }
+        }
         // The deepest focused element showing (focus can be given to a
         // menu deep inside one that hasn't it: the gap checklist's).
         let mut at = ROOT;
@@ -2164,6 +2182,17 @@ impl Host for Ui<'_> {
                 thread: Thread::new(script, params),
                 then: None,
             });
+        } else if name == c("KillSpawnedScript") {
+            // A spawned script stopped, by name (the main menu's idle
+            // timer, as the menu's left): true if there was one.
+            let Some(script) = named("Name").and_then(|v| v.as_name()) else {
+                return Outcome::Done(false);
+            };
+            let before = s.starting.len();
+            s.starting.retain(|r| r.thread.script() != Some(script));
+            let was = s.starting.len() != before || s.alive.contains(&script);
+            s.killing.push(script);
+            return Outcome::Done(was);
         } else if name == c("TerminateObjectsScripts") {
             // An element's scripts stopped (those of one name, if named).
             if let Some(i) = target_of(s) {
@@ -2783,7 +2812,6 @@ impl Host for Ui<'_> {
             "SetScreenElementLock",
             "AddTextureToVram",
             "RemoveTextureFromVram",
-            "KillSpawnedScript",
             "SetMenuPadMappings",
         ]
         .iter()

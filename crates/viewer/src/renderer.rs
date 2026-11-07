@@ -232,6 +232,9 @@ pub struct Renderer {
     /// When set, frames are drawn from this camera instead of the one
     /// passed to `render` / `encode` (for playing camera paths).
     pub scripted_camera: Option<ScriptedCamera>,
+    /// The picture's shape (width over height), black bars round it, if
+    /// not the window's (see `camera::picture_box`).
+    pub aspect: Option<f32>,
     /// The character left out of frames (hidden by a goal's cutscene).
     pub hide_character: bool,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
@@ -368,6 +371,7 @@ impl Renderer {
             collision_view: CollisionView::Hidden,
             show_sky: true,
             scripted_camera: None,
+            aspect: None,
             hide_character: false,
             min_light: 0.0,
             depth: None,
@@ -673,7 +677,8 @@ impl Renderer {
             self.depth = Some((texture.create_view(&Default::default()), width, height));
         }
 
-        let aspect = width as f32 / height.max(1) as f32;
+        let picture = crate::camera::picture_box(width as f32, height as f32, self.aspect);
+        let aspect = picture.2 / picture.3.max(1.0);
         let (view, rotation_view, fov_y) = match self.scripted_camera {
             Some(c) => (
                 Mat4::from_rotation_translation(c.rotation, c.position).inverse(),
@@ -710,7 +715,12 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        // (Black, round a picture not the window's shape.)
+                        load: wgpu::LoadOp::Clear(if self.aspect.is_some() {
+                            wgpu::Color::BLACK
+                        } else {
+                            CLEAR_COLOR
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -726,6 +736,7 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            pass.set_viewport(picture.0, picture.1, picture.2, picture.3, 0.0, 1.0);
 
             let collision = self
                 .collision

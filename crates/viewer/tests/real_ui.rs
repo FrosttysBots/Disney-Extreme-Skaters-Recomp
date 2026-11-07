@@ -572,9 +572,9 @@ fn real_video_options() {
         .collect();
     let display = Some(qb::checksum("video_display"));
     assert_eq!(asked, [(display, Some(1)), (display, Some(-1))]);
-    // Apply (four down): asked for by name.
+    // Apply (five down): asked for by name.
     screen.requests.clear();
-    for _ in 0..4 {
+    for _ in 0..5 {
         screen.pad(Pad::Down);
         frames(&mut screen, 2);
     }
@@ -652,4 +652,48 @@ fn real_exit_game() {
         "{}",
         screen.describe()
     );
+}
+
+/// The main menu's demo movie (`attract_mode_timer`): two minutes idle,
+/// each key starting the wait again, and none once the menu's left.
+#[test]
+#[ignore = "needs the game data"]
+fn real_main_menu_idle_demo() {
+    use desa_viewer::screen::Pad;
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, _) = screen_from_disc(&mut data);
+    for file in &data.load_level("SkateShop").unwrap().scripts {
+        let _ = program.add(file);
+    }
+    desa_viewer::behaviour::add_viewer_menus(&mut program);
+    screen.level = Some(qb::checksum("load_SkateShop"));
+    let seconds = |screen: &mut desa_viewer::screen::Screen, n: u32| {
+        for _ in 0..n * 10 {
+            screen.update(&program, 0.1);
+        }
+    };
+    screen.run(qb::checksum("launch_main_menu"), Vec::new());
+    seconds(&mut screen, 100);
+    assert!(screen.movies.is_empty(), "a demo at 100 seconds");
+    // A key: two minutes again from here.
+    screen.pad(Pad::Down);
+    seconds(&mut screen, 100);
+    assert!(screen.movies.is_empty(), "a demo 100 seconds after a key");
+    seconds(&mut screen, 25);
+    assert_eq!(screen.movies.len(), 1, "no demo two minutes after a key");
+    // Back on the menu, then off it (to the Options): no more demos.
+    screen.movies.clear();
+    screen.clear();
+    screen.run(qb::checksum("launch_main_menu"), Vec::new());
+    seconds(&mut screen, 2);
+    assert!(screen.describe().contains("\"Options\""));
+    for _ in 0..2 {
+        screen.pad(Pad::Down);
+        seconds(&mut screen, 1);
+    }
+    screen.pad(Pad::Choose);
+    seconds(&mut screen, 300);
+    assert!(screen.movies.is_empty(), "a demo off the main menu");
 }

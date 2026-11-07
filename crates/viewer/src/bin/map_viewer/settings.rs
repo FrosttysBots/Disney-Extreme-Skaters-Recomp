@@ -53,6 +53,18 @@ impl WindowMode {
 /// The frame limits offered (0: none).
 pub const FRAME_LIMITS: [u32; 6] = [0, 30, 60, 120, 144, 240];
 
+/// The picture's shapes offered (width by height; `None`: the window's
+/// own, filling it). Another than the window's, the picture's as large as
+/// fits, black bars round it.
+pub const ASPECTS: [Option<(u32, u32)>; 6] = [
+    None,
+    Some((4, 3)),
+    Some((16, 10)),
+    Some((16, 9)),
+    Some((21, 9)),
+    Some((32, 9)),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Video {
     pub mode: WindowMode,
@@ -62,6 +74,8 @@ pub struct Video {
     pub vsync: bool,
     /// Frames a second at most (0: no limit).
     pub frame_limit: u32,
+    /// The picture's shape (one of `ASPECTS`; `None`, the window's).
+    pub aspect: Option<(u32, u32)>,
 }
 
 impl Default for Video {
@@ -71,6 +85,7 @@ impl Default for Video {
             size: None,
             vsync: true,
             frame_limit: 0,
+            aspect: None,
         }
     }
 }
@@ -120,6 +135,12 @@ impl Settings {
                 "video.vsync" => settings.video.vsync = value != "0",
                 "video.frame_limit" => {
                     settings.video.frame_limit = value.parse().unwrap_or(0);
+                }
+                "video.aspect" => {
+                    settings.video.aspect = value
+                        .split_once(':')
+                        .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+                        .filter(|a| ASPECTS.contains(&Some(*a)));
                 }
                 key if key.starts_with("gaps.") => {
                     settings.gaps.insert(
@@ -198,6 +219,12 @@ impl Settings {
 ",
             self.video.frame_limit
         );
+        if let Some((w, h)) = self.video.aspect {
+            text += &format!(
+                "video.aspect={w}:{h}
+"
+            );
+        }
         for (level, gaps) in &self.gaps {
             let names: Vec<&str> = gaps.iter().map(String::as_str).collect();
             text += &format!("gaps.{level}={}\n", names.join("|"));

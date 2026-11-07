@@ -1,7 +1,7 @@
 // The viewer's Video Options, made as the game's own menus are (its
 // make_new_skateshop_menu, main_menu_add_item and create_menu_bg, so its
-// fonts and art): the window, its size, vsync and a frame limit. The
-// viewer listens for viewer_video (an item chosen or turned, with
+// fonts and art): the window, its size, the picture's shape (Aspect
+// Ratio), vsync and a frame limit. The viewer listens for viewer_video (an item chosen or turned, with
 // `option` and `dir`; Apply, `option = video_apply`) and names each
 // item's value (the item's text, its `text_id`). Nothing changes till
 // Apply; leaving without it, nothing does.
@@ -89,7 +89,7 @@ script viewer_video_menu
         menu_title = "VIDEO"
         helper_text = generic_helper_text
     }
-    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 6
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 7
     SetScreenElementProps {
         id = video_vmenu
         event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_video_exit } } ]
@@ -97,6 +97,7 @@ script viewer_video_menu
     }
     viewer_video_item id = video_display text_id = video_display_text
     viewer_video_item id = video_size text_id = video_size_text
+    viewer_video_item id = video_aspect text_id = video_aspect_text
     viewer_video_item id = video_vsync text_id = video_vsync_text
     viewer_video_item id = video_fps text_id = video_fps_text
     main_menu_add_item {
@@ -143,4 +144,14 @@ script viewer_video_exit
     else
         create_options_menu
     endif
+endscript
+
+// The main menu's idle timer (the Skate Shop's, its demo movie after 30
+// seconds on the menu): two minutes here, from the last key pressed (the
+// viewer starts it again on each: see Screen::pad).
+script attract_mode_timer
+    begin
+        Wait 120 seconds
+        movie_menu_play_movie movie_file = (attract_mode_movies [ current_attract_movie ])
+    repeat
 endscript

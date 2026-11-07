@@ -49,7 +49,7 @@ use desa_viewer::nodes::{LevelNodes, Spawn};
 use desa_viewer::objects::{self, LevelObjects};
 use desa_viewer::renderer::{self, Renderer, request_device};
 use desa_viewer::source::{GameData, LevelInfo};
-use settings::{FRAME_LIMITS, Settings, Video, WindowMode};
+use settings::{ASPECTS, FRAME_LIMITS, Settings, Video, WindowMode};
 
 const MOUSE_SENSITIVITY: f32 = 0.0025;
 const DEFAULT_SPEED: f32 = 1500.0;
@@ -92,6 +92,10 @@ struct Args {
     /// For --screenshot: image size as WIDTHxHEIGHT
     #[arg(long, requires = "screenshot", default_value = "1400x850", value_parser = parse_size)]
     size: (u32, u32),
+    /// For --screenshot: the picture's shape, as WIDTH:HEIGHT (the Video
+    /// Options' Aspect Ratio), black bars round it
+    #[arg(long, requires = "screenshot", value_parser = parse_aspect)]
+    aspect: Option<(u32, u32)>,
     /// For --screenshot: the spawn point (by number in the panel's list,
     /// from 0) the character stands on, instead of the level's start
     #[arg(long, requires = "screenshot")]
@@ -218,6 +222,17 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
         return Err("width and height must be 16 to 8192".into());
     }
     Ok((w, h))
+}
+
+fn parse_aspect(text: &str) -> Result<(u32, u32), String> {
+    let (w, h) = text
+        .split_once(':')
+        .ok_or("expected WIDTH:HEIGHT, e.g. 16:9")?;
+    let parse = |v: &str| v.trim().parse::<u32>().map_err(|e| e.to_string());
+    match (parse(w)?, parse(h)?) {
+        (0, _) | (_, 0) => Err("width and height must be more than 0".into()),
+        aspect => Ok(aspect),
+    }
 }
 
 // (Unused when the game build takes this file in as a module.)
@@ -1464,7 +1479,7 @@ impl ScreenUi {
         if draws.is_empty() {
             return;
         }
-        let area = ctx.available_rect();
+        let area = picture_area(ctx);
         let k = (area.width() / WIDTH).min(area.height() / HEIGHT);
         let origin = area.center() - egui::vec2(WIDTH, HEIGHT) * k / 2.0;
         let to_screen = |r: [f32; 4]| {
@@ -2043,6 +2058,23 @@ fn path_camera(path: &CameraPath, seconds: f32) -> ScriptedCamera {
     }
 }
 
+/// The picture's shape for the game's screen over it (see
+/// `picture_area`), kept in egui's memory.
+fn set_picture_aspect(ctx: &egui::Context, aspect: Option<f32>) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("picture_aspect"), aspect));
+}
+
+/// Where the game's screen goes: in the picture (its shape's, if it has
+/// one of its own: see `Video::aspect`), beside the panel.
+fn picture_area(ctx: &egui::Context) -> egui::Rect {
+    let aspect = ctx.data(|d| d.get_temp::<Option<f32>>(egui::Id::new("picture_aspect")));
+    let window = ctx.viewport_rect();
+    let (x, y, w, h) =
+        desa_viewer::camera::picture_box(window.width(), window.height(), aspect.flatten());
+    let picture = egui::Rect::from_min_size(window.min + egui::vec2(x, y), egui::vec2(w, h));
+    ctx.available_rect().intersect(picture)
+}
+
 /// The HUD's arrows (the game's `HUD_arrow` model, at the top of its
 /// 640x480 screen): drawn flat, turned by each angle (0 straight up,
 /// positive to the right), gold with a dark edge.
@@ -2051,7 +2083,7 @@ fn paint_hud_arrows(ctx: &egui::Context, angles: &[f32]) {
     if angles.is_empty() {
         return;
     }
-    let area = ctx.available_rect();
+    let area = picture_area(ctx);
     let k = (area.width() / WIDTH).min(area.height() / HEIGHT);
     let origin = area.center() - egui::vec2(WIDTH, HEIGHT) * k / 2.0;
     let centre = origin + egui::vec2(320.0, 70.0) * k;
@@ -2123,7 +2155,7 @@ struct App<'a> {
     /// The main menu's Exit Game chosen (and its QUIT? said yes to).
     exit_game: bool,
     /// The Video Options' values as last shown in its menu.
-    video_labels: Option<[String; 4]>,
+    video_labels: Option<[String; 5]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
     /// it, which forgets them).
     video_pending: Option<Video>,
@@ -6099,6 +6131,7 @@ impl<'a> App<'a> {
                 let ids = [
                     "video_display_text",
                     "video_size_text",
+                    "video_aspect_text",
                     "video_vsync_text",
                     "video_fps_text",
                 ];
@@ -7278,6 +7311,10 @@ impl<'a> App<'a> {
                 };
                 video.size = Some(sizes[at]);
             }
+            Some(o) if o == c("video_aspect") => {
+                let at = ASPECTS.iter().position(|&a| a == video.aspect).unwrap_or(0);
+                video.aspect = ASPECTS[turn(at, ASPECTS.len())];
+            }
             Some(o) if o == c("video_vsync") => video.vsync = !video.vsync,
             Some(o) if o == c("video_fps") => {
                 let at = FRAME_LIMITS
@@ -7431,7 +7468,12 @@ impl<'a> App<'a> {
         self.update_screen_movie();
         let arrows = self.hud_arrow_angles();
         let notice = self.game_notice();
+        let aspect = self.settings.video.aspect.map(|(w, h)| w as f32 / h as f32);
+        if let Some(level) = &mut self.level {
+            level.renderer.aspect = aspect;
+        }
         let Some(gpu) = &mut self.gpu else { return };
+        set_picture_aspect(&gpu.egui_ctx, aspect);
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let model = &mut self.model;
         let movie = &mut self.movie;
@@ -7984,11 +8026,15 @@ fn shown_size(video: &Video, window: Option<&Arc<Window>>) -> (u32, u32) {
 }
 
 /// The Video Options' items' text, as the settings are.
-fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 4] {
+fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 5] {
     let (w, h) = shown_size(video, window);
     [
         format!("Display: {}", video.mode.name()),
         format!("Size: {w} x {h}"),
+        match video.aspect {
+            None => "Aspect Ratio: Auto".to_string(),
+            Some((w, h)) => format!("Aspect Ratio: {w}:{h}"),
+        },
         format!("VSync: {}", if video.vsync { "On" } else { "Off" }),
         match video.frame_limit {
             0 => "Frame Limit: Off".to_string(),
@@ -8533,6 +8579,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     // the first pass's texture uploads: they include the font atlas, which
     // every egui shape is drawn with.
     let clean = args.clean;
+    let aspect = args.aspect.map(|(w, h)| w as f32 / h as f32);
+    loaded.renderer.aspect = aspect;
+    set_picture_aspect(&egui_ctx, aspect);
     let arrows = hud_arrows;
     if !arrows.is_empty() {
         println!("HUD arrows pointing {arrows:.2?}");
