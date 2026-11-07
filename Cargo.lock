@@ -643,6 +643,7 @@ dependencies = [
  "skate",
  "wgpu",
  "winit",
+ "zune-jpeg",
 ]
 
 [[package]]

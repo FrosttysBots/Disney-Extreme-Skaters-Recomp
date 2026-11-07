@@ -2079,7 +2079,8 @@ fn picture_area(ctx: &egui::Context) -> egui::Rect {
     ctx.available_rect().intersect(picture)
 }
 
-/// The bars' picture: a loading screen's, or the player's `bars.png`.
+/// The bars' picture: a loading screen's, or the player's `bars.png` (or
+/// `.jpg`).
 fn bars_image(data: &mut GameData, bars: &Bars) -> Option<egui::ColorImage> {
     let (w, h, rgba) = match bars {
         Bars::Black => return None,
@@ -2088,7 +2089,20 @@ fn bars_image(data: &mut GameData, bars: &Bars) -> Option<egui::ColorImage> {
             (image.width, image.height, image.rgba)
         }
         Bars::Custom => {
-            let file = std::fs::File::open(settings::custom_bars()?).ok()?;
+            let path = settings::custom_bars()?;
+            let png = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+            if !png {
+                use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
+                let bytes = std::fs::read(&path).ok()?;
+                let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+                let mut decoder = zune_jpeg::JpegDecoder::new_with_options(&bytes[..], options);
+                let rgba = decoder.decode().ok()?;
+                let (w, h) = decoder.dimensions()?;
+                return Some(egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba));
+            }
+            let file = std::fs::File::open(path).ok()?;
             let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
             decoder.set_transformations(png::Transformations::normalize_to_color8());
             let mut reader = decoder.read_info().ok()?;
@@ -2137,8 +2151,9 @@ fn art_title(name: &str) -> String {
 }
 
 /// The bars round a picture not the window's shape, with a picture in
-/// them (filling the window behind, as large as covers it, dimmed a
-/// little), under everything else on the screen.
+/// them (each bar covered by it, its middle, dimmed a little: a tall
+/// picture, a box's cover, fits the bars at the sides), under everything
+/// else on the screen.
 fn paint_bars(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
     let Some(texture) = texture else { return };
     let aspect = ctx.data(|d| d.get_temp::<Option<f32>>(egui::Id::new("picture_aspect")));
@@ -2150,9 +2165,6 @@ fn paint_bars(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
         desa_viewer::camera::picture_box(window.width(), window.height(), Some(aspect));
     let picture = egui::Rect::from_min_size(window.min + egui::vec2(x, y), egui::vec2(w, h));
     let size = texture.size_vec2();
-    let k = (window.width() / size.x).max(window.height() / size.y);
-    let cover = egui::Rect::from_center_size(window.center(), size * k);
-    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
     let painter = ctx.layer_painter(egui::LayerId::background());
     let bars = [
         egui::Rect::from_min_max(window.min, egui::pos2(picture.min.x, window.max.y)),
@@ -2164,9 +2176,11 @@ fn paint_bars(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
         .into_iter()
         .filter(|b| b.width() > 0.5 && b.height() > 0.5)
     {
-        painter
-            .with_clip_rect(bar)
-            .image(texture.id(), cover, uv, egui::Color32::from_gray(190));
+        // The picture's middle, the bar's shape.
+        let k = (bar.width() / size.x).max(bar.height() / size.y);
+        let seen = bar.size() / (size * k);
+        let uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), seen);
+        painter.image(texture.id(), bar, uv, egui::Color32::from_gray(190));
     }
 }
 

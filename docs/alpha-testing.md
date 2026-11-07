@@ -28,7 +28,7 @@ Options** in the Skate Shop (or the pause menu's Options > Screen Mode).
 Display (Windowed, Borderless or Fullscreen), Size (the screen's modes),
 Aspect Ratio (Auto fills the window; 4:3, 16:10, 16:9, 21:9 or 32:9 draw
 the picture at that shape with bars round it), Bars (Black, one of the
-game's loading-screen pictures, or My Picture: put a `bars.png` beside the
+game's loading-screen pictures, or My Picture: put a `bars.png` or `bars.jpg` beside the
 exe and it's offered), VSync, and a Frame Limit (30 to 240, or off); Enter or right for the next
 value, left for the one before, then **Apply** to put them to the window
 (leaving without it changes nothing). They're kept for next time.

@@ -72,7 +72,8 @@ pub enum Bars {
     Black,
     /// One of the game's loading screens, by name (`loadscrn_pizza_buzz`).
     Art(String),
-    /// The player's own: `bars.png` beside the program (see `custom_bars`).
+    /// The player's own: `bars.png` (or `.jpg`) beside the program (see
+    /// `custom_bars`).
     Custom,
 }
 
@@ -96,16 +97,17 @@ impl Bars {
     }
 }
 
-/// The player's own picture for the bars: `bars.png` beside the program,
-/// or in the settings' folder.
+/// The player's own picture for the bars: `bars.png`, `bars.jpg` or
+/// `bars.jpeg` beside the program, or in the settings' folder.
 pub fn custom_bars() -> Option<PathBuf> {
     let beside = std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.join("bars.png")));
-    let settings = settings_file().and_then(|f| Some(f.parent()?.join("bars.png")));
+        .and_then(|exe| Some(exe.parent()?.to_path_buf()));
+    let settings = settings_file().and_then(|f| Some(f.parent()?.to_path_buf()));
     [beside, settings]
         .into_iter()
         .flatten()
+        .flat_map(|dir| ["bars.png", "bars.jpg", "bars.jpeg"].map(|name| dir.join(name)))
         .find(|p| p.is_file())
 }
 
