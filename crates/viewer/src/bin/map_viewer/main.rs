@@ -7365,10 +7365,11 @@ impl<'a> App<'a> {
             }
             return;
         }
-        // Paused: P resumes, Esc stops skating.
+        // Paused: P resumes, Esc stops skating (resumes, in the game alone).
         if self.model.character.paused {
             match code {
                 KeyCode::KeyP if !repeat => self.toggle_pause(),
+                KeyCode::Escape if !repeat && self.game => self.toggle_pause(),
                 KeyCode::Escape if !repeat => self.toggle_skate(),
                 _ => {}
             }
