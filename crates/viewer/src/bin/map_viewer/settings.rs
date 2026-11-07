@@ -65,7 +65,51 @@ pub const ASPECTS: [Option<(u32, u32)>; 6] = [
     Some((32, 9)),
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What's round a picture not the window's shape (see `Video::aspect`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Bars {
+    #[default]
+    Black,
+    /// One of the game's loading screens, by name (`loadscrn_pizza_buzz`).
+    Art(String),
+    /// The player's own: `bars.png` beside the program (see `custom_bars`).
+    Custom,
+}
+
+impl Bars {
+    fn save(&self) -> String {
+        match self {
+            Bars::Black => "black".into(),
+            Bars::Custom => "custom".into(),
+            Bars::Art(name) => format!("art:{name}"),
+        }
+    }
+
+    fn load(text: &str) -> Bars {
+        match text {
+            "custom" => Bars::Custom,
+            _ => match text.strip_prefix("art:") {
+                Some(name) if !name.is_empty() => Bars::Art(name.to_string()),
+                _ => Bars::Black,
+            },
+        }
+    }
+}
+
+/// The player's own picture for the bars: `bars.png` beside the program,
+/// or in the settings' folder.
+pub fn custom_bars() -> Option<PathBuf> {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("bars.png")));
+    let settings = settings_file().and_then(|f| Some(f.parent()?.join("bars.png")));
+    [beside, settings]
+        .into_iter()
+        .flatten()
+        .find(|p| p.is_file())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Video {
     pub mode: WindowMode,
     /// The window's size (or, full screen, the screen mode's), in pixels;
@@ -76,6 +120,8 @@ pub struct Video {
     pub frame_limit: u32,
     /// The picture's shape (one of `ASPECTS`; `None`, the window's).
     pub aspect: Option<(u32, u32)>,
+    /// What's round it, at a shape of its own.
+    pub bars: Bars,
 }
 
 impl Default for Video {
@@ -86,6 +132,7 @@ impl Default for Video {
             vsync: true,
             frame_limit: 0,
             aspect: None,
+            bars: Bars::Black,
         }
     }
 }
@@ -136,6 +183,7 @@ impl Settings {
                 "video.frame_limit" => {
                     settings.video.frame_limit = value.parse().unwrap_or(0);
                 }
+                "video.bars" => settings.video.bars = Bars::load(value),
                 "video.aspect" => {
                     settings.video.aspect = value
                         .split_once(':')
@@ -219,6 +267,7 @@ impl Settings {
 ",
             self.video.frame_limit
         );
+        text += &format!("video.bars={}\n", self.video.bars.save());
         if let Some((w, h)) = self.video.aspect {
             text += &format!(
                 "video.aspect={w}:{h}

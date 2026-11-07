@@ -572,9 +572,9 @@ fn real_video_options() {
         .collect();
     let display = Some(qb::checksum("video_display"));
     assert_eq!(asked, [(display, Some(1)), (display, Some(-1))]);
-    // Apply (five down): asked for by name.
+    // Apply (six down): asked for by name.
     screen.requests.clear();
-    for _ in 0..5 {
+    for _ in 0..6 {
         screen.pad(Pad::Down);
         frames(&mut screen, 2);
     }

@@ -89,7 +89,7 @@ script viewer_video_menu
         menu_title = "VIDEO"
         helper_text = generic_helper_text
     }
-    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 7
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 8
     SetScreenElementProps {
         id = video_vmenu
         event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_video_exit } } ]
@@ -98,6 +98,7 @@ script viewer_video_menu
     viewer_video_item id = video_display text_id = video_display_text
     viewer_video_item id = video_size text_id = video_size_text
     viewer_video_item id = video_aspect text_id = video_aspect_text
+    viewer_video_item id = video_bars text_id = video_bars_text
     viewer_video_item id = video_vsync text_id = video_vsync_text
     viewer_video_item id = video_fps text_id = video_fps_text
     main_menu_add_item {

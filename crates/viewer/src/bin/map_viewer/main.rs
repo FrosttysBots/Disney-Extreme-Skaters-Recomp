@@ -49,7 +49,7 @@ use desa_viewer::nodes::{LevelNodes, Spawn};
 use desa_viewer::objects::{self, LevelObjects};
 use desa_viewer::renderer::{self, Renderer, request_device};
 use desa_viewer::source::{GameData, LevelInfo};
-use settings::{ASPECTS, FRAME_LIMITS, Settings, Video, WindowMode};
+use settings::{ASPECTS, Bars, FRAME_LIMITS, Settings, Video, WindowMode};
 
 const MOUSE_SENSITIVITY: f32 = 0.0025;
 const DEFAULT_SPEED: f32 = 1500.0;
@@ -96,6 +96,10 @@ struct Args {
     /// Options' Aspect Ratio), black bars round it
     #[arg(long, requires = "screenshot", value_parser = parse_aspect)]
     aspect: Option<(u32, u32)>,
+    /// For --screenshot: a loading screen's picture round it (by name,
+    /// e.g. loadscrn_pizza_buzz), or `custom` for bars.png
+    #[arg(long, requires = "aspect")]
+    bars: Option<String>,
     /// For --screenshot: the spawn point (by number in the panel's list,
     /// from 0) the character stands on, instead of the level's start
     #[arg(long, requires = "screenshot")]
@@ -2075,6 +2079,97 @@ fn picture_area(ctx: &egui::Context) -> egui::Rect {
     ctx.available_rect().intersect(picture)
 }
 
+/// The bars' picture: a loading screen's, or the player's `bars.png`.
+fn bars_image(data: &mut GameData, bars: &Bars) -> Option<egui::ColorImage> {
+    let (w, h, rgba) = match bars {
+        Bars::Black => return None,
+        Bars::Art(name) => {
+            let image = data.loading_screen(name).ok()??;
+            (image.width, image.height, image.rgba)
+        }
+        Bars::Custom => {
+            let file = std::fs::File::open(settings::custom_bars()?).ok()?;
+            let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+            decoder.set_transformations(png::Transformations::normalize_to_color8());
+            let mut reader = decoder.read_info().ok()?;
+            let mut buf = vec![0; reader.output_buffer_size()?];
+            let info = reader.next_frame(&mut buf).ok()?;
+            buf.truncate(info.buffer_size());
+            let rgba = match info.color_type {
+                png::ColorType::Rgba => buf,
+                png::ColorType::Rgb => buf
+                    .chunks_exact(3)
+                    .flat_map(|p| [p[0], p[1], p[2], 255])
+                    .collect(),
+                png::ColorType::GrayscaleAlpha => buf
+                    .chunks_exact(2)
+                    .flat_map(|p| [p[0], p[0], p[0], p[1]])
+                    .collect(),
+                png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+                png::ColorType::Indexed => return None,
+            };
+            (info.width, info.height, rgba)
+        }
+    };
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        &rgba,
+    ))
+}
+
+/// A loading screen's name as the Video Options show it
+/// (`loadscrn_pizza_buzz`: "Pizza Buzz").
+fn art_title(name: &str) -> String {
+    let name = name
+        .get(..9)
+        .filter(|p| p.eq_ignore_ascii_case("loadscrn_"))
+        .map_or(name, |_| &name[9..]);
+    name.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            chars.next().map_or(String::new(), |c| {
+                c.to_uppercase().chain(chars).collect::<String>()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The bars round a picture not the window's shape, with a picture in
+/// them (filling the window behind, as large as covers it, dimmed a
+/// little), under everything else on the screen.
+fn paint_bars(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
+    let Some(texture) = texture else { return };
+    let aspect = ctx.data(|d| d.get_temp::<Option<f32>>(egui::Id::new("picture_aspect")));
+    let Some(aspect) = aspect.flatten() else {
+        return;
+    };
+    let window = ctx.viewport_rect();
+    let (x, y, w, h) =
+        desa_viewer::camera::picture_box(window.width(), window.height(), Some(aspect));
+    let picture = egui::Rect::from_min_size(window.min + egui::vec2(x, y), egui::vec2(w, h));
+    let size = texture.size_vec2();
+    let k = (window.width() / size.x).max(window.height() / size.y);
+    let cover = egui::Rect::from_center_size(window.center(), size * k);
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    let bars = [
+        egui::Rect::from_min_max(window.min, egui::pos2(picture.min.x, window.max.y)),
+        egui::Rect::from_min_max(egui::pos2(picture.max.x, window.min.y), window.max),
+        egui::Rect::from_min_max(window.min, egui::pos2(window.max.x, picture.min.y)),
+        egui::Rect::from_min_max(egui::pos2(window.min.x, picture.max.y), window.max),
+    ];
+    for bar in bars
+        .into_iter()
+        .filter(|b| b.width() > 0.5 && b.height() > 0.5)
+    {
+        painter
+            .with_clip_rect(bar)
+            .image(texture.id(), cover, uv, egui::Color32::from_gray(190));
+    }
+}
+
 /// The HUD's arrows (the game's `HUD_arrow` model, at the top of its
 /// 640x480 screen): drawn flat, turned by each angle (0 straight up,
 /// positive to the right), gold with a dark edge.
@@ -2155,10 +2250,12 @@ struct App<'a> {
     /// The main menu's Exit Game chosen (and its QUIT? said yes to).
     exit_game: bool,
     /// The Video Options' values as last shown in its menu.
-    video_labels: Option<[String; 5]>,
+    video_labels: Option<[String; 6]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
     /// it, which forgets them).
     video_pending: Option<Video>,
+    /// The bars' picture as loaded (what it's of, and it).
+    bars: Option<(Bars, egui::TextureHandle)>,
     /// When the next frame's due, under a frame limit.
     next_frame: Instant,
     gpu: Option<Gpu>,
@@ -2356,6 +2453,7 @@ impl<'a> App<'a> {
             exit_game: false,
             video_labels: None,
             video_pending: None,
+            bars: None,
             next_frame: Instant::now(),
             gpu: None,
             data: None,
@@ -6125,13 +6223,17 @@ impl<'a> App<'a> {
         }
         // The Video Options' values, as they are.
         if screen.screen.exists("video_display_text") {
-            let shown = self.video_pending.unwrap_or(self.settings.video);
+            let shown = self
+                .video_pending
+                .clone()
+                .unwrap_or_else(|| self.settings.video.clone());
             let labels = video_labels(&shown, self.gpu.as_ref().map(|g| &g.window));
             if self.video_labels.as_ref() != Some(&labels) {
                 let ids = [
                     "video_display_text",
                     "video_size_text",
                     "video_aspect_text",
+                    "video_bars_text",
                     "video_vsync_text",
                     "video_fps_text",
                 ];
@@ -7223,7 +7325,7 @@ impl<'a> App<'a> {
     fn apply_video(&mut self) {
         use winit::window::Fullscreen;
         let Some(gpu) = &mut self.gpu else { return };
-        let video = self.settings.video;
+        let video = self.settings.video.clone();
         let window = &gpu.window;
         match video.mode {
             WindowMode::Windowed => {
@@ -7264,6 +7366,31 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The bars' picture, loaded when it's another (and let go, black or
+    /// with the picture the window's shape).
+    fn update_bars(&mut self) {
+        let want = Some(&self.settings.video.bars)
+            .filter(|b| **b != Bars::Black && self.settings.video.aspect.is_some());
+        if self.bars.as_ref().map(|(b, _)| b) == want {
+            return;
+        }
+        let (Some(want), Some(gpu)) = (want.cloned(), &self.gpu) else {
+            self.bars = None;
+            return;
+        };
+        let image = self.data.as_mut().and_then(|d| bars_image(d, &want));
+        self.bars = image.map(|image| {
+            let texture = gpu
+                .egui_ctx
+                .load_texture("bars", image, egui::TextureOptions::LINEAR);
+            (want, texture)
+        });
+        if self.bars.is_none() {
+            // (Not there: black, without trying each frame.)
+            self.settings.video.bars = Bars::Black;
+        }
+    }
+
     /// A Video Options setting turned (`dir` 1 the next value, -1 the one
     /// before), shown till Apply puts them to the window and keeps them.
     fn change_video(&mut self, option: Option<u32>, dir: i32) {
@@ -7278,7 +7405,14 @@ impl<'a> App<'a> {
             return;
         }
         let window = self.gpu.as_ref().map(|g| g.window.clone());
-        let video = self.video_pending.get_or_insert(self.settings.video);
+        let arts = self
+            .data
+            .as_ref()
+            .map(GameData::loading_screens)
+            .unwrap_or_default();
+        let video = self
+            .video_pending
+            .get_or_insert_with(|| self.settings.video.clone());
         let turn = |at: usize, len: usize| (at as i32 + dir).rem_euclid(len as i32) as usize;
         match option {
             Some(o) if o == c("video_display") => {
@@ -7314,6 +7448,15 @@ impl<'a> App<'a> {
             Some(o) if o == c("video_aspect") => {
                 let at = ASPECTS.iter().position(|&a| a == video.aspect).unwrap_or(0);
                 video.aspect = ASPECTS[turn(at, ASPECTS.len())];
+            }
+            Some(o) if o == c("video_bars") => {
+                let mut choices = vec![Bars::Black];
+                choices.extend(arts.into_iter().map(Bars::Art));
+                if settings::custom_bars().is_some() {
+                    choices.push(Bars::Custom);
+                }
+                let at = choices.iter().position(|b| *b == video.bars).unwrap_or(0);
+                video.bars = choices[turn(at, choices.len())].clone();
             }
             Some(o) if o == c("video_vsync") => video.vsync = !video.vsync,
             Some(o) if o == c("video_fps") => {
@@ -7472,6 +7615,8 @@ impl<'a> App<'a> {
         if let Some(level) = &mut self.level {
             level.renderer.aspect = aspect;
         }
+        self.update_bars();
+        let bars = self.bars.as_ref().map(|(_, t)| t.clone());
         let Some(gpu) = &mut self.gpu else { return };
         set_picture_aspect(&gpu.egui_ctx, aspect);
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
@@ -7480,6 +7625,7 @@ impl<'a> App<'a> {
         let screen = &mut self.screen;
         let mut actions = Vec::new();
         let output = gpu.egui_ctx.run(raw, |ctx| {
+            paint_bars(ctx, bars.as_ref());
             actions = ui::draw(ctx, model);
             if let Some(screen) = screen {
                 screen.paint(ctx);
@@ -8026,7 +8172,7 @@ fn shown_size(video: &Video, window: Option<&Arc<Window>>) -> (u32, u32) {
 }
 
 /// The Video Options' items' text, as the settings are.
-fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 5] {
+fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 6] {
     let (w, h) = shown_size(video, window);
     [
         format!("Display: {}", video.mode.name()),
@@ -8035,6 +8181,14 @@ fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 5] {
             None => "Aspect Ratio: Auto".to_string(),
             Some((w, h)) => format!("Aspect Ratio: {w}:{h}"),
         },
+        format!(
+            "Bars: {}",
+            match &video.bars {
+                Bars::Black => "Black".to_string(),
+                Bars::Custom => "My Picture".to_string(),
+                Bars::Art(name) => art_title(name),
+            }
+        ),
         format!("VSync: {}", if video.vsync { "On" } else { "Off" }),
         match video.frame_limit {
             0 => "Frame Limit: Off".to_string(),
@@ -8047,6 +8201,13 @@ fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 5] {
 /// With a character, the camera looks at it instead.
 fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     let mut data = GameData::open(data_path)?;
+    let bars = args.bars.as_deref().and_then(|b| {
+        let bars = match b {
+            "custom" => Bars::Custom,
+            name => Bars::Art(name.to_string()),
+        };
+        bars_image(&mut data, &bars)
+    });
     let levels = data.levels();
     let index = match args.level.as_deref() {
         Some(id) => levels
@@ -8582,11 +8743,13 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     let aspect = args.aspect.map(|(w, h)| w as f32 / h as f32);
     loaded.renderer.aspect = aspect;
     set_picture_aspect(&egui_ctx, aspect);
+    let bars = bars.map(|image| egui_ctx.load_texture("bars", image, egui::TextureOptions::LINEAR));
     let arrows = hud_arrows;
     if !arrows.is_empty() {
         println!("HUD arrows pointing {arrows:.2?}");
     }
     let first = egui_ctx.run(input(), |ctx| {
+        paint_bars(ctx, bars.as_ref());
         if !clean {
             ui::draw(ctx, &mut app.model);
         }
@@ -8596,6 +8759,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
         paint_hud_arrows(ctx, &arrows);
     });
     let mut output = egui_ctx.run(input(), |ctx| {
+        paint_bars(ctx, bars.as_ref());
         if !clean {
             ui::draw(ctx, &mut app.model);
         }

@@ -747,6 +747,73 @@ impl GameData {
         Ok(out)
     }
 
+    /// The loading screens' pictures (`images/*.img.ngc`: a level's with
+    /// each of its characters, `loadscrn_generic`), by name without
+    /// `.img.ngc`, sorted ignoring case.
+    pub fn loading_screens(&self) -> Vec<String> {
+        let mut names: Vec<String> = match self {
+            GameData::Disc { disc, .. } => disc
+                .fst()
+                .files()
+                .filter(|n| {
+                    let p = n.path.to_ascii_lowercase();
+                    p.starts_with("images/") && !p["images/".len()..].contains('/')
+                })
+                .map(|n| n.name.clone())
+                .collect(),
+            GameData::Folder(dir) => dir
+                .parent()
+                .and_then(|d| fs::read_dir(d.join("images")).ok())
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        names.retain(|n| n.to_ascii_lowercase().ends_with(".img.ngc"));
+        for n in &mut names {
+            n.truncate(n.len() - ".img.ngc".len());
+        }
+        names.sort_by_key(|n| n.to_ascii_lowercase());
+        names
+    }
+
+    /// A loading screen's picture (see [`GameData::loading_screens`]).
+    pub fn loading_screen(&mut self, name: &str) -> Result<Option<ngc_texture::Image>> {
+        let file = format!("{name}.img.ngc");
+        let bytes = match self {
+            GameData::Disc { disc, .. } => {
+                let found = disc
+                    .fst()
+                    .files()
+                    .find(|n| n.path.eq_ignore_ascii_case(&format!("images/{file}")))
+                    .map(|n| n.path.clone());
+                match found {
+                    Some(path) => disc.read_file(&path)?,
+                    None => return Ok(None),
+                }
+            }
+            GameData::Folder(dir) => {
+                let Some(images) = dir.parent().map(|d| d.join("images")) else {
+                    return Ok(None);
+                };
+                let found = fs::read_dir(&images).ok().and_then(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(&file))
+                        .map(|e| e.path())
+                });
+                match found {
+                    Some(path) => fs::read(path)?,
+                    None => return Ok(None),
+                }
+            }
+        };
+        let img = ngc_texture::img::ImgFile::parse(&bytes)?;
+        Ok(Some(img.decode()?.cropped(img.width, img.height)))
+    }
+
     /// The movies on the disc (`movies/*.bik`), by name, sorted.
     pub fn movies(&self) -> Vec<String> {
         let mut names: Vec<String> = match self {
