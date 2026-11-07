@@ -24,10 +24,39 @@ script main_menu_add_item
         endif
     endif
     viewer_disc_main_menu_add_item <...>
+    // ... and the main menu's Exit Game after its Options, as the game's
+    // own test builds have their Exit Demo (main_menu_add_bootstrap_quit).
+    if ObjectExists id = main_vmenu
+        if GotParam text
+            if (<text> = main_menu_option_options_string)
+                viewer_disc_main_menu_add_item {
+                    text = "Exit Game"
+                    id = viewer_exit_game_item
+                    pad_choose_script = main_menu_exit
+                    pad_choose_params = {
+                        new_menu_script = menu_confirm_quit
+                        title = "QUIT?"
+                        text = "Exit Game?"
+                        yes_script = viewer_exit_game
+                        no_script = create_main_menu
+                        back_script = create_main_menu
+                    }
+                    mark_first_input
+                }
+            endif
+        endif
+    endif
 endscript
 
-// ... and its background a line taller for it.
+// ... and their backgrounds a line taller for them (the main menu's as
+// the test builds' is, with its Exit Demo).
 script create_menu_bg
+    if ObjectExists id = main_vmenu
+        if NOT ObjectExists id = viewer_exit_game_item
+            viewer_disc_create_menu_bg pos = <pos> no_title num_items = 7
+            return
+        endif
+    endif
     if ObjectExists id = ss_setup_options_vmenu
         if NOT ObjectExists id = options_controller
             viewer_disc_create_menu_bg pos = <pos> num_items = 9

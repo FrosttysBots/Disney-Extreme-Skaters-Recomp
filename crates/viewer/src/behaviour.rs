@@ -292,6 +292,9 @@ pub struct Behaviour {
     /// Scripts to run alongside what objects are running
     /// (`RunScriptOnObject`, `SpawnScript`).
     spawning: Vec<(usize, Thread)>,
+    /// Commands for objects from elsewhere (the menus': `movie_strip:
+    /// Obj_Rotate`), done as the level's runner would, next update.
+    pub object_commands: Vec<(u32, u32, Value)>,
 }
 
 /// The viewer's own menus beside the game's (its Video Options:
@@ -533,6 +536,7 @@ impl Behaviour {
             side_goals: HashMap::new(),
             records: HashMap::new(),
             spawning: Vec::new(),
+            object_commands: Vec::new(),
             random: 0x2545_F491,
             unknown: HashMap::new(),
             scripts: nodes
@@ -975,6 +979,17 @@ impl Behaviour {
             self.goal_paused = false;
         }
         let program = std::mem::take(&mut self.program);
+        for (target, name, args) in std::mem::take(&mut self.object_commands) {
+            let object = self.level_runner;
+            let mut host = Commands {
+                behaviour: self,
+                objects,
+                object,
+                now,
+                program: &program,
+            };
+            host.command(Some(target), name, &args);
+        }
         let mut threads = std::mem::take(&mut self.threads);
         for (object, thread) in &mut threads {
             if thread.is_finished() {
@@ -1791,10 +1806,12 @@ impl Host for Commands<'_> {
             // to that orientation in the world, over that long. The axis
             // is the animation export's, Z up: Pizza's alien heads, placed
             // turned half round, start at about 180 degrees round (0, 0,
-            // 1). In mesh space that's about Y, the other way round, as
-            // the nodes' headings are.
+            // 1). Turned up to Y without mirroring it ((x, y, z) to
+            // (x, z, -y)), which keeps the way round: the Skate Shop's film
+            // strip (`(0, 0, -1)`, a panel further each skater along the
+            // select) brings the next one round to the front.
             let axis = match args.get(c("absolute")) {
-                Some(Value::Vector([x, y, z])) => Vec3::new(*x, *z, *y).normalize_or_zero(),
+                Some(Value::Vector([x, y, z])) => Vec3::new(*x, *z, -*y).normalize_or_zero(),
                 _ => Vec3::ZERO,
             };
             if axis != Vec3::ZERO {
@@ -1805,7 +1822,7 @@ impl Host for Commands<'_> {
                     .to_radians();
                 let time = args.get(c("time")).and_then(Value::as_f32).unwrap_or(0.0);
                 let state = &mut b.states[object];
-                let to = Quat::from_axis_angle(axis, -angle);
+                let to = Quat::from_axis_angle(axis, angle);
                 if time > 0.0 {
                     state.turn = Some((state.rotation, to, 0.0, time));
                 } else {

@@ -401,6 +401,10 @@ pub struct Screen {
     /// TRG_Start_P1`: the Edit Skater set), till they put it back on the
     /// stage (`None`).
     pub skater_node: Option<u32>,
+    /// The level's objects turned by the menus (`movie_strip:Obj_Rotate`,
+    /// the skater select's film strip round to the one picked): the
+    /// object, the command and its arguments, for the level to do.
+    pub object_commands: Vec<(u32, u32, Value)>,
     pub appearance_edits: Vec<AppearanceEdit>,
     /// The game's temporary profiles as remembered (`RememberTemporaryProfile
     /// Name = cak_profile0`), the created kid's profile as the menus have
@@ -472,6 +476,7 @@ impl Screen {
             movie_paused: None,
             kid_appearance: Vec::new(),
             skater_node: None,
+            object_commands: Vec::new(),
             appearance_edits: Vec::new(),
             temp_profiles: HashMap::new(),
             profile_overrides: Vec::new(),
@@ -1944,10 +1949,17 @@ impl Host for Ui<'_> {
             s.skater_node = props.get(c("Name")).and_then(Value::as_name);
             return Outcome::Done(true);
         }
-        // `element:command`: on that element.
+        // `element:command`: on that element. (Or a level object turned:
+        // for the level.)
         let this = match target {
             Some(t) => match s.find(t) {
                 Some(i) => i,
+                None if name == c("Obj_Rotate") => {
+                    if s.object_commands.len() < 64 {
+                        s.object_commands.push((t, name, args.clone()));
+                    }
+                    return Outcome::Done(true);
+                }
                 None => return Outcome::Done(false),
             },
             None => self.element,

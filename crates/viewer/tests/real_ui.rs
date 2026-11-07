@@ -602,3 +602,54 @@ fn real_video_options() {
     let done = text.rfind("\"Done\"").expect("no Done");
     assert!(video < done, "{text}");
 }
+
+/// The main menu's Exit Game (the viewer's, after Options): the game's
+/// QUIT? box, whose Yes asks the viewer to close (`viewer_exit_game`).
+#[test]
+#[ignore = "needs the game data"]
+fn real_exit_game() {
+    use desa_viewer::screen::Pad;
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, _) = screen_from_disc(&mut data);
+    for file in &data.load_level("SkateShop").unwrap().scripts {
+        let _ = program.add(file);
+    }
+    desa_viewer::behaviour::add_viewer_menus(&mut program);
+    screen.level = Some(qb::checksum("load_SkateShop"));
+    screen.listen(&["viewer_exit_game"]);
+    let frames = |screen: &mut desa_viewer::screen::Screen, n| {
+        for _ in 0..n {
+            screen.update(&program, 1.0 / 60.0);
+        }
+    };
+    screen.run(qb::checksum("launch_main_menu"), Vec::new());
+    frames(&mut screen, 120);
+    let text = screen.describe();
+    let options = text.find("\"Options\"").expect("no Options");
+    let exit = text.find("\"Exit Game\"").expect("no Exit Game");
+    assert!(options < exit, "{text}");
+    // Up from the first: the last, Exit Game; chosen, the QUIT? box.
+    screen.pad(Pad::Up);
+    frames(&mut screen, 10);
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 60);
+    assert!(
+        screen.describe().contains("\"Exit Game?\""),
+        "{}",
+        screen.describe()
+    );
+    assert!(screen.requests.is_empty());
+    // Yes: the viewer's asked to close.
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 10);
+    assert!(
+        screen
+            .requests
+            .iter()
+            .any(|(n, _)| *n == qb::checksum("viewer_exit_game")),
+        "{}",
+        screen.describe()
+    );
+}

@@ -1388,6 +1388,7 @@ impl ScreenUi {
             "really_change_level",
             "skip_track",
             "viewer_video",
+            "viewer_exit_game",
         ]);
         Some(ScreenUi {
             screen,
@@ -2061,6 +2062,8 @@ struct App<'a> {
     /// play_hold`): held on its last frame when it ends, not handed to the
     /// free camera (whose view's wider).
     camera_hold: bool,
+    /// The main menu's Exit Game chosen (and its QUIT? said yes to).
+    exit_game: bool,
     /// The Video Options' values as last shown in its menu.
     video_labels: Option<[String; 4]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
@@ -2260,6 +2263,7 @@ impl<'a> App<'a> {
             game: false,
             notice: None,
             camera_hold: false,
+            exit_game: false,
             video_labels: None,
             video_pending: None,
             next_frame: Instant::now(),
@@ -5962,6 +5966,14 @@ impl<'a> App<'a> {
         self.menu_pad();
         self.follow_skater_select();
         self.dress_kid_from_menus();
+        // The level's objects they turned (the skater select's film
+        // strip), for the level to do.
+        if let (Some(screen), Some(level)) = (&mut self.screen, &mut self.level) {
+            level
+                .behaviour
+                .object_commands
+                .append(&mut screen.screen.object_commands);
+        }
         let (Some(screen), Some(level)) = (&mut self.screen, &self.level) else {
             return;
         };
@@ -6056,6 +6068,11 @@ impl<'a> App<'a> {
         }
         let c = qb::checksum;
         for (name, args) in requests {
+            if name == c("viewer_exit_game") {
+                // The main menu's Exit Game: closing, as the window would.
+                self.exit_game = true;
+                continue;
+            }
             if name == c("viewer_video") {
                 // The Video Options: a setting chosen or turned.
                 let option = args.get(c("option")).and_then(qb::Value::as_name);
@@ -7841,7 +7858,11 @@ impl ApplicationHandler for App<'_> {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_game {
+            event_loop.exit();
+            return;
+        }
         if self.gpu.is_none() {
             return;
         }
@@ -8055,6 +8076,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_game_hud();
                 app.update_screen(1.0 / 60.0);
             }
+            let mut clock = 0.0;
             for key in args.menu_keys.chars() {
                 use desa_viewer::screen::Pad;
                 let pad = match key {
@@ -8078,6 +8100,14 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 for _ in 0..30 {
                     app.update_game_hud();
                     app.update_screen(1.0 / 60.0);
+                    // (The level's objects too: the film strip turning.)
+                    clock += 1.0 / 60.0;
+                    let (objects, goal_objects) =
+                        (app.model.show_objects, app.model.show_goal_objects);
+                    if let Some(level) = &mut app.level {
+                        level.update_objects(objects, goal_objects, clock, 1.0 / 60.0);
+                        level.apply_creates();
+                    }
                 }
             }
             // (DESA_SCREEN_DUMP: the game's screen elements, for a look.)
