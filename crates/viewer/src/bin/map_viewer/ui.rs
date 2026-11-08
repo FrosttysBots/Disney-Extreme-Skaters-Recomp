@@ -774,10 +774,12 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         if let Some((_, _, score)) = &model.character.run_goal {
             goal_target(ctx, *score, model.character.run_goal_won == Some(true));
         }
-        if let Some(got) = model.character.letters {
+        // (With the game's HUD up its own messages show the letters, the
+        // race's way and each goal's end: the pause menu retries.)
+        if let (Some(got), false) = (model.character.letters, game_hud) {
             letters_hud(ctx, got);
         }
-        if let Some((reached, of)) = model.character.race {
+        if let (Some((reached, of)), false) = (model.character.race, game_hud) {
             egui::Area::new(egui::Id::new("race"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
                 .interactable(false)
@@ -791,7 +793,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     );
                 });
         }
-        if let Some((won, time)) = model.character.race_result {
+        if let (Some((won, time)), false) = (model.character.race_result, game_hud) {
             egui::Area::new(egui::Id::new("race_result"))
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
                 .show(ctx, |ui| {
@@ -857,7 +859,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     });
                 });
         }
-        if let Some((name, won)) = &model.character.goal_result {
+        if let (Some((name, won)), false) = (&model.character.goal_result, game_hud) {
             egui::Area::new(egui::Id::new("goal_result"))
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
                 .show(ctx, |ui| {
@@ -882,7 +884,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     });
                 });
         }
-        if let Some(result) = model.character.letters_result {
+        if let (Some(result), false) = (model.character.letters_result, game_hud) {
             letters_result(ctx, result, &mut actions);
         }
         if model.character.paused && !model.character.game_menu {
