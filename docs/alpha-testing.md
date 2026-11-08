@@ -190,7 +190,12 @@ skater is and what it's doing.
   (you go on skating there), Esc stays.
 - Goal pros: while skating, the people who give the High Score, Pro
   Score, letters and race goals stand where the career has them; roll up
-  to one and they offer it (Enter to start, Esc not now).
+  to one on the ground and the game's box offers it ("Army Man: Press
+  B to talk."): the pad's B or Enter starts it, Esc turns it down, and
+  skating on out of reach takes the offer back. A goal pops up what it
+  asks, counts on the HUD if it's one that does, and ends with
+  Complete! or Incomplete!; Retry Last Goal in the pause menu plays it
+  again.
 - The Goals list in the panel: every goal the level has in the career,
   by the game's own words ("Push 10 Henchmen into the ocean"), with Play
   on those the viewer runs so far (the letters and the score goals).
