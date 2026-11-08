@@ -239,7 +239,9 @@ their say, then shrinks to the top right and stays
 `goal_create_counter`), which pops as the count changes. Won, the goal's
 name, a check and "Complete!" (`goal_success_messages`); lost, an X and
 "Incomplete!" (`goal_fail`). `--goal KIND` with `--skate` screenshots
-one (`--goal Gaps`, `--goal Collect2`...).
+one (`--goal Gaps`, `--goal Collect2`...). Their pros offer them with the game's speech box
+("Army Man: Press B to talk."): B on the pad or Enter starts the goal,
+and you skate on while it's offered.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
