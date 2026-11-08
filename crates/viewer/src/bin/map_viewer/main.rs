@@ -17,6 +17,7 @@ mod rumble;
 mod settings;
 mod sparks;
 mod ui;
+mod versus;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -171,6 +172,10 @@ struct Args {
     /// For --two-player: the halves side by side (the game's Vertical)
     #[arg(long, requires = "two_player")]
     side_by_side: bool,
+    /// For --two-player: play one of two players' games from the start
+    /// (scorechallenge, king or horse), as GAME OPTIONS' Ready does
+    #[arg(long, requires = "two_player")]
+    versus: Option<String>,
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
@@ -760,6 +765,18 @@ fn load_level(
         goal_props: renderer.add_layer(&objects.goal_props.mesh, false),
         crowd: renderer.add_layer(&objects.crowd.mesh, true),
         goal_crowd: renderer.add_layer(&objects.goal_crowd.mesh, true),
+        crown: files
+            .models
+            .get("crown/crown.mdl")
+            .and_then(|data| {
+                Level::from_bytes(data, files.models.get("crown/crown.tex").map(Vec::as_slice)).ok()
+            })
+            .filter(|mesh| !mesh.vertices.is_empty())
+            .map(|mesh| {
+                let layer = renderer.add_layer(&mesh, false);
+                renderer.show_layer(layer, false);
+                (layer, mesh.vertices)
+            }),
     };
     let minimap = collision.as_deref().and_then(minimap::Minimap::new);
     let teleport_effects = desa_viewer::triggers::teleport_effects(&nodes, behaviour.program());
@@ -1049,6 +1066,9 @@ struct ObjectLayers {
     goal_props: Option<usize>,
     crowd: Option<usize>,
     goal_crowd: Option<usize>,
+    /// King of the Hill's crown (`crown.mdl` in the level's Ped archive),
+    /// hidden till played, and its vertices as modelled.
+    crown: Option<(Option<usize>, Vec<desa_viewer::level::Vertex>)>,
 }
 
 impl LoadedLevel {
@@ -2797,6 +2817,8 @@ struct App<'a> {
     /// Whose skater the menus were choosing, last seen.
     menu_profile: usize,
     player2: Option<Player2>,
+    /// Two players' game on (Score Challenge, King of the Hill, Horse).
+    versus: Option<versus::Versus>,
     /// Player two's pad, as last read (the second pad).
     pad2: Input,
     /// The halves side by side (the game's `split_vertical`), else one
@@ -2842,6 +2864,7 @@ impl<'a> App<'a> {
             model: ui::Model {
                 split_huds: None,
                 split_side_by_side: false,
+                split_solo: None,
                 data_path: None,
                 levels: Vec::new(),
                 movies: Vec::new(),
@@ -3029,6 +3052,7 @@ impl<'a> App<'a> {
             p1_pick: None,
             menu_profile: 0,
             player2: None,
+            versus: None,
             pad2: Input::default(),
             side_by_side: false,
             split_first: true,
@@ -3635,6 +3659,7 @@ impl<'a> App<'a> {
         self.blend_from = None;
         // Player two goes with player one.
         self.player2 = None;
+        self.versus = None;
         self.model.split_huds = None;
         if let Some(level) = &mut self.level {
             level.renderer.set_character2(None);
@@ -7045,8 +7070,9 @@ impl<'a> App<'a> {
                 continue;
             }
             if name == c("StartNetworkGame") {
-                // Two players' GAME OPTIONS, Ready: both from the start.
-                self.restart();
+                // Two players' GAME OPTIONS, Ready: both from the start, the
+                // game type chosen on.
+                self.start_versus();
                 continue;
             }
             if name == c("RetryCurrentGoal") || name == c("end_current_goal_run") {
@@ -7210,6 +7236,11 @@ impl<'a> App<'a> {
             return;
         }
         let pad = self.pad_input();
+        // (Horse: held still while it's not their turn.)
+        if self.versus_frozen(0) {
+            self.skate_player2(dt);
+            return;
+        }
         // (Two players: the arrows are player two's.)
         let arrows = self.player2.is_none();
         // The pedestrians shown are solid: the skater bumps off them.
@@ -7379,7 +7410,8 @@ impl<'a> App<'a> {
         skater.degrade = self.run.is_some()
             || self.letters.is_some()
             || self.racing.is_some()
-            || self.goal_run.is_some();
+            || self.goal_run.is_some()
+            || self.versus.is_some();
         skater.accumulate = skater.degrade;
         // The cheats.
         let cheats = self.model.character.cheats;
@@ -7592,9 +7624,13 @@ impl<'a> App<'a> {
         let cheats = character.cheats;
         let (auto_kick, wallride) = (character.auto_kick, character.wallride_anywhere);
         let (moon, slomo) = (self.moon_gravity, self.slomo_speed);
-        if let (Some(p2), Some(level)) = (&mut self.player2, &self.level) {
+        let (frozen, versus) = (self.versus_frozen(1), self.versus.is_some());
+        if let (Some(p2), Some(level), false) = (&mut self.player2, &self.level, frozen) {
             let Some(world) = &level.world else { return };
             let skater = &mut p2.skater;
+            // (Two players' games add their combos up, as player one's.)
+            skater.degrade = versus;
+            skater.accumulate = versus;
             skater.auto_kick = auto_kick;
             skater.wallride_anywhere = wallride;
             skater.perfect_manual = cheats.perfect_manual;
@@ -7639,6 +7675,8 @@ impl<'a> App<'a> {
                     special: one.special,
                     balance: one.balance,
                     switch: one.switch,
+                    extra: None,
+                    pointer: None,
                 },
                 ui::PlayerHud {
                     name: format!("P2 {}", title(Some(p2.index))),
@@ -7648,6 +7686,8 @@ impl<'a> App<'a> {
                     special: (s.special_meter / 3000.0, s.special),
                     balance: s.balance_meter(),
                     switch: s.flipped,
+                    extra: None,
+                    pointer: None,
                 },
             ]
         });
@@ -7658,6 +7698,7 @@ impl<'a> App<'a> {
     /// skate): at the level's nearest multiplayer start, else alongside.
     fn spawn_player2(&mut self) {
         self.player2 = None;
+        self.versus = None;
         let Some(index) = self.two_player else { return };
         let Some((p1, ..)) = &self.skating else {
             return;
@@ -8001,15 +8042,22 @@ impl<'a> App<'a> {
     /// Advances the character's animation, uploads the posed mesh and
     /// shows the eyes for `clock` seconds since the viewer started.
     fn animate(&mut self, dt: f32, clock: f32) {
+        // (A two-player game left from its menus, paused or not.)
+        self.versus_check();
         let (Some(character), Some(level)) = (&self.character, &mut self.level) else {
             return;
         };
         // Two players: the screen split, player two's half from their
         // camera; player two posed.
-        level.renderer.split = self.player2.as_ref().map(|p2| renderer::Split {
-            camera: p2.camera,
-            side_by_side: self.side_by_side,
-        });
+        let solo = matches!(self.versus, Some(versus::Versus::Horse(_)));
+        level.renderer.split = self
+            .player2
+            .as_ref()
+            .filter(|_| !solo)
+            .map(|p2| renderer::Split {
+                camera: p2.camera,
+                side_by_side: self.side_by_side,
+            });
         if let Some(p2) = &self.player2 {
             if let Some(pose) = &p2.pose.pose {
                 level
@@ -8410,6 +8458,7 @@ impl<'a> App<'a> {
             self.update_run(dt);
             self.update_letters(dt);
             self.update_race(dt);
+            self.update_versus(dt);
             self.update_goal_run(dt);
             self.update_breakables();
             self.update_bouncies(dt);
@@ -9317,7 +9366,10 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                         .with_context(|| format!("no character named {id}"))?,
                 );
                 app.side_by_side = args.side_by_side;
-                app.split_first = false;
+                // (The TWO PLAYERS menu first only for --pause-keys to
+                // work through.)
+                app.split_first =
+                    !args.pause_keys.is_empty() && !args.pause && args.versus.is_none();
                 if let Some(screen) = &mut app.screen {
                     screen.screen.split_screen = true;
                     screen.screen.side_by_side = args.side_by_side;
@@ -9428,6 +9480,18 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                     }
                 }
             }
+            if let Some(game) = &args.versus {
+                let game = match game.to_ascii_lowercase().as_str() {
+                    "scorechallenge" | "score" => "scorechallenge",
+                    "king" => "king",
+                    "horse" => "Horse",
+                    other => anyhow::bail!("--versus {other}: scorechallenge, king or horse"),
+                };
+                if let Some(screen) = &mut app.screen {
+                    screen.screen.game_type = qb::checksum(game);
+                }
+                app.start_versus();
+            }
             let script = args
                 .skate_keys
                 .as_deref()
@@ -9500,6 +9564,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.update_run(1.0 / 60.0);
                 app.update_letters(1.0 / 60.0);
                 app.update_race(1.0 / 60.0);
+                app.update_versus(1.0 / 60.0);
                 app.update_goal_run(1.0 / 60.0);
                 app.hud_dt = 1.0 / 60.0;
                 app.update_game_hud();

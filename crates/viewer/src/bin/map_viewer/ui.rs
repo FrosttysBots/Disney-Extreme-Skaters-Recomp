@@ -213,6 +213,12 @@ pub struct PlayerHud {
     pub special: (f32, bool),
     pub balance: Option<f32>,
     pub switch: bool,
+    /// A two-player game's line under the score (the crown's time held,
+    /// Horse's letters and clock).
+    pub extra: Option<String>,
+    /// King of the Hill: which way the crown is, turned from straight
+    /// ahead on screen (clockwise, radians), for the arrow over them.
+    pub pointer: Option<f32>,
 }
 
 /// A player's HUD in `rect`, their half: their name and score top left,
@@ -255,7 +261,26 @@ fn player_hud(ctx: &egui::Context, n: usize, rect: egui::Rect, hud: &PlayerHud) 
             egui::Color32::from_rgb(70, 140, 255)
         };
         painter.rect_filled(fill, 2.0, colour);
+        if let Some(extra) = &hud.extra {
+            shadowed(ui, extra, 18.0, egui::Color32::from_rgb(120, 200, 255));
+        }
     });
+    if let Some(angle) = hud.pointer {
+        // (The game's `Create3dArrowPointer`, flat.)
+        let centre = at(egui::Align2::CENTER_TOP, 0.0, 34.0);
+        let (sin, cos) = angle.sin_cos();
+        let turn = |x: f32, y: f32| centre + egui::vec2(x * cos - y * sin, x * sin + y * cos);
+        let points = vec![turn(0.0, -16.0), turn(11.0, 12.0), turn(-11.0, 12.0)];
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new(("p_pointer", n)),
+        ))
+        .add(egui::Shape::convex_polygon(
+            points,
+            egui::Color32::from_rgb(255, 200, 40),
+            egui::Stroke::new(1.5f32, egui::Color32::from_black_alpha(200)),
+        ));
+    }
     if let Some(message) = &hud.message {
         area("p_message", egui::Align2::CENTER_TOP, 0.0, 40.0).show(ctx, |ui| {
             shadowed(ui, message, 20.0, egui::Color32::from_rgb(255, 220, 60));
@@ -294,6 +319,8 @@ pub struct Model {
     /// the halves side by side or one over the other.
     pub split_huds: Option<[PlayerHud; 2]>,
     pub split_side_by_side: bool,
+    /// Only this player's HUD, over the whole picture (Horse's turns).
+    pub split_solo: Option<usize>,
     pub data_path: Option<String>,
     pub levels: Vec<LevelInfo>,
     /// The disc's movies, by name, and whether the opening ones play at
@@ -1228,8 +1255,13 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
         } else {
             picture.split_top_bottom_at_fraction(0.5)
         };
-        player_hud(ctx, 0, a, &huds[0]);
-        player_hud(ctx, 1, b, &huds[1]);
+        match model.split_solo {
+            Some(n) => player_hud(ctx, n, picture, &huds[n.min(1)]),
+            None => {
+                player_hud(ctx, 0, a, &huds[0]);
+                player_hud(ctx, 1, b, &huds[1]);
+            }
+        }
     }
     actions
 }

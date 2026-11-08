@@ -23,7 +23,7 @@ to that engine family too.
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
 | Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players' split-screen free skate |
+| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players split screen: Horse, King of the Hill and Score Challenge |
 | Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit) |
 | Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
@@ -253,10 +253,31 @@ Each player skates with their own physics, tricks, score and chase
 camera, and sees the other. Player two plays on the second gamepad, or
 the arrows and the numpad (0 ollie, 1 flip, 2 grab, 3 grind, 5 revert;
 or Right Shift , . / ;). `--two-player CHARACTER` with `--skate`
-screenshots it (`--side-by-side` for the other split). The game's other
-2-player games (Trick Attack, Graffiti, Slap!, Horse, King of the Hill)
-aren't in yet, and each half shows the viewer's own score and combo
-rather than the game's panel.
+screenshots it (`--side-by-side` for the other split).
+
+Start Game opens the game's GAME OPTIONS, with its three game types
+(`mp_game_type_info`) and each one's settings, kept as the game keeps
+its `splitscreen` preferences:
+
+- **Horse** (time limit 10/20/30 seconds, and the word: PIG, COW, GOAT,
+  HORSE, DONKEY or GIANT SQUID). One player at a time on the whole
+  screen, at the level's Horse spots. The first sets a score, and the
+  other has to beat it. The clock runs until a trick starts. Lower
+  scores get letters, and spelling the word loses ("Woody is a PIG!").
+  The game's own messages, score panel and sounds are used.
+- **King of the Hill** (time limit). The game's star (`crown.mdl`) waits
+  at one of the level's crown spots. Whoever reaches it carries it over
+  their head ("You are king of the hill!") until they bail and drop it.
+  Each player's time with it counts, and an arrow shows the way to it.
+- **Score Challenge** (target score). Combos add up, and the first to
+  the target wins ("Score Challenge: 50,000 pts to win").
+
+King and Score Challenge end on the game's RANKINGS, and its Done goes
+back to TWO PLAYERS. The pause menu's End Current Game does too.
+`--versus horse|king|scorechallenge` with `--two-player` starts one for
+a screenshot. Not yet: in King, knocking the king over by skating into
+them. Each half shows the viewer's own score and combo rather than the
+game's panel.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |

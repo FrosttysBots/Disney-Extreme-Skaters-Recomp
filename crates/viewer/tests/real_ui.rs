@@ -641,6 +641,9 @@ fn real_exit_game() {
         screen.describe()
     );
     assert!(screen.requests.is_empty());
+    // (The box starts on No, as the game's do: `no_button`.)
+    screen.pad(Pad::Up);
+    frames(&mut screen, 10);
     // Yes: the viewer's asked to close.
     screen.pad(Pad::Choose);
     frames(&mut screen, 10);
