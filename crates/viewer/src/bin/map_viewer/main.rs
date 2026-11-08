@@ -163,6 +163,14 @@ struct Args {
     /// For --skate: play the level's race (from its start)
     #[arg(long, requires = "skate")]
     race: bool,
+    /// For --skate: two players' free skate, player two this character
+    /// (by id), the screen split; player two holds Up throughout unless
+    /// --skate-keys says otherwise (Up Down Left Right, N0-N5)
+    #[arg(long, requires = "skate")]
+    two_player: Option<String>,
+    /// For --two-player: the halves side by side (the game's Vertical)
+    #[arg(long, requires = "two_player")]
+    side_by_side: bool,
     /// For --skate: play the level's S-K-A-T-E letters goal (from its start)
     #[arg(long, requires = "skate")]
     letters: bool,
@@ -1619,7 +1627,6 @@ impl ScreenUi {
         // choices whose screens need the career's profiles.
         screen.listen(&[
             "unpausegame",
-            "start_2p",
             "launch_options_menu_load_game_sequence",
             "launch_options_menu_save_game_sequence",
             "RetryCurrentGoal",
@@ -1629,6 +1636,7 @@ impl ScreenUi {
             "skip_track",
             "viewer_video",
             "viewer_exit_game",
+            "StartNetworkGame",
         ]);
         Some(ScreenUi {
             screen,
@@ -2159,6 +2167,174 @@ const RUN_TIME: f32 = 120.0;
 /// A character's bones, each relative to its parent.
 type Pose = Vec<(Quat, Vec3)>;
 
+/// The animation a skater shows: which (and the one shown last, to blend
+/// from on a change), how far in, its length, the pose it's blending
+/// from, and the pose shown (see `skate_pose`).
+#[derive(Default)]
+struct PoseState {
+    animation: usize,
+    shown: usize,
+    time: f32,
+    duration: f32,
+    blend_from: Option<(Pose, f32, f32)>,
+    pose: Option<Pose>,
+}
+
+/// Player two, in two players' free skate (`freeskate2p`): their
+/// character, skater and chase camera, skated as player one's are.
+struct Player2 {
+    index: usize,
+    character: Character,
+    skater: Skater,
+    physics: Physics,
+    chase: ChaseCamera,
+    camera: FlyCamera,
+    pose: PoseState,
+}
+
+/// Player two's keys: the arrows, and the numpad's 0 (ollie), 1 (flip),
+/// 2 (grab), 3 (grind) and 5 (revert), or Right Shift , . / ; for those.
+fn player2_keys(held: impl Fn(KeyCode) -> bool) -> Input {
+    Input {
+        push: held(KeyCode::ArrowUp),
+        brake: held(KeyCode::ArrowDown),
+        turn: f32::from(u8::from(held(KeyCode::ArrowRight)))
+            - f32::from(u8::from(held(KeyCode::ArrowLeft))),
+        crouch: held(KeyCode::Numpad0) || held(KeyCode::ShiftRight),
+        flip: held(KeyCode::Numpad1) || held(KeyCode::Comma),
+        grab: held(KeyCode::Numpad2) || held(KeyCode::Period),
+        grind: held(KeyCode::Numpad3) || held(KeyCode::Slash),
+        revert: held(KeyCode::Numpad5) || held(KeyCode::Semicolon),
+    }
+}
+
+/// The keys and a pad together: either's buttons, the keys' turn first.
+fn either_input(keys: Input, pad: Input) -> Input {
+    Input {
+        push: keys.push || pad.push,
+        brake: keys.brake || pad.brake,
+        turn: if keys.turn != 0.0 {
+            keys.turn
+        } else {
+            pad.turn
+        },
+        crouch: keys.crouch || pad.crouch,
+        grind: keys.grind || pad.grind,
+        flip: keys.flip || pad.flip,
+        grab: keys.grab || pad.grab,
+        revert: keys.revert || pad.revert,
+    }
+}
+
+/// The skater's animation: the one it picked (the game's scripts'
+/// choice), its first part once and then the next looping, or looping,
+/// or held on its last frame; a lip trick's, a balance's along its meter,
+/// an air trick's; blended from the last as the game's `PlayAnim` does.
+fn skate_pose(character: &Character, skater: &Skater, st: &mut PoseState, dt: f32) {
+    let pick = skater.anim;
+    let mut time = skater.anim_time;
+    let mut chosen = None;
+    let mut hold = false;
+    // A character without the first part (Buzz and Simba have no
+    // `Crouch`) goes straight to the next.
+    if let (None, Some(then)) = (
+        character.animation(pick.first),
+        pick.then.and_then(|then| character.animation(then)),
+    ) {
+        chosen = Some((then, character.animations[then].1.duration));
+    } else if let Some(first) = character.animation(pick.first) {
+        let duration = character.animations[first].1.duration;
+        match pick.then.and_then(|then| character.animation(then)) {
+            Some(then) if time > duration => {
+                time -= duration;
+                chosen = Some((then, character.animations[then].1.duration));
+            }
+            _ => {
+                hold = !pick.looping;
+                chosen = Some((first, duration));
+            }
+        }
+    }
+    // A lip trick shows its own animations: in, held along the meter,
+    // and out.
+    let by_checksum = |anim: u32| {
+        character
+            .animations
+            .iter()
+            .position(|(name, _)| qb::checksum(name) == anim)
+    };
+    let length = |anim: u32| by_checksum(anim).map_or(1.0, |i| character.animations[i].1.duration);
+    let balance_pose = skater.balance_pose(length);
+    if let Some((anim, at)) = balance_pose {
+        if let Some(index) = by_checksum(anim) {
+            let duration = character.animations[index].1.duration;
+            chosen = Some((index, duration));
+            time = at.clamp(0.0, duration * 0.999);
+        }
+    }
+    // An air trick shows its own animation.
+    if let Some((anim, at, looping)) = skater.trick_pose() {
+        if let Some(index) = by_checksum(anim) {
+            let duration = character.animations[index].1.duration;
+            chosen = Some((index, duration));
+            time = if looping {
+                at
+            } else {
+                at.clamp(0.0, duration * 0.999)
+            };
+        }
+    }
+    if let Some((index, mut duration)) = chosen {
+        // A balance pose (`ManualRange1`, `GrindRange1`) follows the
+        // balance meter from one end of the animation to the other,
+        // as the game plays its range animations.
+        let range = character.animations[index].0.contains("Range")
+            && skater.lip.is_none()
+            && balance_pose.is_none();
+        if let Some(meter) = skater.balance_meter().filter(|_| range) {
+            time = (meter + 1.0) / 2.0 * duration;
+            duration = duration.max(f32::EPSILON);
+        }
+        // Into a different animation: blend from the pose shown, as
+        // the game's `PlayAnim` does over its `BlendPeriod`.
+        let name = character.animations[index].0.as_str();
+        if index != st.shown {
+            let period = skate::anims::blend_period(name);
+            st.blend_from = match (&st.pose, period > 0.0) {
+                (Some(pose), true) => Some((pose.clone(), 0.0, period)),
+                _ => None,
+            };
+        }
+        st.animation = index;
+        st.shown = index;
+        st.duration = duration;
+        // Held on its last frame, or looping round.
+        st.time = if duration <= 0.0 {
+            0.0
+        } else if hold {
+            time.clamp(0.0, duration * 0.999)
+        } else {
+            time.rem_euclid(duration)
+        };
+    }
+    // The pose: the animation's, blended from the last one's.
+    let mut local = character.local_pose(st.animation, st.time);
+    if let Some((from, elapsed, period)) = &mut st.blend_from {
+        *elapsed += dt;
+        let t = (*elapsed / *period).clamp(0.0, 1.0);
+        // Eased, so it starts and settles gently.
+        let t = t * t * (3.0 - 2.0 * t);
+        for (to, from) in local.iter_mut().zip(from.iter()) {
+            to.0 = from.0.slerp(to.0, t);
+            to.1 = from.1.lerp(to.1, t);
+        }
+        if *elapsed >= *period {
+            st.blend_from = None;
+        }
+    }
+    st.pose = Some(local);
+}
+
 /// Where and how the skater's drawn `time` into going through a warp
 /// (`WarpAi`): at the warp, spinning ever faster (each `Rotate y = N
 /// duration = d` a quarter second after the last, until the 10080 over
@@ -2613,6 +2789,22 @@ struct App<'a> {
     /// with seconds into the blend and its length.
     skate_pose: Option<Pose>,
     blend_from: Option<(Pose, f32, f32)>,
+    /// Two players' free skate: player two's character (by index in the
+    /// list), from the menus' second skater select.
+    two_player: Option<usize>,
+    /// Player one's character, picked in the menus before player two's.
+    p1_pick: Option<usize>,
+    /// Whose skater the menus were choosing, last seen.
+    menu_profile: usize,
+    player2: Option<Player2>,
+    /// Player two's pad, as last read (the second pad).
+    pad2: Input,
+    /// The halves side by side (the game's `split_vertical`), else one
+    /// over the other.
+    side_by_side: bool,
+    /// Two players' first level this time: paused on the game's TWO
+    /// PLAYERS menu as it arrives (`FirstTimeInSplitScreen`).
+    split_first: bool,
     last_frame: Instant,
     started: Instant,
     error: Option<anyhow::Error>,
@@ -2648,6 +2840,8 @@ impl<'a> App<'a> {
             data: None,
             level: None,
             model: ui::Model {
+                split_huds: None,
+                split_side_by_side: false,
                 data_path: None,
                 levels: Vec::new(),
                 movies: Vec::new(),
@@ -2831,6 +3025,13 @@ impl<'a> App<'a> {
             shown_animation: 0,
             skate_pose: None,
             blend_from: None,
+            two_player: None,
+            p1_pick: None,
+            menu_profile: 0,
+            player2: None,
+            pad2: Input::default(),
+            side_by_side: false,
+            split_first: true,
             last_frame: Instant::now(),
             started: Instant::now(),
             error: None,
@@ -3432,6 +3633,13 @@ impl<'a> App<'a> {
         self.model.character.run_clock = None;
         self.model.character.run_result = None;
         self.blend_from = None;
+        // Player two goes with player one.
+        self.player2 = None;
+        self.model.split_huds = None;
+        if let Some(level) = &mut self.level {
+            level.renderer.set_character2(None);
+            level.renderer.split = None;
+        }
         if self.skating.take().is_some() {
             self.model.character.skating = false;
             self.sparks.clear();
@@ -3593,6 +3801,7 @@ impl<'a> App<'a> {
         self.model.character.skating = true;
         self.model.character.playing = false;
         self.set_looking(false);
+        self.spawn_player2();
     }
 
     /// Starts a two-minute run (`StartGoal_TrickAttack time = 120`) from
@@ -3998,7 +4207,12 @@ impl<'a> App<'a> {
                 continue;
             }
             let ready = portal.strip.is_none() || portal.appeared.is_some_and(|t| t > PORTAL_TIME);
-            if ready && self.warp_offer.is_none() && across < WARP_ENTER && to.y.abs() < WARP_HEIGHT
+            // (Not for two players: the warps are the career's.)
+            if ready
+                && self.player2.is_none()
+                && self.warp_offer.is_none()
+                && across < WARP_ENTER
+                && to.y.abs() < WARP_HEIGHT
             {
                 self.warp_offer = Some(i);
                 self.model.character.warp_prompt = Some(portal.warp.title.clone());
@@ -4100,6 +4314,10 @@ impl<'a> App<'a> {
     /// The goals' pros: standing in the level while skating (with no goal
     /// on), and offering their goal when the skater rolls up.
     fn update_pros(&mut self) {
+        // (Two players' free skate has no goals to offer.)
+        if self.player2.is_some() {
+            return;
+        }
         let skating = self.skating.as_ref().map(|(s, ..)| s.position);
         // (Nor while the level's start plays: `warpIn` has the skater's
         // exceptions off.)
@@ -5077,7 +5295,12 @@ impl<'a> App<'a> {
         let mut start = false;
         let mut back = false;
         let mut talk = false;
-        for (_, pad) in gilrs.gamepads() {
+        // (Two players: the second pad is player two's.)
+        let two = self.player2.is_some();
+        let mut input2 = Input::default();
+        for (n, (_, pad)) in gilrs.gamepads().enumerate() {
+            let second = two && n == 1;
+            let input = if second { &mut input2 } else { &mut input };
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
             let pressed = |b| pad.is_pressed(b);
@@ -5106,14 +5329,18 @@ impl<'a> App<'a> {
             .into_iter()
             .any(pressed);
             // The C-stick looks round; Start pauses.
+            start |= pressed(Button::Start);
+            if second {
+                continue;
+            }
             let stick = glam::Vec2::new(pad.value(Axis::RightStickX), pad.value(Axis::RightStickY));
             if stick.length() > look.length() && stick.length() > 0.2 {
                 look = stick;
             }
-            start |= pressed(Button::Start);
             back |= pressed(Button::Select);
             talk |= pressed(Button::East);
         }
+        self.pad2 = input2;
         self.pad_look = look;
         if start && !self.pad_start && self.skating.is_some() {
             self.toggle_pause();
@@ -5420,10 +5647,14 @@ impl<'a> App<'a> {
             .current
             .and_then(|i| self.model.character.characters.get(i))
             .map(|c| c.id.clone());
-        let Some((skater, ..)) = &self.skating else {
-            if self.hud.up {
+        // (Two players: each their own HUD, see `skate_player2`.)
+        let Some((skater, ..)) = self.skating.as_ref().filter(|_| self.player2.is_none()) else {
+            // (Two players: the game's panel its menus put up, Split
+            // Mode's and Ready's, down again.)
+            if self.hud.up || self.player2.is_some() {
                 self.hud = GameHud::default();
                 s.destroy_id("player1_panel_container");
+                s.destroy_id("player2_panel_container");
                 s.destroy_id("the_time");
                 s.destroy_id("current_goal");
                 s.destroy_id("goal_points_text");
@@ -6014,6 +6245,13 @@ impl<'a> App<'a> {
     fn open_main_menu(&mut self) {
         if self.skating.is_some() {
             self.toggle_skate();
+        }
+        // (One player again, till 2 Player's chosen.)
+        self.two_player = None;
+        self.menu_profile = 0;
+        if let Some(screen) = &mut self.screen {
+            screen.screen.split_screen = false;
+            screen.screen.profile = 0;
         }
         let Some(i) = self
             .model
@@ -6696,6 +6934,18 @@ impl<'a> App<'a> {
         }
         let sounds = std::mem::take(&mut screen.screen.sounds);
         let requests = std::mem::take(&mut screen.screen.requests);
+        // Player two's skater select: player one's pick kept.
+        let (split, profile) = (screen.screen.split_screen, screen.screen.profile);
+        // (And the halves as the game's Split Mode set them.)
+        if split {
+            self.side_by_side = screen.screen.side_by_side;
+        }
+        if profile != self.menu_profile {
+            if profile == 1 {
+                self.p1_pick = self.model.character.current;
+            }
+            self.menu_profile = profile;
+        }
         self.model.character.game_menu = screen.screen.takes_pad();
         if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
             for sound in sounds {
@@ -6740,10 +6990,27 @@ impl<'a> App<'a> {
                     .and_then(|i| self.model.levels.get(i))
                     .is_some_and(|l| l.id.eq_ignore_ascii_case("SkateShop"));
                 if shop {
+                    self.two_player = None;
                     self.open_main_menu();
                 } else if let Some(i) = index {
                     if self.skating.is_some() {
                         self.toggle_skate();
+                    }
+                    // Two players' (player two's Ready): player two's
+                    // skater the one shown, player one's back.
+                    if split && profile == 1 {
+                        self.two_player = self.model.character.current;
+                        if let Some(screen) = &mut self.screen {
+                            screen.screen.profile = 0;
+                        }
+                        self.menu_profile = 0;
+                        if let Some(p1) = self.p1_pick.take() {
+                            if Some(p1) != self.model.character.current {
+                                self.load_character(Some(p1));
+                            }
+                        }
+                    } else if !split {
+                        self.two_player = None;
                     }
                     self.skate_on_load = true;
                     self.start_load(i);
@@ -6775,6 +7042,11 @@ impl<'a> App<'a> {
                     (Some(index), _) => self.start_goal(index),
                     _ => {}
                 }
+                continue;
+            }
+            if name == c("StartNetworkGame") {
+                // Two players' GAME OPTIONS, Ready: both from the start.
+                self.restart();
                 continue;
             }
             if name == c("RetryCurrentGoal") || name == c("end_current_goal_run") {
@@ -6938,6 +7210,8 @@ impl<'a> App<'a> {
             return;
         }
         let pad = self.pad_input();
+        // (Two players: the arrows are player two's.)
+        let arrows = self.player2.is_none();
         // The pedestrians shown are solid: the skater bumps off them.
         let objects = self.model.show_objects;
         let goal_objects = self.model.show_goal_objects;
@@ -7060,11 +7334,12 @@ impl<'a> App<'a> {
             .as_ref()
             .is_some_and(|g| g.egui_ctx.wants_keyboard_input());
         let held = |k| !typing && self.keys.contains(&k);
+        let arrow = |k| arrows && held(k);
         let input = Input {
-            push: held(KeyCode::KeyW) || held(KeyCode::ArrowUp),
-            brake: held(KeyCode::KeyS) || held(KeyCode::ArrowDown),
-            turn: f32::from(u8::from(held(KeyCode::KeyD) || held(KeyCode::ArrowRight)))
-                - f32::from(u8::from(held(KeyCode::KeyA) || held(KeyCode::ArrowLeft))),
+            push: held(KeyCode::KeyW) || arrow(KeyCode::ArrowUp),
+            brake: held(KeyCode::KeyS) || arrow(KeyCode::ArrowDown),
+            turn: f32::from(u8::from(held(KeyCode::KeyD) || arrow(KeyCode::ArrowRight)))
+                - f32::from(u8::from(held(KeyCode::KeyA) || arrow(KeyCode::ArrowLeft))),
             crouch: held(KeyCode::Space),
             grind: held(KeyCode::KeyE),
             flip: held(KeyCode::KeyQ),
@@ -7231,119 +7506,23 @@ impl<'a> App<'a> {
         let song = song.filter(|_| !self.model.character.game_hud);
         self.model.character.message = skater.message.as_ref().map(|(m, _)| m.clone()).or(song);
 
-        // Animation: the one the skater picked (the game's scripts' choice),
-        // its first part once and then the next looping, or looping, or held
-        // on its last frame.
-        let pick = skater.anim;
-        let mut time = skater.anim_time;
-        let mut chosen = None;
-        let mut hold = false;
-        // A character without the first part (Buzz and Simba have no
-        // `Crouch`) goes straight to the next.
-        if let (None, Some(then)) = (
-            character.animation(pick.first),
-            pick.then.and_then(|then| character.animation(then)),
-        ) {
-            chosen = Some((then, character.animations[then].1.duration));
-        } else if let Some(first) = character.animation(pick.first) {
-            let duration = character.animations[first].1.duration;
-            match pick.then.and_then(|then| character.animation(then)) {
-                Some(then) if time > duration => {
-                    time -= duration;
-                    chosen = Some((then, character.animations[then].1.duration));
-                }
-                _ => {
-                    hold = !pick.looping;
-                    chosen = Some((first, duration));
-                }
-            }
-        }
-        // A lip trick shows its own animations: in, held along the meter,
-        // and out.
-        let by_checksum = |anim: u32| {
-            character
-                .animations
-                .iter()
-                .position(|(name, _)| qb::checksum(name) == anim)
+        // Animation (see `skate_pose`).
+        let mut state = PoseState {
+            animation: self.model.character.animation,
+            shown: self.shown_animation,
+            time: self.model.character.time,
+            duration: self.model.character.duration,
+            blend_from: self.blend_from.take(),
+            pose: self.skate_pose.take(),
         };
-        let length =
-            |anim: u32| by_checksum(anim).map_or(1.0, |i| character.animations[i].1.duration);
-        let balance_pose = skater.balance_pose(length);
-        if let Some((anim, at)) = balance_pose {
-            if let Some(index) = by_checksum(anim) {
-                let duration = character.animations[index].1.duration;
-                chosen = Some((index, duration));
-                time = at.clamp(0.0, duration * 0.999);
-            }
-        }
-        // An air trick shows its own animation.
-        if let Some((anim, at, looping)) = skater.trick_pose() {
-            if let Some(index) = character
-                .animations
-                .iter()
-                .position(|(name, _)| qb::checksum(name) == anim)
-            {
-                let duration = character.animations[index].1.duration;
-                chosen = Some((index, duration));
-                time = if looping {
-                    at
-                } else {
-                    at.clamp(0.0, duration * 0.999)
-                };
-            }
-        }
-        if let Some((index, mut duration)) = chosen {
-            // A balance pose (`ManualRange1`, `GrindRange1`) follows the
-            // balance meter from one end of the animation to the other,
-            // as the game plays its range animations.
-            let range = character.animations[index].0.contains("Range")
-                && skater.lip.is_none()
-                && balance_pose.is_none();
-            if let Some(meter) = skater.balance_meter().filter(|_| range) {
-                time = (meter + 1.0) / 2.0 * duration;
-                duration = duration.max(f32::EPSILON);
-            }
-            // Into a different animation: blend from the pose shown, as
-            // the game's `PlayAnim` does over its `BlendPeriod`.
-            let name = character.animations[index].0.as_str();
-            if index != self.shown_animation {
-                let period = skate::anims::blend_period(name);
-                self.blend_from = match (&self.skate_pose, period > 0.0) {
-                    (Some(pose), true) => Some((pose.clone(), 0.0, period)),
-                    _ => None,
-                };
-            }
-            let model = &mut self.model.character;
-            model.animation = index;
-            self.shown_animation = index;
-            model.duration = duration;
-            // Held on its last frame, or looping round.
-            model.time = if duration <= 0.0 {
-                0.0
-            } else if hold {
-                time.clamp(0.0, duration * 0.999)
-            } else {
-                time.rem_euclid(duration)
-            };
-        }
-
-        // The pose: the animation's, blended from the last one's.
-        let model = &self.model.character;
-        let mut local = character.local_pose(model.animation, model.time);
-        if let Some((from, elapsed, period)) = &mut self.blend_from {
-            *elapsed += dt;
-            let t = (*elapsed / *period).clamp(0.0, 1.0);
-            // Eased, so it starts and settles gently.
-            let t = t * t * (3.0 - 2.0 * t);
-            for (to, from) in local.iter_mut().zip(from.iter()) {
-                to.0 = from.0.slerp(to.0, t);
-                to.1 = from.1.lerp(to.1, t);
-            }
-            if *elapsed >= *period {
-                self.blend_from = None;
-            }
-        }
-        self.skate_pose = Some(local);
+        skate_pose(character, skater, &mut state, dt);
+        let model = &mut self.model.character;
+        model.animation = state.animation;
+        model.time = state.time;
+        model.duration = state.duration;
+        self.shown_animation = state.shown;
+        self.blend_from = state.blend_from;
+        self.skate_pose = state.pose;
 
         // Chase camera, on the game's medium camera settings.
         chase.update(skater, physics, world, dt);
@@ -7396,6 +7575,238 @@ impl<'a> App<'a> {
                 special: model.special,
                 clock: run.left,
             });
+        }
+        self.skate_player2(dt);
+    }
+
+    /// Player two skates on: their keys and pad, the same physics, their
+    /// animation and camera; and both players' HUDs.
+    fn skate_player2(&mut self, dt: f32) {
+        let typing = self
+            .gpu
+            .as_ref()
+            .is_some_and(|g| g.egui_ctx.wants_keyboard_input());
+        let keys = player2_keys(|k| !typing && self.keys.contains(&k));
+        let input = either_input(keys, self.pad2);
+        let character = &self.model.character;
+        let cheats = character.cheats;
+        let (auto_kick, wallride) = (character.auto_kick, character.wallride_anywhere);
+        let (moon, slomo) = (self.moon_gravity, self.slomo_speed);
+        if let (Some(p2), Some(level)) = (&mut self.player2, &self.level) {
+            let Some(world) = &level.world else { return };
+            let skater = &mut p2.skater;
+            skater.auto_kick = auto_kick;
+            skater.wallride_anywhere = wallride;
+            skater.perfect_manual = cheats.perfect_manual;
+            skater.perfect_rail = cheats.perfect_rail;
+            skater.perfect_skitch = cheats.perfect_skitch;
+            if cheats.always_special {
+                skater.special_meter = 3000.0;
+                skater.special = true;
+            }
+            let gravity = p2.physics.air_gravity;
+            if cheats.moon || level.behaviour.global_flag("CHEAT_MOON") {
+                p2.physics.air_gravity *= moon;
+            }
+            let dt = if cheats.slomo { dt * slomo } else { dt };
+            skater.update(input, &p2.physics, world, dt);
+            p2.physics.air_gravity = gravity;
+            // (Gaps and sounds are player one's.)
+            skater.last_gap = None;
+            skater.sounds.clear();
+            skate_pose(&p2.character, skater, &mut p2.pose, dt);
+            p2.chase.update(skater, &p2.physics, world, dt);
+            p2.camera = FlyCamera::looking_at(p2.chase.eye, p2.chase.target);
+        }
+        self.update_split_huds();
+    }
+
+    /// Each player's own HUD in their half (two players).
+    fn update_split_huds(&mut self) {
+        let title = |i: Option<usize>| {
+            i.and_then(|i| self.model.character.characters.get(i))
+                .map_or(String::new(), |c| c.title.clone())
+        };
+        let one = &self.model.character;
+        self.model.split_huds = self.player2.as_ref().map(|p2| {
+            let s = &p2.skater;
+            [
+                ui::PlayerHud {
+                    name: format!("P1 {}", title(one.current)),
+                    score: one.score,
+                    combo: one.combo.clone(),
+                    message: one.message.clone(),
+                    special: one.special,
+                    balance: one.balance,
+                    switch: one.switch,
+                },
+                ui::PlayerHud {
+                    name: format!("P2 {}", title(Some(p2.index))),
+                    score: s.score,
+                    combo: combo_text(s),
+                    message: s.message.as_ref().map(|(m, _)| m.clone()),
+                    special: (s.special_meter / 3000.0, s.special),
+                    balance: s.balance_meter(),
+                    switch: s.flipped,
+                },
+            ]
+        });
+        self.model.split_side_by_side = self.side_by_side;
+    }
+
+    /// Player two into the level beside player one (two players' free
+    /// skate): at the level's nearest multiplayer start, else alongside.
+    fn spawn_player2(&mut self) {
+        self.player2 = None;
+        let Some(index) = self.two_player else { return };
+        let Some((p1, ..)) = &self.skating else {
+            return;
+        };
+        let (near, heading) = (p1.position, p1.heading);
+        let Some(info) = self.model.character.characters.get(index).cloned() else {
+            return;
+        };
+        let Some(data) = &mut self.data else { return };
+        // The kid as dressed (or as the game first dresses them).
+        let kid = match info.id.to_ascii_lowercase().as_str() {
+            "kid" => Some(false),
+            "kid_girl" => Some(true),
+            _ => None,
+        };
+        let files = match kid {
+            Some(girl) => {
+                let outfit = match self.wardrobes.get(&girl) {
+                    Some(slots) => Ok(slots.iter().map(|s| s.worn()).collect::<Vec<_>>()),
+                    None => data
+                        .kid_wardrobe_and_shape(girl)
+                        .map(|(slots, _)| slots.iter().map(|s| s.worn()).collect()),
+                };
+                outfit.and_then(|outfit| data.load_kid(girl, &outfit))
+            }
+            None => data.load_character(&info.id),
+        };
+        let mut character = match files.and_then(|files| Character::from_files(&files)) {
+            Ok(character) => character,
+            Err(err) => {
+                self.model.message = Some(format!("Player two: {err:#}"));
+                return;
+            }
+        };
+        let Some(level) = &mut self.level else { return };
+        let Some(world) = &level.world else { return };
+        let program = level.behaviour.program();
+        // Their size, as the game's appearance has it.
+        let name = match info.id.to_ascii_lowercase().as_str() {
+            "kid_girl" => "girl".to_string(),
+            id => id.to_string(),
+        };
+        character.scale = program
+            .value(qb::checksum(&format!("appearance_{name}")))
+            .and_then(|a| a.get(qb::checksum("scale")))
+            .and_then(qb::Value::as_f32)
+            .unwrap_or(1.0);
+        let stats = if self.model.character.cheats.stats_13 {
+            Stats([13.0; 10])
+        } else {
+            Stats::of(program, &info.id)
+        };
+        let mut physics = Physics::new(program, &stats);
+        if let Some((_, setting)) =
+            Physics::camera_choices(program).get(self.model.character.camera)
+        {
+            physics.set_camera(program, *setting);
+        }
+        let start = level
+            .nodes
+            .spawns
+            .iter()
+            .filter(|s| s.kind.eq_ignore_ascii_case("Multiplayer"))
+            .filter(|s| s.position.distance(near) < 1500.0)
+            .min_by(|a, b| {
+                a.position
+                    .distance(near)
+                    .total_cmp(&b.position.distance(near))
+            });
+        let (position, heading) = match start {
+            Some(spawn) => {
+                let facing = spawn.facing();
+                (spawn.position, facing.x.atan2(facing.z))
+            }
+            None => (
+                near + Vec3::new(heading.cos(), 0.0, -heading.sin()) * 60.0,
+                heading,
+            ),
+        };
+        let mut skater = Skater::new(position, heading);
+        let simplified = self.model.character.simplified;
+        let mut tricks = TrickBook::with_controls(program, &info.id, &stats, simplified);
+        skater.simplified = simplified;
+        skater.anim_lengths = character
+            .animations
+            .iter()
+            .map(|(name, a)| (name.clone(), a.duration))
+            .collect();
+        tricks.set_durations(|anim| {
+            character
+                .animations
+                .iter()
+                .find(|(name, _)| qb::checksum(name) == anim)
+                .map(|(_, a)| a.duration)
+        });
+        skater.tricks = tricks;
+        skater.place(position, heading, &physics, world);
+        skater.spawns = level
+            .nodes
+            .spawns
+            .iter()
+            .map(|spawn| {
+                let facing = spawn.facing();
+                (spawn.position, facing.x.atan2(facing.z))
+            })
+            .collect();
+        skater.teleports = desa_viewer::triggers::teleports(&level.nodes, program)
+            .into_iter()
+            .map(|(object, i)| {
+                let spawn = &level.nodes.spawns[i];
+                let facing = spawn.facing();
+                (object, (spawn.position, facing.x.atan2(facing.z)))
+            })
+            .collect();
+        skater.gap_triggers = desa_viewer::triggers::gaps(&level.nodes, program);
+        let chase = ChaseCamera::behind(&skater, &physics);
+        let camera = FlyCamera::looking_at(chase.eye, chase.target);
+        level.renderer.set_character2(Some(&character.mesh));
+        let idle = character.animation("StandIdle").unwrap_or(0);
+        let standing = character.local_pose(idle, 0.0);
+        self.player2 = Some(Player2 {
+            index,
+            character,
+            skater,
+            physics,
+            chase,
+            camera,
+            pose: PoseState {
+                animation: idle,
+                shown: idle,
+                pose: Some(standing),
+                ..PoseState::default()
+            },
+        });
+        // Both cameras behind their skaters, the HUDs up, from the start
+        // (under a menu, before the first step).
+        if let Some((_, _, chase)) = &self.skating {
+            self.camera = FlyCamera::looking_at(chase.eye, chase.target);
+        }
+        self.update_split_huds();
+        // The first time, the game's TWO PLAYERS menu (Start Game, Change
+        // Level, Split Mode, Exit to Stage), paused.
+        if std::mem::take(&mut self.split_first) {
+            if let Some(screen) = &mut self.screen {
+                self.model.character.paused = true;
+                screen
+                    .screen
+                    .run(qb::checksum("create_end_run_menu"), Vec::new());
+            }
         }
     }
 
@@ -7593,6 +8004,23 @@ impl<'a> App<'a> {
         let (Some(character), Some(level)) = (&self.character, &mut self.level) else {
             return;
         };
+        // Two players: the screen split, player two's half from their
+        // camera; player two posed.
+        level.renderer.split = self.player2.as_ref().map(|p2| renderer::Split {
+            camera: p2.camera,
+            side_by_side: self.side_by_side,
+        });
+        if let Some(p2) = &self.player2 {
+            if let Some(pose) = &p2.pose.pose {
+                level
+                    .renderer
+                    .pose_character2(&p2.character.pose_local_mirrored(
+                        pose,
+                        p2.skater.placement(),
+                        p2.skater.flipped,
+                    ));
+            }
+        }
         let model = &mut self.model.character;
         model.animation = model.animation.min(character.animations.len() - 1);
         if model.animation != self.shown_animation {
@@ -7622,6 +8050,9 @@ impl<'a> App<'a> {
                         shadow.extend(blob_shadow(feet, o.radius * 0.8, world));
                     }
                 }
+            }
+            if let (Some(p2), Some(world)) = (&self.player2, &level.world) {
+                shadow.extend(skater_shadow(&p2.skater, world));
             }
             shadow.extend(self.sparks.vertices(self.camera.position));
             // The way back to the Hub, glowing.
@@ -8880,6 +9311,18 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 app.placement = Mat4::from_translation(Vec3::new(v[0], v[1], v[2]))
                     * Mat4::from_rotation_y(v[3].to_radians());
             }
+            if let Some(id) = &args.two_player {
+                app.two_player = Some(
+                    app.character_index(id)
+                        .with_context(|| format!("no character named {id}"))?,
+                );
+                app.side_by_side = args.side_by_side;
+                app.split_first = false;
+                if let Some(screen) = &mut app.screen {
+                    screen.screen.split_screen = true;
+                    screen.screen.side_by_side = args.side_by_side;
+                }
+            }
             for cheat in &args.cheat {
                 let c = &mut app.model.character.cheats;
                 match cheat.as_str() {
@@ -8992,6 +9435,9 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
                 .transpose()?;
             if script.is_none() {
                 app.keys.insert(KeyCode::KeyW);
+                if app.two_player.is_some() {
+                    app.keys.insert(KeyCode::ArrowUp);
+                }
             }
             let places = args
                 .skate_place
@@ -9351,6 +9797,16 @@ fn parse_skate_keys(spec: &str) -> Result<Vec<(f32, KeyCode, bool)>> {
                 "J" => KeyCode::KeyJ,
                 "L" => KeyCode::KeyL,
                 "SPACE" => KeyCode::Space,
+                // (Player two's.)
+                "UP" => KeyCode::ArrowUp,
+                "DOWN" => KeyCode::ArrowDown,
+                "LEFT" => KeyCode::ArrowLeft,
+                "RIGHT" => KeyCode::ArrowRight,
+                "N0" => KeyCode::Numpad0,
+                "N1" => KeyCode::Numpad1,
+                "N2" => KeyCode::Numpad2,
+                "N3" => KeyCode::Numpad3,
+                "N5" => KeyCode::Numpad5,
                 // (A press on the game's screen: a speech box's A.)
                 "ENTER" => KeyCode::Enter,
                 other => anyhow::bail!("unknown key {other:?}"),
