@@ -72,11 +72,15 @@ fn flatten(params: &Value, program: &Program, out: &mut Vec<(u32, Value)>) {
     };
     for (key, value) in items {
         match (key, value) {
-            (None, Value::Name(n)) => {
-                if let Some(global @ Value::Struct(_)) = program.value(*n) {
-                    flatten(global, program, out);
+            (None, Value::Name(n)) => match program.value(*n) {
+                Some(global @ Value::Struct(_)) => flatten(global, program, out),
+                // A flag (`use_hud_counter`, `unlimited_time`): there, as
+                // `GotParam` asks.
+                _ => {
+                    out.retain(|(o, _)| o != n);
+                    out.push((*n, Value::Integer(1)));
                 }
-            }
+            },
             // A script's parameters passed on whole (`<...>` of a call
             // with a struct).
             (None, inner @ Value::Struct(_)) => flatten(inner, program, out),

@@ -237,15 +237,22 @@ fn objective(name: &str, text: &str) -> String {
     }
 }
 
-/// The objective on screen: what the goal asks, and how far it's got
-/// if it counts.
-fn goal_line(name: &str, text: &str, got: usize, needed: usize) -> String {
-    let asks = objective(name, text);
-    if needed > 0 {
-        format!("{asks}\n{got} of {needed}")
-    } else {
-        asks
-    }
+/// A goal's settings for its HUD counter's scripts: its caption read
+/// from the global it names (`cp_hud_counter_caption_collect_string`),
+/// and not its pro (whose hints the counter would put up again).
+fn counter_params(b: &Behaviour, program: &qb::vm::Program) -> qb::vm::Params {
+    let caption = qb::checksum("hud_counter_caption");
+    b.goal_params
+        .iter()
+        .filter(|(k, _)| *k != Some(qb::checksum("trigger_obj_id")))
+        .map(|(k, v)| match (k, v) {
+            (Some(k), qb::Value::Name(n)) if *k == caption => (
+                Some(*k),
+                program.value(*n).cloned().unwrap_or_else(|| v.clone()),
+            ),
+            item => (*item.0, item.1.clone()),
+        })
+        .collect()
 }
 
 /// Named parameters for the game's panel scripts.
@@ -1395,8 +1402,8 @@ struct GameHud {
     tricks: usize,
     shown: Option<f32>,
     song: Option<Instant>,
-    /// The goal text last put in `current_goal`.
-    goal_text: String,
+    /// The count last shown on a goal's HUD counter (`goal_counter_anchor`).
+    counted: Option<usize>,
 }
 
 /// A movie playing (through ffmpeg: see `desa_viewer::movie`), since
@@ -5279,8 +5286,10 @@ impl<'a> App<'a> {
         // the top right (`create_panel_block id = current_goal style =
         // panel_message_goal`): as the game does, once its start's own
         // scripts have run (they clear the panel's messages, a frame on)
-        // and any speech box is closed; with how far it's got, if it
-        // counts (kept up to date below).
+        // and any speech box is closed. A goal that counts on the HUD
+        // (`use_hud_counter`) gets its counter then too (the game's
+        // `goal_create_counter`, kept up to date below); others show no
+        // count.
         let waiting = s.takes_pad() || level.behaviour.goal_paused;
         // (A score, letters or race goal over: its objective down, as a
         // goal's end takes it.)
@@ -5291,17 +5300,20 @@ impl<'a> App<'a> {
                 .run
                 .as_ref()
                 .is_some_and(|r| r.goal.is_some() && !r.over);
-        if !goal_on && self.goal_popup.is_none() && s.exists("current_goal") {
-            s.destroy_id("current_goal");
+        if !goal_on && self.goal_popup.is_none() {
+            if s.exists("current_goal") {
+                s.destroy_id("current_goal");
+            }
+            if s.exists("goal_counter_anchor") {
+                s.destroy_id("goal_counter_anchor");
+            }
+            self.hud.counted = None;
         }
         if let Some((text, frames)) = self.goal_popup.as_mut().filter(|_| !waiting) {
             if *frames > 0 {
                 *frames -= 1;
             } else {
-                let line = match &self.model.character.goal_progress {
-                    Some((name, text, got, needed)) => goal_line(name, text, *got, *needed),
-                    None => text.clone(),
-                };
+                let line = text.clone();
                 s.run(
                     qb::checksum("create_panel_block"),
                     goal_panel_params(&[
@@ -5310,8 +5322,20 @@ impl<'a> App<'a> {
                         ("style", Value::Name(qb::checksum("panel_message_goal"))),
                     ]),
                 );
-                self.hud.goal_text = line;
                 self.goal_popup = None;
+                let b = &level.behaviour;
+                let flag = |key: &str| {
+                    b.goal_params
+                        .iter()
+                        .any(|(k, _)| *k == Some(qb::checksum(key)))
+                };
+                if self.goal_run.is_some() && flag("use_hud_counter") {
+                    s.run(
+                        qb::checksum("goal_create_counter"),
+                        counter_params(b, program),
+                    );
+                    self.hud.counted = Some(b.goal_shown());
+                }
             }
         }
         // The goal on, for the UI's scripts that ask after it (and
@@ -5395,6 +5419,11 @@ impl<'a> App<'a> {
             .active_goal
             .or(b.ended_goal)
             .map(|id| (id, b.goal_params.clone()));
+        let flags = b
+            .goal_params
+            .iter()
+            .any(|(k, _)| *k == Some(qb::checksum("Goal_Flags")));
+        s.goal_counts = (b.goal_shown(), flags.then_some(b.goal_needed));
         let props = |items: Vec<(&str, Value)>| {
             Value::Struct(
                 items
@@ -5524,16 +5553,16 @@ impl<'a> App<'a> {
             &props(vec![("text", Value::String(clock))]),
             program,
         );
-        // The goal on, and how far it's got, in the game's goal text.
-        if let Some((name, text, got, needed)) = &self.model.character.goal_progress {
-            let goal = goal_line(name, text, *got, *needed);
-            if self.hud.goal_text != goal && s.exists("current_goal") {
-                s.set(
-                    "current_goal",
-                    &props(vec![("text", Value::String(goal.clone()))]),
-                    program,
+        // A goal's HUD counter, its count changed: the game's
+        // `goal_update_counter` (the new number popping).
+        if let Some(counted) = self.hud.counted {
+            let b = &level.behaviour;
+            if b.goal_shown() != counted && s.exists("goal_counter_anchor") {
+                s.run(
+                    qb::checksum("goal_update_counter"),
+                    counter_params(b, program),
                 );
-                self.hud.goal_text = goal;
+                self.hud.counted = Some(b.goal_shown());
             }
         }
         // The trick text: the combo going (its tricks, and its points times

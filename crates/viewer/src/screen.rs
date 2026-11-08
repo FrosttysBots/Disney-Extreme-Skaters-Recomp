@@ -339,6 +339,9 @@ pub struct Screen {
     /// Whether there's a goal to retry (`GoalManager_CanRetryGoal`: one
     /// played since the level loaded).
     pub can_retry: bool,
+    /// The goal on's count so far, and its flags if it has them
+    /// (`GoalManager_GetNumberCollected`, `GoalManager_GetNumberOfFlags`).
+    pub goal_counts: (usize, Option<usize>),
     /// The character skating (`jessie`), for `GetSkaterProfileInfo`, and
     /// the one picked in the skater select (`SelectCurrentSkater`).
     pub character: Option<String>,
@@ -464,6 +467,7 @@ impl Screen {
             level: None,
             goal: None,
             can_retry: false,
+            goal_counts: (0, None),
             character: None,
             selected_skater: None,
             gaps: Vec::new(),
@@ -2225,6 +2229,16 @@ impl Host for Ui<'_> {
                 }
                 _ => Outcome::Done(false),
             };
+        } else if name == c("GoalManager_GetNumberCollected") {
+            let got = s.goal_counts.0 as i32;
+            return Outcome::Params(vec![(Some(c("number_collected")), Value::Integer(got))]);
+        } else if name == c("GoalManager_GetNumberOfFlags") {
+            return match s.goal_counts.1 {
+                Some(n) => {
+                    Outcome::Params(vec![(Some(c("number_of_flags")), Value::Integer(n as i32))])
+                }
+                None => Outcome::Done(false),
+            };
         } else if name == c("GetGameMode") {
             // The career, as `GameModeEquals` has it.
             return Outcome::Params(vec![(Some(c("GameMode")), Value::Name(c("career")))]);
@@ -2569,11 +2583,16 @@ impl Host for Ui<'_> {
             "InSplitScreenGame",
             "InMultiPlayerGame",
             "RunningReplay",
+            // The language: English (the HUD counter's place).
+            "french",
+            "German",
         ]
         .iter()
         .any(|n| name == c(n))
         {
             return Outcome::Done(false);
+        } else if name == c("DeBounce") || name == c("SetButtonEventMappings") {
+            // (The pad's debounce and button mappings: the viewer's own.)
         } else if name == c("StopMusic") || name == c("ClearMusicTrackList") {
             s.music = Some(None);
         } else if name == c("VibrateController") {
