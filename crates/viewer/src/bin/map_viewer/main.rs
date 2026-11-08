@@ -1304,49 +1304,80 @@ struct GoalPro {
     talk: String,
 }
 
-/// What a goal's pro says offering it (`goal_trigger_wait`'s
-/// `accept_text`, the GameCube's): their `full_name`, or `pro` and its
-/// `goal_pro_last_names` entry, then "Press (B) to talk.".
-fn talk_text(program: &qb::vm::Program, level: &str, kind: &str) -> String {
-    use qb::Value;
-    let params = desa_viewer::goals::generic_goal(program, level, kind)
-        .map(|g| g.params)
-        .unwrap_or_default();
-    let get = |key: &str| {
-        let v = params
-            .iter()
-            .find(|(k, _)| *k == qb::checksum(key))
-            .map(|(_, v)| v)?;
-        match v {
-            Value::Name(n) => program.value(*n).or(Some(v)),
-            v => Some(v),
-        }
-    };
-    let string = |v: &Value| match v {
-        Value::String(s) | Value::LocalString(s) => Some(s.clone()),
+/// A goal's setting, a bare global's name read as its value.
+fn goal_setting(
+    program: &qb::vm::Program,
+    level: &str,
+    kind: &str,
+    key: &str,
+) -> Option<qb::Value> {
+    let goal = desa_viewer::goals::generic_goal(program, level, kind)?;
+    let v = goal
+        .params
+        .iter()
+        .find(|(k, _)| *k == qb::checksum(key))
+        .map(|(_, v)| v)?;
+    Some(match v {
+        qb::Value::Name(n) => program.value(*n).unwrap_or(v).clone(),
+        v => v.clone(),
+    })
+}
+
+fn value_string(v: &qb::Value) -> Option<String> {
+    match v {
+        qb::Value::String(s) | qb::Value::LocalString(s) => Some(s.clone()),
         _ => None,
+    }
+}
+
+/// A goal's pro by name: their `full_name`, or `pro` and its
+/// `goal_pro_last_names` entry if it has one.
+fn pro_name(program: &qb::vm::Program, level: &str, kind: &str) -> (Option<String>, bool) {
+    if let Some(name) =
+        goal_setting(program, level, kind, "full_name").and_then(|v| value_string(&v))
+    {
+        return (Some(name), true);
+    }
+    let Some(pro) = goal_setting(program, level, kind, "pro").and_then(|v| value_string(&v)) else {
+        return (None, false);
     };
-    let name = get("full_name").and_then(string).or_else(|| {
-        let pro = get("pro").and_then(string)?;
-        let last =
-            program
-                .value(qb::checksum("goal_pro_last_names"))
-                .and_then(|names| match names {
-                    Value::Struct(items) => items
-                        .iter()
-                        .find(|(k, _)| *k == Some(qb::checksum(&pro)))
-                        .and_then(|(_, v)| string(v)),
-                    _ => None,
-                });
-        Some(match last {
-            Some(last) => format!("{pro} {last}"),
-            None => pro,
-        })
-    });
-    match name {
+    let last = program
+        .value(qb::checksum("goal_pro_last_names"))
+        .and_then(|names| match names {
+            qb::Value::Struct(items) => items
+                .iter()
+                .find(|(k, _)| *k == Some(qb::checksum(&pro)))
+                .and_then(|(_, v)| value_string(v)),
+            _ => None,
+        });
+    match last {
+        Some(last) => (Some(format!("{pro} {last}")), true),
+        None => (Some(pro), false),
+    }
+}
+
+/// What a goal's pro says offering it (`goal_trigger_wait`'s
+/// `accept_text`, the GameCube's): their name, then "Press (B) to talk.".
+fn talk_text(program: &qb::vm::Program, level: &str, kind: &str) -> String {
+    match pro_name(program, level, kind).0 {
         Some(name) => format!("{name}: Press \\m5 to talk."),
         None => "Press \\m5 to talk.".to_string(),
     }
+}
+
+/// What a goal's pro tells the skater as it starts
+/// (`goal_description_and_speech`): their name (a full one only), its
+/// `goal_description` lines, then "Press (A) to continue.".
+fn description_text(program: &qb::vm::Program, level: &str, kind: &str) -> Option<String> {
+    let lines = match goal_setting(program, level, kind, "goal_description")? {
+        qb::Value::Array(items) => items.iter().filter_map(value_string).collect::<String>(),
+        v => value_string(&v)?,
+    };
+    let name = match pro_name(program, level, kind) {
+        (Some(name), true) => format!("\\c7{name} :\\c0\n"),
+        _ => String::new(),
+    };
+    Some(format!("{name}{lines}\nPress \\m0 to continue."))
 }
 
 /// The pros of the goals the viewer plays (`trigger_obj_id`).
@@ -2425,7 +2456,10 @@ struct App<'a> {
     goal_run: Option<GoalRun>,
     /// A goal's objective to pop up as it starts (see `update_game_hud`),
     /// and frames till then.
-    goal_popup: Option<(String, u32)>,
+    goal_popup: Option<(String, u32, Option<String>)>,
+    /// The next goal started as a retry (`RetryCurrentGoal`): straight
+    /// on, without its pro's description (the game's `quick_start`).
+    quick_start: bool,
     /// A score, letters or race goal just ended (won, its type), for
     /// the game's messages (see `update_game_hud`).
     goal_end: Option<(bool, GoalEnded)>,
@@ -2710,6 +2744,7 @@ impl<'a> App<'a> {
             racing: None,
             goal_run: None,
             goal_popup: None,
+            quick_start: false,
             goal_end: None,
             photo: false,
             movie: None,
@@ -4527,10 +4562,14 @@ impl<'a> App<'a> {
     /// The objective of the level's goal of `kind` to pop up as it starts:
     /// its `goal_text` (else its name).
     fn queue_objective(&mut self, kind: &str) {
+        let quick = std::mem::take(&mut self.quick_start);
         let Some(level) = &self.level else { return };
-        self.goal_popup =
-            desa_viewer::goals::generic_goal(level.behaviour.program(), &level.id, kind)
-                .map(|g| (objective(&g.name, &g.text), 2));
+        let program = level.behaviour.program();
+        let description = (!quick)
+            .then(|| description_text(program, &level.id, kind))
+            .flatten();
+        self.goal_popup = desa_viewer::goals::generic_goal(program, &level.id, kind)
+            .map(|g| (objective(&g.name, &g.text), 2, description));
     }
 
     fn start_goal(&mut self, index: usize) {
@@ -5474,7 +5513,35 @@ impl<'a> App<'a> {
             }
             None => {}
         }
-        if let Some((text, frames)) = self.goal_popup.as_mut().filter(|_| !waiting) {
+        // Its pro's description first, if it's begun by talking to them:
+        // the game's speech box, Press (A) to continue (the objective
+        // and the clock waiting on it).
+        if let Some(description) = self.goal_popup.as_mut().and_then(|p| p.2.take()) {
+            s.run(
+                qb::checksum("create_speech_box"),
+                goal_panel_params(&[
+                    (
+                        "anchor_id",
+                        Value::Name(qb::checksum("goal_description_anchor")),
+                    ),
+                    ("text", Value::String(description)),
+                    ("style", Value::Name(qb::checksum("speech_box_style"))),
+                    ("bg_x_scale", Value::Float(1.7)),
+                    (
+                        "pad_choose_script",
+                        Value::Name(qb::checksum("speech_box_exit")),
+                    ),
+                    (
+                        "pad_choose_params",
+                        Value::Struct(goal_panel_params(&[(
+                            "anchor_id",
+                            Value::Name(qb::checksum("goal_description_anchor")),
+                        )])),
+                    ),
+                ]),
+            );
+        }
+        if let Some((text, frames, _)) = self.goal_popup.as_mut().filter(|_| !waiting) {
             if *frames > 0 {
                 *frames -= 1;
             } else {
@@ -6712,6 +6779,7 @@ impl<'a> App<'a> {
     /// from the level's start.
     fn restart(&mut self) {
         self.model.character.paused = false;
+        self.quick_start = true;
         if let Some(index) = self.goal_run.as_ref().map(|r| r.index) {
             self.start_goal(index);
         } else if self.letters.is_some() {
