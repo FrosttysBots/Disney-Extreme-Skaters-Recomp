@@ -23,7 +23,7 @@ to that engine family too.
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
 | Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records |
+| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players' split-screen free skate |
 | Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit) |
 | Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
@@ -242,6 +242,21 @@ name, a check and "Complete!" (`goal_success_messages`); lost, an X and
 one (`--goal Gaps`, `--goal Collect2`...). Their pros offer them with the game's speech box
 ("Army Man: Press B to talk."): B on the pad or Enter starts the goal,
 and you skate on while it's offered.
+
+**Two players** come in through the game's own menus: the main menu's 2
+Player (`start_2p`, `SetGameType freeskate2p`), its level select, then
+the skater select twice ("PLAYER ONE", Ready; "PLAYER TWO", Ready). The
+level arrives split in two, one player over the other, under the game's
+TWO PLAYERS menu (Start Game, Change Level, Split Mode for side by side,
+Exit to Stage), and paused the game's 2-player pause menu has the same.
+Each player skates with their own physics, tricks, score and chase
+camera, and sees the other. Player two plays on the second gamepad, or
+the arrows and the numpad (0 ollie, 1 flip, 2 grab, 3 grind, 5 revert;
+or Right Shift , . / ;). `--two-player CHARACTER` with `--skate`
+screenshots it (`--side-by-side` for the other split). The game's other
+2-player games (Trick Attack, Graffiti, Slap!, Horse, King of the Hill)
+aren't in yet, and each half shows the viewer's own score and combo
+rather than the game's panel.
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |

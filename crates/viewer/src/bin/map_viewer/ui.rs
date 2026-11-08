@@ -204,8 +204,96 @@ pub struct CharacterModel {
     pub message: Option<String>,
 }
 
+/// One player's HUD in their half of a split screen (two players).
+pub struct PlayerHud {
+    pub name: String,
+    pub score: u32,
+    pub combo: Option<String>,
+    pub message: Option<String>,
+    pub special: (f32, bool),
+    pub balance: Option<f32>,
+    pub switch: bool,
+}
+
+/// A player's HUD in `rect`, their half: their name and score top left,
+/// the special meter under them, a message top centre, the combo and
+/// balance meter bottom centre.
+fn player_hud(ctx: &egui::Context, n: usize, rect: egui::Rect, hud: &PlayerHud) {
+    let at = |align: egui::Align2, x: f32, y: f32| align.pos_in_rect(&rect) + egui::vec2(x, y);
+    let area = |name: &str, align: egui::Align2, x: f32, y: f32| {
+        egui::Area::new(egui::Id::new((name.to_string(), n)))
+            .pivot(align)
+            .fixed_pos(at(align, x, y))
+            .interactable(false)
+    };
+    let shadowed = |ui: &mut egui::Ui, text: &str, size: f32, colour: egui::Color32| {
+        ui.label(
+            egui::RichText::new(text)
+                .size(size)
+                .strong()
+                .color(colour)
+                .background_color(egui::Color32::from_black_alpha(140)),
+        );
+    };
+    area("p_score", egui::Align2::LEFT_TOP, 12.0, 10.0).show(ctx, |ui| {
+        shadowed(ui, &hud.name, 15.0, egui::Color32::from_rgb(255, 210, 60));
+        let switch = if hud.switch { "  SWITCH" } else { "" };
+        shadowed(
+            ui,
+            &format!("{}{switch}", hud.score),
+            22.0,
+            egui::Color32::WHITE,
+        );
+        let (bar, _) = ui.allocate_exact_size(egui::vec2(140.0, 10.0), egui::Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(bar, 3.0, egui::Color32::from_black_alpha(160));
+        let mut fill = bar.shrink(2.0);
+        fill.set_width(fill.width() * hud.special.0.clamp(0.0, 1.0));
+        let colour = if hud.special.1 {
+            egui::Color32::from_rgb(255, 210, 40)
+        } else {
+            egui::Color32::from_rgb(70, 140, 255)
+        };
+        painter.rect_filled(fill, 2.0, colour);
+    });
+    if let Some(message) = &hud.message {
+        area("p_message", egui::Align2::CENTER_TOP, 0.0, 40.0).show(ctx, |ui| {
+            shadowed(ui, message, 20.0, egui::Color32::from_rgb(255, 220, 60));
+        });
+    }
+    if let Some(combo) = &hud.combo {
+        area("p_combo", egui::Align2::CENTER_BOTTOM, 0.0, -36.0).show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                for line in combo.lines() {
+                    shadowed(ui, line, 16.0, egui::Color32::WHITE);
+                }
+            })
+        });
+    }
+    if let Some(meter) = hud.balance {
+        area("p_balance", egui::Align2::CENTER_BOTTOM, 0.0, -14.0).show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(200.0, 14.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(160));
+            let danger = meter.abs();
+            let colour =
+                egui::Color32::from_rgb((255.0 * danger) as u8, (255.0 * (1.0 - danger)) as u8, 40);
+            let x = rect.center().x + meter * (rect.width() / 2.0 - 5.0);
+            painter.rect_filled(
+                egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(7.0, 11.0)),
+                2.0,
+                colour,
+            );
+        });
+    }
+}
+
 /// Everything the panel shows or edits.
 pub struct Model {
+    /// Two players: each one's HUD, drawn in their half (see `PlayerHud`),
+    /// the halves side by side or one over the other.
+    pub split_huds: Option<[PlayerHud; 2]>,
+    pub split_side_by_side: bool,
     pub data_path: Option<String>,
     pub levels: Vec<LevelInfo>,
     /// The disc's movies, by name, and whether the opening ones play at
@@ -270,7 +358,10 @@ Skating: W push, S brake, A/D steer,
   S held: step off the board, Tab next spawn, J/L look round,
   C camera, M map, P pause; or a gamepad (stick, A ollie, X flip, B grab, Y grind,
   right stick look round, Start pause),
-  Esc stop";
+  Esc stop
+Two players (main menu, 2 Player): player two
+  arrows, numpad 0 ollie, 1 flip, 2 grab, 3 grind,
+  5 revert, or the second gamepad";
 
 /// A message for the player (the game build's stand-in for the panel's),
 /// at the top of the screen.
@@ -695,14 +786,16 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
     }
     // (The game's own panel, when it's up, has these.)
     let game_hud = model.character.game_hud;
-    if let (Some(meter), false) = (model.character.balance, game_hud) {
+    // Two players: each their own HUD in their half, instead.
+    let split = model.split_huds.is_some() && model.character.skating;
+    if let (Some(meter), false, false) = (model.character.balance, game_hud, split) {
         balance_meter(ctx, meter);
     }
     if model.character.skating {
-        if !game_hud {
+        if !game_hud && !split {
             trick_text(ctx, model.character.score, model.character.combo.as_deref());
         }
-        if let Some(message) = &model.character.message {
+        if let Some(message) = model.character.message.as_ref().filter(|_| !split) {
             egui::Area::new(egui::Id::new("message"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
                 .interactable(false)
@@ -716,17 +809,18 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     );
                 });
         }
-        if !game_hud {
+        if !game_hud && !split {
             special_meter(ctx, model.character.special);
         }
-        if let (true, Some(texture), Some(view)) = (
+        if let (true, false, Some(texture), Some(view)) = (
             model.character.show_map,
+            split,
             &model.character.map_texture,
             &model.character.map,
         ) {
             minimap(ctx, texture, view);
         }
-        if model.character.switch {
+        if model.character.switch && !split {
             egui::Area::new(egui::Id::new("switch"))
                 .anchor(egui::Align2::RIGHT_TOP, [-180.0, 47.0])
                 .interactable(false)
@@ -1126,6 +1220,17 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
             });
         });
     });
+    // (Last, the panel's room known: in the picture beside it.)
+    if let (Some(huds), true) = (&model.split_huds, split) {
+        let picture = super::picture_area(ctx);
+        let (a, b) = if model.split_side_by_side {
+            picture.split_left_right_at_fraction(0.5)
+        } else {
+            picture.split_top_bottom_at_fraction(0.5)
+        };
+        player_hud(ctx, 0, a, &huds[0]);
+        player_hud(ctx, 1, b, &huds[1]);
+    }
     actions
 }
 

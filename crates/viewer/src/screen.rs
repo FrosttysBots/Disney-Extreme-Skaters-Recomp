@@ -346,6 +346,18 @@ pub struct Screen {
     /// the one picked in the skater select (`SelectCurrentSkater`).
     pub character: Option<String>,
     pub selected_skater: Option<u32>,
+    /// Two players' free skate (`SetGameType freeskate2p`): the screen
+    /// split, the menus asking each player in turn.
+    pub split_screen: bool,
+    /// Whose skater the menus are choosing (`SetCurrentSkaterProfile`):
+    /// 0 player one's, 1 player two's.
+    pub profile: usize,
+    /// The level the 2-player level select chose, kept for the skater
+    /// selects after it (`RememberLevelStructureNameForReplays`).
+    pub level_structure: Option<u32>,
+    /// The split screen's halves side by side (`SetScreenMode
+    /// split_vertical`), else one over the other (`split_horizontal`).
+    pub side_by_side: bool,
     /// The level's gaps for its checklist (`AddGapsToMenu`): name, points
     /// and times landed.
     pub gaps: Vec<(String, u32, u32)>,
@@ -470,6 +482,10 @@ impl Screen {
             goal_counts: (0, None),
             character: None,
             selected_skater: None,
+            split_screen: false,
+            profile: 0,
+            level_structure: None,
+            side_by_side: false,
             gaps: Vec::new(),
             goal_list: Vec::new(),
             progress: HashMap::new(),
@@ -2269,8 +2285,69 @@ impl Host for Ui<'_> {
                 None => Outcome::Done(false),
             };
         } else if name == c("GetGameMode") {
-            // The career, as `GameModeEquals` has it.
-            return Outcome::Params(vec![(Some(c("GameMode")), Value::Name(c("career")))]);
+            // The career, as `GameModeEquals` has it; two players' free
+            // skate, `freeskate` (its skater selects' titles).
+            let mode = if s.split_screen {
+                "freeskate"
+            } else {
+                "career"
+            };
+            return Outcome::Params(vec![(Some(c("GameMode")), Value::Name(c(mode)))]);
+        } else if name == c("SetGameType") {
+            // (Free skate and the career are played alike here; two
+            // players' is split.)
+            let mode = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            s.split_screen = mode == Some(c("freeskate2p"));
+            if !s.split_screen {
+                s.profile = 0;
+            }
+        } else if name == c("SetCurrentGameType")
+            || name == c("UseBothPadsInFrontEnd")
+            || name == c("UseOnePadInFrontEnd")
+        {
+            // (The game type set is the one played; the pads, the viewer's.)
+        } else if name == c("InSplitScreenGame") || name == c("InMultiPlayerGame") {
+            return Outcome::Done(s.split_screen);
+        } else if name == c("SetCurrentSkaterProfile") {
+            let index = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Integer(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            s.profile = index.unwrap_or(0).clamp(0, 1) as usize;
+        } else if name == c("SetScreenMode") {
+            let mode = match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            s.side_by_side = mode == Some(c("split_vertical"));
+        } else if name == c("ScriptGetScreenMode") {
+            let mode = if s.side_by_side {
+                "split_vertical"
+            } else {
+                "split_horizontal"
+            };
+            return Outcome::Params(vec![(Some(c("screen_mode")), Value::Name(c(mode)))]);
+        } else if name == c("RememberLevelStructureNameForReplays") {
+            s.level_structure = named("level_structure_name").and_then(|v| v.as_name());
+        } else if name == c("GetReplayLevelStructureName") {
+            return match s.level_structure {
+                Some(level) => {
+                    Outcome::Params(vec![(Some(c("level_structure_name")), Value::Name(level))])
+                }
+                None => Outcome::Done(false),
+            };
         } else if name == c("GameModeEquals") {
             // The levels are played as the career has them.
             let asked = match &props {
@@ -2609,8 +2686,6 @@ impl Host for Ui<'_> {
             return Outcome::Done(true);
         } else if [
             "InNetGame",
-            "InSplitScreenGame",
-            "InMultiPlayerGame",
             "RunningReplay",
             // The language: English (the HUD counter's place).
             "french",
@@ -2780,7 +2855,7 @@ impl Host for Ui<'_> {
         } else if name == c("GetCurrentSkaterProfileIndex") {
             return Outcome::Params(vec![(
                 Some(c("currentSkaterProfileIndex")),
-                Value::Integer(0),
+                Value::Integer(s.profile as i32),
             )]);
         } else if name == c("SelectCurrentSkater") {
             // The skater picked: asked about (`if SelectCurrentSkater

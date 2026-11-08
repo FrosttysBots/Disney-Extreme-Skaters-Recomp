@@ -201,10 +201,15 @@ pub struct Renderer {
     sky_pipelines: Vec<wgpu::RenderPipeline>,
     world_globals: Globals,
     sky_globals: Globals,
+    /// The second player's view's (split screen).
+    world_globals2: Globals,
+    sky_globals2: Globals,
     world: GpuLevel,
     sky: Option<GpuLevel>,
     /// Its vertex buffer is rewritten every frame with the posed vertices.
     character: Option<GpuLevel>,
+    /// The second player's character, likewise.
+    character2: Option<GpuLevel>,
     /// Extra meshes drawn with the level, and whether each is shown.
     layers: Vec<(GpuLevel, bool)>,
     /// Pictures shown over layers' own textures (a movie on a screen in
@@ -237,6 +242,9 @@ pub struct Renderer {
     pub aspect: Option<f32>,
     /// The character left out of frames (hidden by a goal's cutscene).
     pub hide_character: bool,
+    /// Two players: the screen split in two, the second half seen from
+    /// this camera (see [`Split`]).
+    pub split: Option<Split>,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
@@ -308,6 +316,8 @@ impl Renderer {
 
         let world_globals = make_globals(&device, &globals_layout);
         let sky_globals = make_globals(&device, &globals_layout);
+        let world_globals2 = make_globals(&device, &globals_layout);
+        let sky_globals2 = make_globals(&device, &globals_layout);
         let world = upload_level(&device, &queue, &pass_layout, &sampler, world, false);
         let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky, false));
         let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
@@ -351,6 +361,8 @@ impl Renderer {
             sky_pipelines,
             world_globals,
             sky_globals,
+            world_globals2,
+            sky_globals2,
             world,
             sky,
             character: None,
@@ -373,6 +385,8 @@ impl Renderer {
             scripted_camera: None,
             aspect: None,
             hide_character: false,
+            split: None,
+            character2: None,
             min_light: 0.0,
             depth: None,
         }
@@ -595,6 +609,29 @@ impl Renderer {
         }
     }
 
+    /// Uploads the second player's character's mesh (`None` removes it),
+    /// posed each frame with [`pose_character2`](Self::pose_character2).
+    pub fn set_character2(&mut self, mesh: Option<&Level>) {
+        self.character2 = mesh.map(|mesh| {
+            upload_level(
+                &self.device,
+                &self.queue,
+                &self.pass_layout,
+                &self.sampler,
+                mesh,
+                true,
+            )
+        });
+    }
+
+    /// Replaces the second player's character's vertices.
+    pub fn pose_character2(&self, vertices: &[Vertex]) {
+        if let Some(character) = &self.character2 {
+            self.queue
+                .write_buffer(&character.vertices, 0, bytemuck::cast_slice(vertices));
+        }
+    }
+
     /// Replaces the character's vertices, which must match the mesh given
     /// to [`set_character`](Self::set_character) in count and order.
     pub fn pose_character(&self, vertices: &[Vertex]) {
@@ -678,8 +715,48 @@ impl Renderer {
         }
 
         let picture = crate::camera::picture_box(width as f32, height as f32, self.aspect);
+        // The views: the picture, or its halves (player one's on top or
+        // left).
+        let views = match &self.split {
+            None => vec![(picture, *camera)],
+            Some(split) => {
+                let (x, y, w, h) = picture;
+                if split.side_by_side {
+                    let half = (w / 2.0).floor();
+                    vec![
+                        ((x, y, half, h), *camera),
+                        ((x + half, y, w - half, h), split.camera),
+                    ]
+                } else {
+                    let half = (h / 2.0).floor();
+                    vec![
+                        ((x, y, w, half), *camera),
+                        ((x, y + half, w, h - half), split.camera),
+                    ]
+                }
+            }
+        };
+        for (n, (rect, camera)) in views.into_iter().enumerate() {
+            self.encode_view(encoder, target, n, rect, &camera, time);
+        }
+    }
+
+    /// Records one view: the level from `camera` in `rect` of the
+    /// target, cleared first if it's the first (`n` 0).
+    fn encode_view(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        n: usize,
+        rect: (f32, f32, f32, f32),
+        camera: &FlyCamera,
+        time: f32,
+    ) {
+        let picture = rect;
         let aspect = picture.2 / picture.3.max(1.0);
-        let (view, rotation_view, fov_y) = match self.scripted_camera {
+        // (A camera path's camera: the whole screen's, one player's.)
+        let scripted = self.scripted_camera.filter(|_| self.split.is_none());
+        let (view, rotation_view, fov_y) = match scripted {
             Some(c) => (
                 Mat4::from_rotation_translation(c.rotation, c.position).inverse(),
                 Mat4::from_quat(c.rotation.conjugate()),
@@ -703,8 +780,13 @@ impl Renderer {
             self.queue
                 .write_buffer(&globals.buffer, 0, bytemuck::bytes_of(&data));
         };
-        write(&self.world_globals, view);
-        write(&self.sky_globals, rotation_view);
+        let (world_globals, sky_globals) = if n == 0 {
+            (&self.world_globals, &self.sky_globals)
+        } else {
+            (&self.world_globals2, &self.sky_globals2)
+        };
+        write(world_globals, view);
+        write(sky_globals, rotation_view);
 
         {
             let (depth_view, _, _) = self.depth.as_ref().unwrap();
@@ -715,12 +797,17 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // (Black, round a picture not the window's shape.)
-                        load: wgpu::LoadOp::Clear(if self.aspect.is_some() {
-                            wgpu::Color::BLACK
+                        // (Black, round a picture not the window's shape;
+                        // the second view over the first's.)
+                        load: if n > 0 {
+                            wgpu::LoadOp::Load
                         } else {
-                            CLEAR_COLOR
-                        }),
+                            wgpu::LoadOp::Clear(if self.aspect.is_some() {
+                                wgpu::Color::BLACK
+                            } else {
+                                CLEAR_COLOR
+                            })
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -737,7 +824,6 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             pass.set_viewport(picture.0, picture.1, picture.2, picture.3, 0.0, 1.0);
-
             let collision = self
                 .collision
                 .as_ref()
@@ -745,20 +831,23 @@ impl Renderer {
             let only_collision = collision.is_some() && self.collision_view == CollisionView::Only;
             if !only_collision {
                 if let Some(sky) = self.sky.as_ref().filter(|_| self.show_sky) {
-                    pass.set_bind_group(0, &self.sky_globals.bind_group, &[]);
+                    pass.set_bind_group(0, &sky_globals.bind_group, &[]);
                     draw(&mut pass, sky, &self.sky_pipelines);
                 }
-                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+                pass.set_bind_group(0, &world_globals.bind_group, &[]);
                 draw(&mut pass, &self.world, &self.world_pipelines);
                 for (layer, _) in self.layers.iter().filter(|l| l.1) {
                     draw(&mut pass, layer, &self.world_pipelines);
                 }
             }
             if let Some(character) = self.character.as_ref().filter(|_| !self.hide_character) {
-                pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+                pass.set_bind_group(0, &world_globals.bind_group, &[]);
                 draw(&mut pass, character, &self.world_pipelines);
             }
-            pass.set_bind_group(0, &self.world_globals.bind_group, &[]);
+            if let Some(character) = self.character2.as_ref().filter(|_| self.split.is_some()) {
+                draw(&mut pass, character, &self.world_pipelines);
+            }
+            pass.set_bind_group(0, &world_globals.bind_group, &[]);
             if let Some((buffer, count)) = self.shadow.as_ref().filter(|_| !only_collision) {
                 pass.set_pipeline(&self.color_overlay);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -794,6 +883,15 @@ impl Renderer {
             }
         }
     }
+}
+
+/// Two players' split screen: the second player's camera, and whether
+/// the halves are side by side (the game's `split_vertical`) or one over
+/// the other (`split_horizontal`).
+#[derive(Clone, Copy, Debug)]
+pub struct Split {
+    pub camera: FlyCamera,
+    pub side_by_side: bool,
 }
 
 fn write_vertices(queue: &wgpu::Queue, level: &GpuLevel, first: usize, vertices: &[Vertex]) {
