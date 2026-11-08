@@ -228,6 +228,9 @@ pub struct LevelNodes {
     /// away (`LevelObject`s that aren't bouncy: Beach's cargo doors,
     /// Pizza's alien heads).
     pub movers: Vec<Mover>,
+    /// Where King of the Hill's crown may be put (`GenericNode`s of
+    /// `Type = Crown`).
+    pub crowns: Vec<Vec3>,
 }
 
 /// A `LevelObject` node that isn't bouncy: where it's placed (mesh space),
@@ -505,6 +508,12 @@ impl LevelNodes {
                                 .unwrap_or(500.0),
                         });
                     }
+                }
+                Some(c)
+                    if c == key("GenericNode")
+                        && node.get(key("Type")).and_then(Value::as_name) == Some(key("Crown")) =>
+                {
+                    out.crowns.push(pos);
                 }
                 Some(c) if c == key("Restart") => {
                     let heading = node

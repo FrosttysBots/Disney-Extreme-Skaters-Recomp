@@ -428,6 +428,19 @@ impl Thread {
                     }
                     at += 1;
                 };
+                // (A case with no body of its own falls through to the
+                // next's: `case Horse` / `case nethorse` / ...)
+                let mut target = target;
+                loop {
+                    let mut at = target;
+                    while matches!(body.get(at), Some(Token::EndOfLine | Token::LineNumber(_))) {
+                        at += 1;
+                    }
+                    match body.get(at) {
+                        Some(Token::Case | Token::Default) => target = self::line_end(body, at),
+                        _ => break,
+                    }
+                }
                 frame.pc = target;
             }
             Token::Case | Token::Default => frame.pc = after_switch(body, frame.pc + 1),
@@ -880,7 +893,7 @@ impl Thread {
         // Built in: an array's items one by one (`GetNextArrayElement
         // array` gives `element`, and `index` its place, from 0: the
         // keyboard puts each row's letter on key `index`; the next call
-        // gives the one after; false past the end).
+        // gives the one after; false past the end, without `element`).
         if target.is_none() && name == checksum("GetNextArrayElement") {
             let array = match &args {
                 Value::Struct(items) => match items.iter().find(|(k, _)| k.is_none()) {
@@ -904,7 +917,11 @@ impl Thread {
                 .and_then(|(_, v)| v.as_int())
                 .map_or(0, |i| i.max(-1) + 1) as usize;
             let Some(element) = array.get(index) else {
-                frame.params.retain(|(k, _)| *k != Some(checksum("index")));
+                // (`element` gone too, for the loops that ask `GotParam
+                // element`: the GAME OPTIONS lists.)
+                frame.params.retain(|(k, _)| {
+                    *k != Some(checksum("index")) && *k != Some(checksum("element"))
+                });
                 return false;
             };
             set_param(&mut frame.params, checksum("element"), element.clone());
@@ -1470,6 +1487,9 @@ impl Num {
                 3,
             )),
             Value::Name(n) => Some(Num::Scalar(f64::from(*n))),
+            // (A string by its text, to compare: `(<pref_field> =
+            // "game_type")`.)
+            Value::String(s) | Value::LocalString(s) => Some(Num::Scalar(f64::from(checksum(s)))),
             v => v.as_f32().map(|f| Num::Scalar(f64::from(f))),
         }
     }
@@ -1581,11 +1601,15 @@ fn evaluate_num(tokens: &[Token], params: &Params, program: &Program) -> Option<
                 }
                 Num::of(&value)
             }
+            Token::String(s) | Token::LocalString(s) => Some(Num::Scalar(f64::from(checksum(s)))),
             // A global's value (a number, or a name it holds:
             // `started_goal_id`), or the name itself.
+            // (A global string stays its name: the menus compare an item's
+            // `text` with the name of the string it was given.)
             Token::Name(n) => Some(
                 program
                     .value(*n)
+                    .filter(|v| !matches!(v, Value::String(_) | Value::LocalString(_)))
                     .and_then(Num::of)
                     .unwrap_or(Num::Scalar(f64::from(*n))),
             ),
@@ -1989,7 +2013,8 @@ mod tests {
     #[test]
     fn switch_takes_the_matching_case() {
         let mut program = Program::new();
-        // switch <kind> / case apple / Report 1 / case pear / Report 2 /
+        // switch <kind> / case apple / Report 1 / case fig / case pear /
+        // Report 2 /
         // default / Report 3 / endswitch / Report 4
         let line = |t: Vec<Token>| {
             let mut t = t;
@@ -2000,6 +2025,7 @@ mod tests {
             line(vec![Token::Switch, Token::Arg, n("kind")]),
             line(vec![Token::Case, n("apple")]),
             line(vec![n("Report"), Token::Integer(1)]),
+            line(vec![Token::Case, n("fig")]),
             line(vec![Token::Case, n("pear")]),
             line(vec![n("Report"), Token::Integer(2)]),
             line(vec![Token::Default]),
@@ -2011,6 +2037,8 @@ mod tests {
         program.add_script(checksum("Pick"), body);
         for (kind, want) in [
             ("pear", vec![2, 4]),
+            // (An empty case falls through to the next's.)
+            ("fig", vec![2, 4]),
             ("apple", vec![1, 4]),
             ("plum", vec![3, 4]),
         ] {

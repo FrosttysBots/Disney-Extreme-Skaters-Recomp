@@ -358,6 +358,14 @@ pub struct Screen {
     /// The split screen's halves side by side (`SetScreenMode
     /// split_vertical`), else one over the other (`split_horizontal`).
     pub side_by_side: bool,
+    /// The game type set (`SetGameType`): two players' `freeskate2p`,
+    /// `Horse`, `king` or `scorechallenge` (0 for the career's).
+    pub game_type: u32,
+    /// Two players' GAME OPTIONS (the game's `splitscreen` preferences,
+    /// from `default_splitscreen_preferences`), by field.
+    pub split_prefs: Vec<(u32, Pref)>,
+    /// The RANKINGS rows (`FillRankingScreen`): player and score.
+    pub rankings: Vec<(String, String)>,
     /// The level's gaps for its checklist (`AddGapsToMenu`): name, points
     /// and times landed.
     pub gaps: Vec<(String, u32, u32)>,
@@ -449,6 +457,32 @@ pub struct Screen {
 
 const ROOT: usize = 0;
 
+/// One of two players' GAME OPTIONS: its text on the menu, the choice's
+/// checksum, and its number (a time limit's seconds, a target score).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pref {
+    pub text: String,
+    pub checksum: Option<u32>,
+    pub number: Option<i32>,
+}
+
+impl Pref {
+    fn from_value(value: &Value) -> Pref {
+        let text = match value.get(checksum("ui_string")) {
+            Some(Value::String(t) | Value::LocalString(t)) => t.clone(),
+            _ => String::new(),
+        };
+        Pref {
+            text,
+            checksum: value.get(checksum("checksum")).and_then(Value::as_name),
+            number: value
+                .get(checksum("time"))
+                .or_else(|| value.get(checksum("score")))
+                .and_then(Value::as_int),
+        }
+    }
+}
+
 impl Screen {
     /// An empty screen, drawing with these fonts and sprites (sizes), by
     /// name checksum.
@@ -486,6 +520,9 @@ impl Screen {
             profile: 0,
             level_structure: None,
             side_by_side: false,
+            game_type: 0,
+            split_prefs: Vec::new(),
+            rankings: Vec::new(),
             gaps: Vec::new(),
             goal_list: Vec::new(),
             progress: HashMap::new(),
@@ -557,6 +594,44 @@ impl Screen {
     /// A screen command from scripts run elsewhere (the level's: a goal's
     /// `CreateScreenElement`, `RunScriptOnScreenElement`...), done here
     /// as if from the root.
+    /// A two-player GAME OPTIONS setting (`game_type`, `target_score`,
+    /// `horse_time_limit`, `horse_word`...), the game's default till set.
+    pub fn split_pref(&mut self, program: &Program, field: &str) -> Option<Pref> {
+        self.init_split_prefs(program);
+        let key = checksum(field);
+        self.split_prefs
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, p)| p.clone())
+    }
+
+    /// The preferences as the game starts them
+    /// (`default_splitscreen_preferences`), if not yet.
+    fn init_split_prefs(&mut self, program: &Program) {
+        if !self.split_prefs.is_empty() {
+            return;
+        }
+        let Some(Value::Struct(fields)) =
+            program.value(checksum("default_splitscreen_preferences"))
+        else {
+            return;
+        };
+        for (key, value) in fields {
+            if let (Some(key), Value::Struct(_)) = (key, value) {
+                self.split_prefs.push((*key, Pref::from_value(value)));
+            }
+        }
+    }
+
+    /// Sets one (`SetPreferencesFromUI prefs = splitscreen`).
+    fn set_split_pref(&mut self, program: &Program, field: u32, pref: Pref) {
+        self.init_split_prefs(program);
+        match self.split_prefs.iter_mut().find(|(k, _)| *k == field) {
+            Some((_, p)) => *p = pref,
+            None => self.split_prefs.push((field, pref)),
+        }
+    }
+
     pub fn command(&mut self, name: u32, args: &Value, program: &Program) {
         let mut host = Ui {
             screen: self,
@@ -2303,7 +2378,10 @@ impl Host for Ui<'_> {
                 }),
                 _ => None,
             };
-            s.split_screen = mode == Some(c("freeskate2p"));
+            s.game_type = mode.unwrap_or(0);
+            s.split_screen = ["freeskate2p", "Horse", "king", "scorechallenge"]
+                .iter()
+                .any(|m| mode == Some(c(m)));
             if !s.split_screen {
                 s.profile = 0;
             }
@@ -2349,7 +2427,9 @@ impl Host for Ui<'_> {
                 None => Outcome::Done(false),
             };
         } else if name == c("GameModeEquals") {
-            // The levels are played as the career has them.
+            // The levels are played as the career has them; two players'
+            // games as their modes (`mode_horse`, `mode_king`,
+            // `mode_scorechallenge`).
             let asked = match &props {
                 Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
                     (None, Value::Name(n)) => Some(*n),
@@ -2357,7 +2437,105 @@ impl Host for Ui<'_> {
                 }),
                 _ => None,
             };
-            return Outcome::Done(asked == Some(c("is_career")));
+            let game = s.game_type;
+            let is = |mode: &str| s.split_screen && game == c(mode);
+            let answer = match asked {
+                Some(a) if a == c("is_career") => !s.split_screen,
+                Some(a) if a == c("is_horse") => is("Horse"),
+                Some(a) if a == c("is_king") => is("king"),
+                Some(a) if a == c("is_trick_attack") => is("scorechallenge"),
+                Some(a) if a == c("show_ranking_screen") => is("king") || is("scorechallenge"),
+                Some(a) if a == c("is_freeskate") => is("freeskate2p"),
+                _ => false,
+            };
+            return Outcome::Done(answer);
+        } else if (name == c("GetPreferenceString")
+            || name == c("GetPreferenceChecksum")
+            || name == c("PreferenceEquals"))
+            && (named("pref_type").or_else(|| named("prefs"))).and_then(|v| v.as_name())
+                == Some(c("splitscreen"))
+        {
+            // Two players' GAME OPTIONS.
+            let field = named("field").and_then(|v| v.as_name()).or(match &props {
+                Value::Struct(items) => items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            s.init_split_prefs(self.program);
+            let pref = field.and_then(|f| {
+                s.split_prefs
+                    .iter()
+                    .find(|(k, _)| *k == f)
+                    .map(|(_, p)| p.clone())
+            });
+            let Some(pref) = pref else {
+                return Outcome::Done(false);
+            };
+            if name == c("GetPreferenceString") {
+                return Outcome::Params(vec![(Some(c("ui_string")), Value::String(pref.text))]);
+            } else if name == c("GetPreferenceChecksum") {
+                return match pref.checksum {
+                    Some(sum) => Outcome::Params(vec![(Some(c("checksum")), Value::Name(sum))]),
+                    None => Outcome::Done(false),
+                };
+            }
+            let equals = named("equals").and_then(|v| v.as_name());
+            return Outcome::Done(equals.is_some() && pref.checksum == equals);
+        } else if name == c("SetPreferencesFromUI")
+            && named("prefs").and_then(|v| v.as_name()) == Some(c("splitscreen"))
+        {
+            let field = match named("field") {
+                Some(Value::String(f) | Value::LocalString(f)) => Some(c(&f)),
+                Some(Value::Name(n)) => Some(n),
+                _ => None,
+            };
+            if let Some(field) = field {
+                let text = match named("string") {
+                    Some(Value::String(t) | Value::LocalString(t)) => t,
+                    _ => String::new(),
+                };
+                let pref = Pref {
+                    text,
+                    checksum: named("checksum").and_then(|v| v.as_name()),
+                    number: named("time")
+                        .and_then(|v| v.as_int())
+                        .or_else(|| named("score").and_then(|v| v.as_int())),
+                };
+                s.set_split_pref(self.program, field, pref);
+            }
+        } else if name == c("ApplySplitScreenOptions") {
+            // The game type chosen, to be played.
+            s.init_split_prefs(self.program);
+            let game = s
+                .split_prefs
+                .iter()
+                .find(|(k, _)| *k == c("game_type"))
+                .and_then(|(_, p)| p.checksum);
+            if let Some(game) = game {
+                s.game_type = game;
+            }
+        } else if name == c("FillRankingScreen") {
+            // RANKINGS' rows, best first.
+            for (player, score) in s.rankings.clone() {
+                for (script, parent, text) in [
+                    ("player_menu_add_item", "player_list_menu", player),
+                    ("score_menu_add_item", "rankings_list_menu", score),
+                ] {
+                    s.starting.push(Running {
+                        element: self.element,
+                        thread: Thread::new(
+                            c(script),
+                            vec![
+                                (Some(c("parent")), Value::Name(c(parent))),
+                                (Some(c("text")), Value::String(text)),
+                            ],
+                        ),
+                        then: None,
+                    });
+                }
+            }
         } else if name == c("GoalManager_AddViewGoalsList") {
             // View Goals' rows: `view_goals_menu_add_item` for each goal.
             for (id, text, _) in s.goal_list.clone() {

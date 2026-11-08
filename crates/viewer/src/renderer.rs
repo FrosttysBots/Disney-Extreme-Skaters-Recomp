@@ -245,6 +245,9 @@ pub struct Renderer {
     /// Two players: the screen split in two, the second half seen from
     /// this camera (see [`Split`]).
     pub split: Option<Split>,
+    /// Only the second player's character shown, unsplit (Horse: their
+    /// turn).
+    pub solo_character2: bool,
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
@@ -386,6 +389,7 @@ impl Renderer {
             aspect: None,
             hide_character: false,
             split: None,
+            solo_character2: false,
             character2: None,
             min_light: 0.0,
             depth: None,
@@ -840,11 +844,14 @@ impl Renderer {
                     draw(&mut pass, layer, &self.world_pipelines);
                 }
             }
-            if let Some(character) = self.character.as_ref().filter(|_| !self.hide_character) {
+            let first = !self.hide_character && !self.solo_character2;
+            if let Some(character) = self.character.as_ref().filter(|_| first) {
                 pass.set_bind_group(0, &world_globals.bind_group, &[]);
                 draw(&mut pass, character, &self.world_pipelines);
             }
-            if let Some(character) = self.character2.as_ref().filter(|_| self.split.is_some()) {
+            let second = self.split.is_some() || self.solo_character2;
+            if let Some(character) = self.character2.as_ref().filter(|_| second) {
+                pass.set_bind_group(0, &world_globals.bind_group, &[]);
                 draw(&mut pass, character, &self.world_pipelines);
             }
             pass.set_bind_group(0, &world_globals.bind_group, &[]);

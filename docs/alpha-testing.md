@@ -103,11 +103,14 @@ skater is and what it's doing.
 
 - Two players: the main menu's 2 Player, a level, then each player's
   skater ("PLAYER ONE", Ready; "PLAYER TWO", Ready). The level comes up
-  split under the game's TWO PLAYERS menu: Start Game, then Ready, to
-  skate; Split Mode puts the halves side by side. Player two uses the
-  second gamepad, or the arrows with the numpad: 0 ollie (hold, let go),
-  1 flip, 2 grab, 3 grind, 5 revert (no numpad: Right Shift, comma,
-  period, slash, semicolon). Player one keeps W A S D and the first pad.
+  split under the game's TWO PLAYERS menu. Start Game opens GAME
+  OPTIONS: pick Horse, King of the Hill or Score Challenge and its
+  settings, then Ready to play. Split Mode puts the halves side by side.
+  Player two uses the second gamepad, or the arrows with the numpad:
+  0 ollie (hold, let go), 1 flip, 2 grab, 3 grind, 5 revert (no numpad:
+  Right Shift, comma, period, slash, semicolon). Player one keeps W A S D
+  and the first pad. In Horse it's one player at a time: wait for your
+  name, then start a trick before the clock runs out.
 
 - Pushing, steering, ollies and flips/grabs around a level.
 - Grinding rails (each direction is a different grind), and balancing;
@@ -255,10 +258,10 @@ skater is and what it's doing.
 
 ## Known differences from the game
 
-- Not yet: Zurg's UFO launch, and the 2-player games besides free
-  skate (Trick Attack, Graffiti, Slap!, Horse, King of the Hill). In two
-  players' free skate each half shows the viewer's own score, combo and
-  meters, not the game's panel. Every character can be
+- Not yet: Zurg's UFO launch, and King of the Hill's knocking the king
+  over by skating into them. In two players' games each half shows the
+  viewer's own score, combo and meters, not the game's panel. Every
+  character can be
   picked, and every part of the kid's wardrobe, where the career unlocks
   some as goals are won.
 - Warps work for every character; in the game only the Kid's career
