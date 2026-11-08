@@ -21,10 +21,10 @@ to that engine family too.
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals, lips and balance, on any level |
+| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), 2-minute runs, gaps, collectibles, warps, cheats, records |
-| Menus | The game's own screens run from its scripts: main menu, skater and level select, the Skate Shop's Create-A-Skater, pause menu, options |
+| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records |
+| Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit) |
 | Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
 Every format is checked against every file on the US disc (`GEXE52`):
@@ -35,7 +35,29 @@ paths all load. The original export tool corrupted many count and offset
 fields (it turned `0x20` bytes into `0x00`); the parsers repair them, and
 each section below says how.
 
-## Quick start
+## Download
+
+Ready-built Windows programs are on the
+[Releases page](https://github.com/FrosttysBots/Disney-Extreme-Skaters-Recomp/releases):
+
+- **Disney Extreme Skate Adventure.exe** is the game: it plays the opening
+  movies, then the main menu.
+- **DESA Map Viewer.exe** is the same game with the viewer's panel, for
+  flying round the levels, picking animations and debugging.
+
+Put either next to your own disc image (a plain `.iso` / `.gcm` of the US
+GameCube release, `GEXE52`), or pick it with **Open disc image...** the
+first time. No game data comes with them. Settings are kept in
+`%APPDATA%\desa-map-viewer\settings.txt`.
+
+**Video Options** (in the Skate Shop's Options) sets the display mode,
+window size, **Aspect Ratio** (Auto, the window's own shape; or 4:3, 16:10, 16:9, 21:9, 32:9) and
+what fills the **Bars** round a fixed aspect: black, one of the game's
+loading screens, or your own picture saved as `bars.png` or `bars.jpg`
+next to the exe. Menus and cutscenes see up to 21:9 across, so ultrawide
+screens show them whole.
+
+## Building it yourself
 
 1. Install [Rust](https://rustup.rs) (1.85 or newer).
 2. Build the Map Viewer:
@@ -52,6 +74,7 @@ but haven't been tried.
 
 ## Contents
 
+- [Download](#download) the ready-built programs, or [build them](#building-it-yourself)
 - [Map Viewer](#map-viewer): fly around the levels with characters,
   pedestrians and camera paths
 - [Crates](#crates) and [command-line tools](#usage)
@@ -205,8 +228,18 @@ scripts' `CreateParticleSystem` names an emit script, which the
 interpreter runs (`setlife`, `setspeedrange`, `setemittarget`,
 `setcolor`, `emit`...) to throw soft glowing blobs; most emitters are
 made later by goals, so the ones there at the start show. `--run SECONDS`
-with `--skate` screenshots one with that much time left, and `--replay-at
-SECONDS` the replay of it that far in.
+with `--skate` screenshots one with that much time left (with `--goal`,
+the goal's clock), and `--replay-at SECONDS` the replay of it that far in.
+
+**Goals** start as the game's do. What the goal asks (its `goal_text`)
+bounces up mid-screen once its start scripts have run and its pro has had
+their say, then shrinks to the top right and stays
+(`create_panel_block ... style = panel_message_goal`). Goals flagged
+`use_hud_counter` get the game's counter box ("0 | 12 Weak Spots",
+`goal_create_counter`), which pops as the count changes. Won, the goal's
+name, a check and "Complete!" (`goal_success_messages`); lost, an X and
+"Incomplete!" (`goal_fail`). `--goal KIND` with `--skate` screenshots
+one (`--goal Gaps`, `--goal Collect2`...).
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
