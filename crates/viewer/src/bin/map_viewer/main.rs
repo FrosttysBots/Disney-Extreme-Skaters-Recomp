@@ -255,6 +255,30 @@ fn counter_params(b: &Behaviour, program: &qb::vm::Program) -> qb::vm::Params {
         .collect()
 }
 
+/// A goal ended: one of the level's by its type (a score, letters or
+/// race goal), or one played from its scripts, by its name and text.
+enum GoalEnded {
+    Kind(&'static str),
+    Goal(String, String),
+}
+
+/// The game's messages for a goal's end: won, its name, a check and
+/// "Complete!" (`goal_success_messages`), the objective taken down; lost,
+/// an X and "Incomplete!" (`goal_fail`, which takes it down too).
+fn end_messages(s: &mut desa_viewer::screen::Screen, won: bool, name: &str, text: &str) {
+    let string = |t: &str| qb::Value::String(t.to_string());
+    let params = goal_panel_params(&[
+        ("view_goals_text", string(name)),
+        ("goal_text", string(&objective(name, text))),
+    ]);
+    if won {
+        s.destroy_id("current_goal");
+        s.run(qb::checksum("goal_success_messages"), params);
+    } else {
+        s.run(qb::checksum("goal_fail"), params);
+    }
+}
+
 /// Named parameters for the game's panel scripts.
 fn goal_panel_params(pairs: &[(&str, qb::Value)]) -> qb::vm::Params {
     pairs
@@ -2350,6 +2374,9 @@ struct App<'a> {
     /// A goal's objective to pop up as it starts (see `update_game_hud`),
     /// and frames till then.
     goal_popup: Option<(String, u32)>,
+    /// A score, letters or race goal just ended (won, its type), for
+    /// the game's messages (see `update_game_hud`).
+    goal_end: Option<(bool, GoalEnded)>,
     /// The camera turned to look round (yaw, and up or down) and the right
     /// stick as last read; whether the pad's Start was down, to toggle the
     /// pause on pressing it.
@@ -2628,6 +2655,7 @@ impl<'a> App<'a> {
             racing: None,
             goal_run: None,
             goal_popup: None,
+            goal_end: None,
             photo: false,
             movie: None,
             movie_queue: Default::default(),
@@ -4397,6 +4425,7 @@ impl<'a> App<'a> {
         if won || race.left == 0.0 {
             race.over = true;
             model.race_result = Some((won, race.time));
+            self.goal_end = Some((won, GoalEnded::Kind("Race")));
             if won {
                 if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
                     audio.play_named(qb::checksum("GoalDone"), 1.0);
@@ -4639,33 +4668,12 @@ impl<'a> App<'a> {
             // goal's outro: Beach's cargo doors open), then its deactivate
             // told so (`just_won_goal`); lost, just the deactivate.
             let b = &mut level.behaviour;
-            // The game's messages: the goal's name and "Complete!"
-            // (`goal_success_messages`), or "Incomplete!" (`goal_fail`,
-            // which takes the objective down too).
-            let text = |s: &str| qb::Value::String(s.to_string());
-            b.screen_scripts.push((
-                qb::checksum(if won {
-                    "goal_success_messages"
-                } else {
-                    "goal_fail"
-                }),
-                goal_panel_params(&[
-                    ("view_goals_text", text(&run.goal.name)),
-                    (
-                        "goal_text",
-                        text(&objective(&run.goal.name, &run.goal.text)),
-                    ),
-                ]),
+            // The game's messages (see `end_messages`), once the HUD's
+            // next up.
+            self.goal_end = Some((
+                won,
+                GoalEnded::Goal(run.goal.name.clone(), run.goal.text.clone()),
             ));
-            if won {
-                b.screen_calls.push((
-                    qb::checksum("DestroyScreenElement"),
-                    qb::Value::Struct(goal_panel_params(&[(
-                        "id",
-                        qb::Value::Name(qb::checksum("current_goal")),
-                    )])),
-                ));
-            }
             let mut params = b.goal_params.clone();
             if won {
                 if let Some(script) = run.goal.success {
@@ -4769,9 +4777,14 @@ impl<'a> App<'a> {
             }
             run.got[i] = true;
             level.behaviour.set_alive(object, false);
-            let letter = "SKATE".chars().nth(i).unwrap_or('?');
             self.lines_to_say.extend(self.letter_lines[i]);
-            skater.message = Some((letter.to_string(), 1.0));
+            // The letter big on the HUD's right, then kept there with the
+            // others got (`SkateLetter_HUDLetter`).
+            let flag = ["got_S", "got_K", "got_A", "got_T", "got_E"][i];
+            level.behaviour.screen_scripts.push((
+                qb::checksum("SkateLetter_HUDLetter"),
+                goal_panel_params(&[("flag", qb::Value::Name(qb::checksum(flag)))]),
+            ));
             if let Some(audio) = self.audio.as_ref().filter(|_| model.sound) {
                 audio.play_named(qb::checksum("GoalDone"), 1.0);
             }
@@ -4784,6 +4797,7 @@ impl<'a> App<'a> {
         }
         if won || run.left == 0.0 {
             run.over = true;
+            self.goal_end = Some((won, GoalEnded::Kind("Skate")));
             let taken = run.time - run.left;
             let mut best = None;
             if won {
@@ -4824,7 +4838,7 @@ impl<'a> App<'a> {
         run.left = (run.left - dt).max(0.0);
         // A score goal is won as soon as the score's there (the combo
         // banked), and the run ends there.
-        if let Some((score, win)) = run.goal.as_ref().filter(|_| !run.won) {
+        if let Some((score, _)) = run.goal.as_ref().filter(|_| !run.won) {
             if skater.score >= *score {
                 run.won = true;
                 self.cutscene_request = self.success_camera.take();
@@ -4840,8 +4854,16 @@ impl<'a> App<'a> {
                 if let Some(audio) = self.audio.as_ref().filter(|_| self.model.character.sound) {
                     audio.play_named(qb::checksum("GoalDone"), 1.0);
                 }
-                // `win_message_text`, a little longer than a trick's.
-                skater.message = Some((win.clone(), 3.0));
+                self.goal_end = Some((
+                    true,
+                    GoalEnded::Kind(
+                        if matches!(self.model.character.run_goal, Some((true, ..))) {
+                            "ProScore"
+                        } else {
+                            "HighScore"
+                        },
+                    ),
+                ));
             }
         }
         let bailing = matches!(
@@ -4864,6 +4886,12 @@ impl<'a> App<'a> {
                 *time += dt;
                 if (*time > 1.0 && skater.speed().abs() < 20.0) || *time > 5.0 {
                     run.over = true;
+                    if let (Some((pro, ..)), false) = (&self.model.character.run_goal, run.won) {
+                        self.goal_end = Some((
+                            false,
+                            GoalEnded::Kind(if *pro { "ProScore" } else { "HighScore" }),
+                        ));
+                    }
                     // Goals keep their own bests.
                     let kind = match &self.model.character.run_goal {
                         Some((true, ..)) => "pro.",
@@ -5308,6 +5336,21 @@ impl<'a> App<'a> {
                 s.destroy_id("goal_counter_anchor");
             }
             self.hud.counted = None;
+        }
+        // A score, letters or race goal's end: the game's messages, as
+        // for any goal (`goal_success_messages`, `goal_fail`); the
+        // letters' own off the HUD first (`kill_skate_messages`).
+        match self.goal_end.take() {
+            Some((won, GoalEnded::Goal(name, text))) => end_messages(s, won, &name, &text),
+            Some((won, GoalEnded::Kind(kind))) => {
+                if kind == "Skate" {
+                    s.run(qb::checksum("kill_skate_messages"), Vec::new());
+                }
+                if let Some(goal) = desa_viewer::goals::generic_goal(program, &level.id, kind) {
+                    end_messages(s, won, &goal.name, &goal.text);
+                }
+            }
+            None => {}
         }
         if let Some((text, frames)) = self.goal_popup.as_mut().filter(|_| !waiting) {
             if *frames > 0 {
@@ -5867,7 +5910,13 @@ impl<'a> App<'a> {
         let Some(level) = &self.level else {
             return Vec::new();
         };
-        if self.goal_run.is_none() && level.behaviour.active_goal.is_none() {
+        let race = self
+            .racing
+            .as_ref()
+            .filter(|r| !r.over)
+            .and_then(|r| r.points.get(r.next))
+            .map(|p| p.0);
+        if self.goal_run.is_none() && level.behaviour.active_goal.is_none() && race.is_none() {
             return Vec::new();
         }
         let (from, forward) = match &self.skating {
@@ -5880,6 +5929,7 @@ impl<'a> App<'a> {
             .behaviour
             .arrow_targets()
             .into_iter()
+            .chain(race)
             .filter_map(|at| {
                 let to = (at - from).with_y(0.0).normalize_or_zero();
                 (to != Vec3::ZERO && forward != Vec3::ZERO)
@@ -6544,6 +6594,8 @@ impl<'a> App<'a> {
             self.start_goal(index);
         } else if self.letters.is_some() {
             self.start_letters();
+        } else if self.racing.is_some() {
+            self.start_race();
         } else if self.run.is_some() {
             let goal = self.model.character.run_goal.as_ref().map(|(pro, ..)| *pro);
             self.start_run(goal);
