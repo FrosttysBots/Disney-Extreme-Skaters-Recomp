@@ -1,6 +1,8 @@
 //! A level's rails, for grinding: straight segments between rail nodes,
 //! joined where they share an end.
 
+use std::collections::HashSet;
+
 use glam::Vec3;
 
 /// One straight piece of rail.
@@ -31,6 +33,33 @@ pub struct RailHit {
 #[derive(Clone, Debug, Default)]
 pub struct Rails {
     pub segments: Vec<Segment>,
+    /// Each segment's node, the one whose link made it (its name, 0 for
+    /// none): grinding onto the segment reaches it, running its
+    /// `TriggerScript` (a rail gap's start or end, a goal's grind).
+    pub nodes: Vec<u32>,
+    /// How many segments, at the end, move (rails on moving objects: the
+    /// toy cars, the Treehouse's lifeboat, the Hub's crane), put where they
+    /// are each frame by whoever moves them.
+    pub moving: usize,
+    /// Rail nodes flagged `LipOverride`, by name: lips from them may be
+    /// twisted up to `LipAllowAngle_Override` (main.dol 0x800E4568 sets
+    /// the node's bit, 0x80108660 reads it).
+    pub lip_override: HashSet<u32>,
+    /// Rail nodes not there now, by name: not `CreatedAtStart`, or killed
+    /// by a script, and not since created (bit 4 of the node's flags,
+    /// main.dol 0x801CFC74). Their segments can't be got onto or
+    /// grinded into.
+    pub absent: HashSet<u32>,
+    /// The game's chain of rail nodes: each node's position with its next
+    /// and previous nodes' (main.dol 0x800E4400: the first link each way,
+    /// or a `DefaultLine` node's). Where rails fork, grinding takes the
+    /// way the chain goes.
+    pub chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>,
+    /// Segments that aren't a node's link to its next either way round:
+    /// a second link from a node, which the game has no rail for
+    /// (0x800E52C4 only looks along each node's next), only reached
+    /// grinding back to a node's previous.
+    pub off_chain: Vec<bool>,
 }
 
 /// Ends closer than this are the same node.
@@ -38,14 +67,118 @@ const JOIN: f32 = 0.01;
 
 impl Rails {
     pub fn new(segments: Vec<Segment>) -> Self {
+        Self::named(segments.into_iter().map(|s| (s, 0)).collect())
+    }
+
+    /// Rails from segments and their nodes' names (see [`Rails::nodes`]).
+    pub fn named(segments: Vec<(Segment, u32)>) -> Self {
+        // Nodes linked both ways round make the same segment twice: once
+        // is enough (twice, the second is a join back the way it came),
+        // keeping a node's name if either has one.
+        let mut kept: Vec<Segment> = Vec::with_capacity(segments.len());
+        let mut nodes: Vec<u32> = Vec::with_capacity(segments.len());
+        for (s, node) in segments {
+            let same = |k: &Segment| {
+                (k.start.distance(s.start) < JOIN && k.end.distance(s.end) < JOIN)
+                    || (k.start.distance(s.end) < JOIN && k.end.distance(s.start) < JOIN)
+            };
+            if s.length() <= JOIN {
+                continue;
+            }
+            match kept.iter().position(same) {
+                Some(i) => {
+                    if nodes[i] == 0 {
+                        nodes[i] = node;
+                    }
+                }
+                None => {
+                    kept.push(s);
+                    nodes.push(node);
+                }
+            }
+        }
         Rails {
-            segments: segments.into_iter().filter(|s| s.length() > JOIN).collect(),
+            segments: kept,
+            nodes,
+            moving: 0,
+            lip_override: HashSet::new(),
+            absent: HashSet::new(),
+            chain: Vec::new(),
+            off_chain: Vec::new(),
         }
     }
 
+    /// Segment `i`'s node's name, if it has one.
+    /// Adds rails that move (after the level's own), each with its node;
+    /// their segments are then set each frame with [`Rails::segments`].
+    pub fn add_moving(&mut self, segments: Vec<(Segment, u32)>) {
+        for (segment, node) in segments {
+            self.segments.push(segment);
+            self.nodes.push(node);
+            self.moving += 1;
+        }
+    }
+
+    /// Flags the named rail nodes `LipOverride`.
+    pub fn with_lip_override(mut self, nodes: impl IntoIterator<Item = u32>) -> Self {
+        self.lip_override
+            .extend(nodes.into_iter().filter(|&n| n != 0));
+        self
+    }
+
+    /// Whether segment `i`'s node is flagged `LipOverride`.
+    pub fn lip_override(&self, i: usize) -> bool {
+        self.node(i).is_some_and(|n| self.lip_override.contains(&n))
+    }
+
+    /// The game's rail chain (see [`Rails::chain`]).
+    pub fn with_chain(mut self, chain: Vec<(Vec3, Option<Vec3>, Option<Vec3>)>) -> Self {
+        let is_next = |a: Vec3, b: Vec3| {
+            chain.iter().any(|&(n, next, _)| {
+                n.distance(a) < JOIN && next.is_some_and(|x| x.distance(b) < JOIN)
+            })
+        };
+        self.off_chain = self
+            .segments
+            .iter()
+            .map(|s| !chain.is_empty() && !is_next(s.start, s.end) && !is_next(s.end, s.start))
+            .collect();
+        self.chain = chain;
+        self
+    }
+
+    /// Whether segment `i` is a rail in the game's chain (see
+    /// [`Rails::off_chain`]).
+    pub fn on_chain(&self, i: usize) -> bool {
+        !self.off_chain.get(i).copied().unwrap_or(false)
+    }
+
+    /// Creates (or kills) the named rail node, as a script's `Create`.
+    pub fn set_present(&mut self, node: u32, present: bool) {
+        if present {
+            self.absent.remove(&node);
+        } else if node != 0 {
+            self.absent.insert(node);
+        }
+    }
+
+    /// Whether segment `i`'s node is there.
+    pub fn present(&self, i: usize) -> bool {
+        self.node(i).is_none_or(|n| !self.absent.contains(&n))
+    }
+
+    /// Whether segment `i` moves.
+    pub fn is_moving(&self, i: usize) -> bool {
+        i < self.segments.len() && i + self.moving >= self.segments.len()
+    }
+
+    pub fn node(&self, i: usize) -> Option<u32> {
+        self.nodes.get(i).copied().filter(|&n| n != 0)
+    }
+
     /// The rail to grind on moving from `from` to `to` (main.dol
-    /// 0x800E52C4): for each segment, the closest points between it and
-    /// the move; the best scores `distance * (1.122 - |cos|)`, with `cos`
+    /// 0x800E52C4): for each segment that's there and in the chain, the
+    /// closest points between it and the move; the best scores `distance * (1.122 - |cos|)`, with `cos`
     /// between the move and the rail, and it's taken if
     /// `distance * (2 - |cos|)` is within `max_snap`.
     pub fn nearest(&self, from: Vec3, to: Vec3, max_snap: f32) -> Option<RailHit> {
@@ -55,6 +188,9 @@ impl Rails {
         let mut best_score = f32::MAX;
         let mut best = None;
         for (i, segment) in self.segments.iter().enumerate() {
+            if !self.present(i) || !self.on_chain(i) {
+                continue;
+            }
             let (s_lo, s_hi) = (
                 segment.start.min(segment.end),
                 segment.start.max(segment.end),
@@ -83,32 +219,70 @@ impl Rails {
         best
     }
 
-    /// The segment joined to `segment`'s end (or its start, going
-    /// backwards), and whether it runs the same way (its start at that
+    /// The segments joined to `segment`'s end (or its start, going
+    /// backwards), and whether each runs the same way (its start at that
     /// end).
-    pub fn next(&self, segment: usize, forwards: bool) -> Option<(usize, bool)> {
+    pub fn joins(
+        &self,
+        segment: usize,
+        forwards: bool,
+    ) -> impl Iterator<Item = (usize, bool)> + '_ {
         let this = self.segments[segment];
         let at = if forwards { this.end } else { this.start };
+        let back = if forwards { this.start } else { this.end };
         self.segments
             .iter()
             .enumerate()
-            .filter(|&(i, _)| i != segment)
-            .find_map(|(i, s)| {
-                if s.start.distance(at) < JOIN {
-                    Some((i, true))
+            .filter(move |&(i, _)| i != segment)
+            .filter_map(move |(i, s)| {
+                let same = if s.start.distance(at) < JOIN {
+                    true
                 } else if s.end.distance(at) < JOIN {
-                    Some((i, false))
+                    false
                 } else {
-                    None
-                }
-            })
-            // A segment joined both ways round at the same end would be
-            // the one just left, going back: skip it.
-            .filter(|&(i, same)| {
-                let s = self.segments[i];
+                    return None;
+                };
+                // Not the one just left, going back.
                 let other = if same { s.end } else { s.start };
-                let back = if forwards { this.start } else { this.end };
-                other.distance(back) > JOIN
+                (other.distance(back) > JOIN).then_some((i, same))
+            })
+    }
+
+    /// Of the segments there joined on at `segment`'s end (or start,
+    /// going backwards), the one the game's chain goes on to (the node's
+    /// next going the way the rail runs, its previous the other way),
+    /// else the one carrying on straightest; and whether it runs the same
+    /// way.
+    pub fn next(&self, segment: usize, forwards: bool) -> Option<(usize, bool)> {
+        let this = self.segments[segment];
+        let at = if forwards { this.end } else { this.start };
+        let joins: Vec<_> = self
+            .joins(segment, forwards)
+            .filter(|&(i, _)| self.present(i))
+            .collect();
+        let chained = self
+            .chain
+            .iter()
+            .find(|(node, ..)| node.distance(at) < JOIN)
+            .and_then(|&(_, next, prev)| if forwards { next } else { prev });
+        if let Some(to) = chained.filter(|_| joins.len() > 1) {
+            let toward = joins.iter().find(|&&(i, same)| {
+                let s = self.segments[i];
+                (if same { s.end } else { s.start }).distance(to) < JOIN
+            });
+            if let Some(&join) = toward {
+                return Some(join);
+            }
+        }
+        let travel = this.direction() * if forwards { 1.0 } else { -1.0 };
+        joins
+            .into_iter()
+            .filter(|&(i, _)| self.on_chain(i))
+            .max_by(|&(a, sa), &(b, sb)| {
+                let along = |i: usize, same: bool| {
+                    self.segments[i].direction().dot(travel) * if same { 1.0 } else { -1.0 }
+                };
+                along(a, sa).total_cmp(&along(b, sb))
             })
     }
 }
@@ -196,5 +370,105 @@ mod tests {
         assert_eq!(r.next(0, true), Some((1, true)));
         assert_eq!(r.next(1, false), Some((0, false)));
         assert_eq!(r.next(0, false), None);
+    }
+
+    #[test]
+    fn forks_go_the_way_the_chain_goes() {
+        let p = |x: f32, z: f32| Vec3::new(x, 20.0, z);
+        let (a, b, straight, side) = (p(0.0, 0.0), p(100.0, 0.0), p(200.0, 0.0), p(170.0, 70.0));
+        let segments = vec![
+            Segment { start: a, end: b },
+            Segment {
+                start: b,
+                end: straight,
+            },
+            Segment {
+                start: b,
+                end: side,
+            },
+        ];
+        assert_eq!(Rails::new(segments.clone()).next(0, true), Some((1, true)));
+        // The fork's node is chained on to the side branch (its first
+        // link), and back to the start.
+        let chained =
+            Rails::new(segments).with_chain(vec![(a, Some(b), None), (b, Some(side), Some(a))]);
+        assert_eq!(chained.next(0, true), Some((2, true)));
+        // Coming back along the side branch, its node's previous: the start.
+        assert_eq!(chained.next(2, false), Some((0, false)));
+        // The straight branch is no rail of the game's: not got onto.
+        let (from, to) = (
+            p(140.0, 0.0) + Vec3::Y * 10.0,
+            p(150.0, 2.0) + Vec3::Y * 5.0,
+        );
+        assert!(!chained.on_chain(1));
+        assert_eq!(chained.nearest(from, to, 40.0), None);
+        let alone = Rails::new(vec![Segment {
+            start: b,
+            end: straight,
+        }]);
+        assert_eq!(alone.nearest(from, to, 40.0).map(|h| h.segment), Some(0));
+    }
+
+    #[test]
+    fn rails_not_there_are_neither_found_nor_followed() {
+        let segments = rails().segments;
+        let mut r = Rails::named(vec![(segments[0], 1), (segments[1], 2)]);
+        let (from, to) = (Vec3::new(40.0, 30.0, 2.0), Vec3::new(50.0, 25.0, 2.0));
+        r.set_present(1, false);
+        r.set_present(2, false);
+        assert!(r.nearest(from, to, 40.0).is_none());
+        r.set_present(1, true);
+        assert_eq!(r.nearest(from, to, 40.0).map(|h| h.segment), Some(0));
+        assert_eq!(r.next(0, true), None);
+        r.set_present(2, true);
+        assert_eq!(r.next(0, true), Some((1, true)));
+    }
+
+    #[test]
+    fn rails_linked_both_ways_are_one_and_branches_go_straightest() {
+        let p = |x: f32, z: f32| Vec3::new(x, 20.0, z);
+        let r = Rails::new(vec![
+            Segment {
+                start: p(0.0, 0.0),
+                end: p(100.0, 0.0),
+            },
+            // The same, linked back.
+            Segment {
+                start: p(100.0, 0.0),
+                end: p(0.0, 0.0),
+            },
+            // A branch off to the side, then the rail carrying on.
+            Segment {
+                start: p(100.0, 0.0),
+                end: p(100.0, 100.0),
+            },
+            Segment {
+                start: p(200.0, 10.0),
+                end: p(100.0, 0.0),
+            },
+        ]);
+        assert_eq!(r.segments.len(), 3);
+        assert_eq!(r.next(0, true), Some((2, false)));
+        assert_eq!(r.joins(0, true).count(), 2);
+        // A name from whichever way round had one.
+        let named = Rails::named(vec![
+            (
+                Segment {
+                    start: p(0.0, 0.0),
+                    end: p(100.0, 0.0),
+                },
+                0,
+            ),
+            (
+                Segment {
+                    start: p(100.0, 0.0),
+                    end: p(0.0, 0.0),
+                },
+                7,
+            ),
+        ]);
+        assert_eq!(named.segments.len(), 1);
+        assert_eq!(named.node(0), Some(7));
+        assert_eq!(Rails::new(named.segments.clone()).node(0), None);
     }
 }

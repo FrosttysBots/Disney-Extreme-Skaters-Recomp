@@ -16,10 +16,10 @@
 
 use std::collections::HashMap;
 
-use qb::checksum;
 use qb::token::Token;
-use qb::vm::Program;
-use skate::{GapFlags, GapTrigger};
+use qb::vm::{Host, Outcome, Program, Thread};
+use qb::{Value, checksum};
+use skate::{GapFlags, GapTrick, GapTrigger, TrickNeed};
 
 use crate::nodes::LevelNodes;
 
@@ -46,19 +46,187 @@ pub fn teleports(nodes: &LevelNodes, program: &Program) -> HashMap<u32, usize> {
         .collect()
 }
 
-/// For each collision object whose trigger script starts or ends a gap:
-/// what it does. (`EndGap`s without a name and score belong to goals.)
-pub fn gaps(nodes: &LevelNodes, program: &Program) -> HashMap<u32, GapTrigger> {
+/// What a teleporter does besides moving the skater: the sound it plays
+/// (`playsound bigsplash` for water, `arc5` for Pizza Planet's) and the
+/// message it shows (`Create_Panel_Message text = ...`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TeleportEffect {
+    pub sound: Option<u32>,
+    pub message: Option<String>,
+    /// What it creates or kills on the way (`create prefix = "toiletpaper"`
+    /// restocks the Hub's grocery store): a name or a name's start, and
+    /// whether it's created.
+    pub creates: Vec<(CreateTarget, bool)>,
+    /// The movie it puts on the level's screen (the Hub's drive-in, its
+    /// `playmovie ... mesh = moviescreen`), or that it stops it
+    /// (`Stopmovie`, on the way out).
+    pub movie: Option<Option<(String, bool)>>,
+}
+
+/// What a `create` or `kill` names.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CreateTarget {
+    Name(u32),
+    Prefix(String),
+}
+
+/// Catches a trigger script's sound and message.
+struct Catch<'a> {
+    program: &'a Program,
+    effect: TeleportEffect,
+}
+
+impl Host for Catch<'_> {
+    fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if name == checksum("playsound") || name == checksum("obj_playsound") {
+            if let Value::Struct(items) = args {
+                let sound = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                });
+                self.effect.sound = self.effect.sound.or(sound);
+            }
+        } else if name == checksum("PlayMovie") && args.get(checksum("mesh")).is_some() {
+            if let Some(movie) = crate::behaviour::screen_movie(args) {
+                self.effect.movie = Some(Some(movie));
+            }
+        } else if name == checksum("StopMovie") {
+            self.effect.movie = Some(None);
+        } else if name == checksum("create") || name == checksum("kill") {
+            let created = name == checksum("create");
+            let target = match (args.get(checksum("Name")), args.get(checksum("prefix"))) {
+                (Some(Value::Name(n)), _) => Some(CreateTarget::Name(*n)),
+                (_, Some(Value::String(p) | Value::LocalString(p))) => {
+                    Some(CreateTarget::Prefix(p.clone()))
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.effect.creates.push((target, created));
+            }
+        } else if name == checksum("Create_Panel_Message")
+            || name == checksum("CreateScreenElement")
+        {
+            // (The text may sit in a struct of its own: `CreateScreenElement
+            // { ... text = ... }`.)
+            let field = args.get(checksum("text")).or_else(|| match args {
+                Value::Struct(items) => items
+                    .iter()
+                    .find_map(|(k, v)| k.is_none().then(|| v.get(checksum("text"))).flatten()),
+                _ => None,
+            });
+            let text = match field {
+                Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                Some(Value::Name(n)) => match self.program.value(*n) {
+                    Some(Value::String(s) | Value::LocalString(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            self.effect.message = self.effect.message.take().or(text);
+        }
+        Outcome::Done(false)
+    }
+}
+
+/// Each teleporter's sound and message, run from its trigger script.
+pub fn teleport_effects(nodes: &LevelNodes, program: &Program) -> HashMap<u32, TeleportEffect> {
+    let teleports = teleports(nodes, program);
     nodes
         .geometry_scripts
         .iter()
+        .filter(|(object, _)| teleports.contains_key(object))
+        .map(|&(object, script)| {
+            let mut host = Catch {
+                program,
+                effect: TeleportEffect::default(),
+            };
+            let mut thread = Thread::new(script, Vec::new());
+            // Through any waits (a panel message's) to the end.
+            for _ in 0..20 {
+                if thread.is_finished() {
+                    break;
+                }
+                thread.run(program, &mut host, 1.0);
+            }
+            (object, host.effect)
+        })
+        .collect()
+}
+
+/// Catches what a trigger script shatters (`ShatterAndDie Name = Box03`:
+/// `kill` and `Shatter` the box).
+#[derive(Default)]
+struct Breaks {
+    killed: Vec<u32>,
+    sound: Option<u32>,
+}
+
+impl Host for Breaks {
+    fn command(&mut self, _target: Option<u32>, name: u32, args: &Value) -> Outcome {
+        if (name == checksum("playsound") || name == checksum("obj_playsound"))
+            && self.sound.is_none()
+        {
+            if let Value::Struct(items) = args {
+                self.sound = items.iter().find_map(|(k, v)| match (k, v) {
+                    (None, Value::Name(n)) => Some(*n),
+                    _ => None,
+                });
+            }
+        }
+        if name == checksum("Shatter") {
+            if let Some(n) = args.get(checksum("Name")).and_then(Value::as_name) {
+                if !self.killed.contains(&n) {
+                    self.killed.push(n);
+                }
+            }
+        }
+        Outcome::Done(false)
+    }
+}
+
+/// The level's breakables: for each trigger object (not a teleporter or a
+/// gap) whose script shatters things when the skater touches it, its
+/// script, what it shatters (sector or object names) and the sound it
+/// plays.
+pub fn breakables(
+    nodes: &LevelNodes,
+    program: &Program,
+) -> HashMap<u32, (u32, Vec<u32>, Option<u32>)> {
+    let teleports = teleports(nodes, program);
+    let gaps = gaps(nodes, program);
+    nodes
+        .geometry_scripts
+        .iter()
+        .filter(|(object, _)| !teleports.contains_key(object) && !gaps.contains_key(object))
+        .filter_map(|&(object, script)| {
+            let mut host = Breaks::default();
+            let mut thread = Thread::new(script, Vec::new());
+            thread.run(program, &mut host, 0.0);
+            (!host.killed.is_empty()).then_some((object, (script, host.killed, host.sound)))
+        })
+        .collect()
+}
+
+/// For each collision object, or rail node, whose trigger script starts
+/// or ends a gap: what it does. (`EndGap`s without a name and score belong
+/// to goals.)
+pub fn gaps(nodes: &LevelNodes, program: &Program) -> HashMap<u32, Vec<GapTrigger>> {
+    nodes
+        .geometry_scripts
+        .iter()
+        .chain(&nodes.rail_scripts)
         .filter_map(|&(object, script)| Some((object, gap_in(program, script, DEPTH)?)))
         .collect()
 }
 
-/// The first `StartGap` or `EndGap` a script (or one it calls) makes.
-fn gap_in(program: &Program, script: u32, depth: u32) -> Option<GapTrigger> {
+/// The `StartGap`s and `EndGap`s a script makes (Zurg's spine starts
+/// three trick spots and ends the way back's three), or failing those,
+/// the first script it calls that makes any.
+fn gap_in(program: &Program, script: u32, depth: u32) -> Option<Vec<GapTrigger>> {
     let body = program.script(script)?;
+    let mut found = Vec::new();
+    let mut called = None;
     let (start, end) = (checksum("StartGap"), checksum("EndGap"));
     for (i, token) in body.iter().enumerate() {
         let at_line_start =
@@ -72,25 +240,38 @@ fn gap_in(program: &Program, script: u32, depth: u32) -> Option<GapTrigger> {
             .take_while(|t| !matches!(t, Token::EndOfLine | Token::LineNumber(_)))
             .collect();
         if *name == start || *name == end {
-            if let Some(gap) = parse_gap(*name == start, &line) {
-                return Some(gap);
+            if let Some(gap) = parse_gap(program, *name == start, &line) {
+                found.push(gap);
             }
-        } else if depth > 0 && *name != script && program.has_script(*name) {
-            if let Some(gap) = gap_in(program, *name, depth - 1) {
-                return Some(gap);
-            }
+        } else if called.is_none() && depth > 0 && *name != script && program.has_script(*name) {
+            called = gap_in(program, *name, depth - 1);
         }
     }
-    None
+    if found.is_empty() {
+        called
+    } else {
+        Some(found)
+    }
+}
+
+/// The lip tricks' combinations (`KeyCombo = Lip_TriangleL`: a lip trick
+/// there); any other is a trick slot (`Air_CircleL`).
+fn is_lip_combo(name: u32) -> bool {
+    ["", "U", "D", "L", "R", "UL", "UR", "DL", "DR"]
+        .iter()
+        .any(|d| checksum(&format!("Lip_Triangle{d}")) == name)
 }
 
 /// A `StartGap` or `EndGap` call's arguments.
-fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
+fn parse_gap(program: &Program, start: bool, args: &[&Token]) -> Option<GapTrigger> {
     let key = |k: &str| checksum(k);
     let mut id = None;
     let mut flags = GapFlags::default();
     let mut text = None;
     let mut score = None;
+    let mut script = None;
+    let (mut trick_script, mut lip, mut trick_text) = (None, false, None);
+    let mut slot = None;
     let mut i = 0;
     while i + 2 < args.len() + 1 {
         let (Some(Token::Name(k)), Some(Token::Equals)) = (args.get(i), args.get(i + 1)) else {
@@ -127,7 +308,36 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
                     flags.require_rail = true;
                 } else if flag == key("REQUIRE_LIP") {
                     flags.require_lip = true;
+                } else if flag == key("PURE_RAIL") {
+                    flags.pure_rail = true;
                 }
+            }
+        } else if *k == key("trickscript") {
+            if let Some(Token::Name(v)) = value {
+                trick_script = Some(*v);
+            }
+        } else if *k == key("KeyCombo") {
+            if let Some(Token::Name(n)) = value {
+                if is_lip_combo(*n) {
+                    lip = true;
+                } else {
+                    slot = Some(*n);
+                }
+            }
+        } else if *k == key("TrickText") {
+            // (A string, or a global holding one: Zurg's "Spine Transfer".)
+            match value {
+                Some(Token::String(s)) => trick_text = Some(s.clone()),
+                Some(Token::Name(n)) => {
+                    if let Some(Value::String(s) | Value::LocalString(s)) = program.value(*n) {
+                        trick_text = Some(s.clone());
+                    }
+                }
+                _ => {}
+            }
+        } else if *k == key("Gapscript") {
+            if let Some(Token::Name(v)) = value {
+                script = Some(*v);
             }
         } else if *k == key("text") {
             if let Some(Token::String(s)) = value {
@@ -144,12 +354,30 @@ fn parse_gap(start: bool, args: &[&Token]) -> Option<GapTrigger> {
     }
     let id = id?;
     if start {
-        Some(GapTrigger::Start { id, flags })
+        // A trick spot: what it asks, and its script.
+        let trick = trick_script.map(|script| GapTrick {
+            needs: if lip {
+                TrickNeed::Lip
+            } else if let Some(slot) = slot {
+                TrickNeed::Slot(slot)
+            } else if let Some(text) = trick_text {
+                TrickNeed::Named(text)
+            } else {
+                TrickNeed::Any
+            },
+            script,
+        });
+        Some(GapTrigger::Start { id, flags, trick })
     } else {
+        // A goal's gap ends without a name or points, but with its script.
+        if script.is_none() && (text.is_none() || score.is_none()) {
+            return None;
+        }
         Some(GapTrigger::End {
             id,
-            text: text?,
-            score: score?,
+            text: text.unwrap_or_default(),
+            score: score.unwrap_or(0),
+            script,
         })
     }
 }
@@ -247,22 +475,86 @@ mod tests {
         };
         let found = gaps(&nodes, &program);
         assert_eq!(
-            found.get(&1),
-            Some(&GapTrigger::Start {
-                id: checksum("ChainLinkGap"),
-                flags: GapFlags {
-                    cancel_ground: true,
-                    ..GapFlags::default()
-                }
-            })
+            found.get(&1).map(|t| &t[..]),
+            Some(
+                &[GapTrigger::Start {
+                    id: checksum("ChainLinkGap"),
+                    flags: GapFlags {
+                        cancel_ground: true,
+                        ..GapFlags::default()
+                    },
+                    trick: None,
+                }][..]
+            )
         );
         assert_eq!(
-            found.get(&2),
-            Some(&GapTrigger::End {
-                id: checksum("ChainLinkGap"),
-                text: "Chain Link Gap".into(),
-                score: 100
+            found.get(&2).map(|t| &t[..]),
+            Some(
+                &[GapTrigger::End {
+                    id: checksum("ChainLinkGap"),
+                    text: "Chain Link Gap".into(),
+                    score: 100,
+                    script: None,
+                }][..]
+            )
+        );
+    }
+
+    #[test]
+    fn one_script_starts_several_trick_spots() {
+        let mut program = Program::new();
+        program.add_value(
+            checksum("SpineText"),
+            Value::String("Spine Transfer".into()),
+        );
+        let n = |s: &str| Token::Name(checksum(s));
+        // Spine: StartGap GapID = A trickscript = GotA TrickText = SpineText
+        //        StartGap GapID = B trickscript = GotB KeyCombo = Air_CircleL
+        program.add_script(
+            checksum("Spine"),
+            vec![
+                n("StartGap"),
+                n("GapID"),
+                Token::Equals,
+                n("A"),
+                n("trickscript"),
+                Token::Equals,
+                n("GotA"),
+                n("TrickText"),
+                Token::Equals,
+                n("SpineText"),
+                Token::EndOfLine,
+                n("StartGap"),
+                n("GapID"),
+                Token::Equals,
+                n("B"),
+                n("trickscript"),
+                Token::Equals,
+                n("GotB"),
+                n("KeyCombo"),
+                Token::Equals,
+                n("Air_CircleL"),
+                Token::EndOfLine,
+            ],
+        );
+        let nodes = LevelNodes {
+            geometry_scripts: vec![(1, checksum("Spine"))],
+            ..LevelNodes::default()
+        };
+        let found = gaps(&nodes, &program);
+        let needs: Vec<_> = found[&1]
+            .iter()
+            .map(|t| match t {
+                GapTrigger::Start { trick: Some(t), .. } => t.needs.clone(),
+                _ => TrickNeed::Any,
             })
+            .collect();
+        assert_eq!(
+            needs,
+            vec![
+                TrickNeed::Named("Spine Transfer".into()),
+                TrickNeed::Slot(checksum("Air_CircleL")),
+            ]
         );
     }
 

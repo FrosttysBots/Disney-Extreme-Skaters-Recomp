@@ -3,7 +3,7 @@
 //! A `.qb` file is a list of definitions: data such as
 //! `NodeArray = [ { Pos = (1.0, 2.0, 3.0) Class = RailNode } ]`, and
 //! scripts. Data definitions become [`Value`] trees; scripts are kept as a
-//! token range for [`decompile`](crate::decompile).
+//! token range for [`decompile`](fn@crate::decompile).
 
 use std::ops::Range;
 

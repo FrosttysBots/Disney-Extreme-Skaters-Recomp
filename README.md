@@ -21,9 +21,11 @@ to that engine family too.
 | Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
 | Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air, manuals, lips and balance, on any level |
+| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay, menus, audio | Not started yet |
+| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records |
+| Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit) |
+| Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
 Every format is checked against every file on the US disc (`GEXE52`):
 69 archives (5,616 files), 3,364 textures and 48 loading screens, 408
@@ -33,7 +35,29 @@ paths all load. The original export tool corrupted many count and offset
 fields (it turned `0x20` bytes into `0x00`); the parsers repair them, and
 each section below says how.
 
-## Quick start
+## Download
+
+Ready-built Windows programs are on the
+[Releases page](https://github.com/FrosttysBots/Disney-Extreme-Skaters-Recomp/releases):
+
+- **Disney Extreme Skate Adventure.exe** is the game: it plays the opening
+  movies, then the main menu.
+- **DESA Map Viewer.exe** is the same game with the viewer's panel, for
+  flying round the levels, picking animations and debugging.
+
+Put either next to your own disc image (a plain `.iso` / `.gcm` of the US
+GameCube release, `GEXE52`), or pick it with **Open disc image...** the
+first time. No game data comes with them. Settings are kept in
+`%APPDATA%\desa-map-viewer\settings.txt`.
+
+**Video Options** (in the Skate Shop's Options) sets the display mode,
+window size, **Aspect Ratio** (Auto, the window's own shape; or 4:3, 16:10, 16:9, 21:9, 32:9) and
+what fills the **Bars** round a fixed aspect: black, one of the game's
+loading screens, or your own picture saved as `bars.png` or `bars.jpg`
+next to the exe. Menus and cutscenes see up to 21:9 across, so ultrawide
+screens show them whole.
+
+## Building it yourself
 
 1. Install [Rust](https://rustup.rs) (1.85 or newer).
 2. Build the Map Viewer:
@@ -50,6 +74,7 @@ but haven't been tried.
 
 ## Contents
 
+- [Download](#download) the ready-built programs, or [build them](#building-it-yourself)
 - [Map Viewer](#map-viewer): fly around the levels with characters,
   pedestrians and camera paths
 - [Crates](#crates) and [command-line tools](#usage)
@@ -83,6 +108,13 @@ folders above it; otherwise use **Open disc image...** in the panel. It
 remembers the disc, the last level, the character and the camera speed in
 `%APPDATA%\desa-map-viewer\settings.txt`.
 
+The same build makes `target/release/desa-game.exe`: the game on its own,
+without the viewer's panel, debug keys, rails, spawn markers or map. It
+plays the opening movies, then comes up in the main menu (Esc pauses
+while skating). It shares the viewer's settings, so a disc opened in
+either is found by both; with no disc found it shows the panel to open
+one.
+
 The side panel lists the 11 levels and has toggles for the sky, rails
 (magenta tubes), spawn points (green = player 1 start, blue = others) and
 collision, a brighten slider for dark areas, camera speed, and every
@@ -108,9 +140,9 @@ frames.
 **Skate** puts the character on the level (an alpha: see
 [docs/alpha-testing.md](docs/alpha-testing.md) for how to test it and the
 full controls): W pushes, S brakes, A/D steer,
-holding Space crouches and letting go ollies, E grinds (ollie at a rail and
-press E: like the game, grinds start in the air, within half a second of the
-press),
+holding Space crouches and letting go ollies, E grinds (ollie at a rail
+holding E: like the game, grinds start in the air, with the button held;
+with the simplified controls a press within half a second does),
 tapping W then S starts a manual, Q flips and F grabs in the air (with a
 direction: W, S, A, D), and Esc stops. Manuals balance with W and S, grinds
 with A and D, on a meter at the bottom of the screen; the combo and the
@@ -132,7 +164,7 @@ around takes over from wherever it is.
 | Tab | Next spawn point |
 | K | Cycle collision view |
 | R | Back to the start |
-| W / S, A / D, Space, E, Esc | While skating: push, brake, steer, crouch (let go to ollie), grind (in the air), stop |
+| W / S, A / D, Space, E, Esc | While skating: push, brake (in the air, lean forward or back), steer, crouch (let go to ollie), grind (in the air), stop |
 | W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
 | F + W / S / A / D | On the ground or in a manual: manuals 2 to 5 (each character has five) |
 | W / S / A / D with E | Onto a rail: grinds 2 to 5 (none: grind 1) |
@@ -141,13 +173,31 @@ around takes over from wherever it is.
 | E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
 | R as you land from vert | Revert (keeps the combo going into a manual) |
 | Tab | While skating: to the next spawn point |
+| J / L | While skating: look round (springs back) |
+| P | While skating: pause (Resume, Restart, Stop skating) |
+| M | While skating: show or hide the map (the level from above round the skater, drawn from its collision, with collectibles, letters and warps marked) |
+| C | While skating: the next of the game's chase cameras (`Skater_Camera_Array`: near, standard, far, standard LTG) |
+| F12 | Save a picture of the window to `Pictures\DESA Map Viewer` |
 
 A gamepad works too while skating, laid out like the GameCube game: the
-left stick or D-pad steers (up pushes, down brakes), A crouches and ollies,
-X flips, B grabs, Y grinds, and the shoulder buttons revert. It rumbles
+left stick or D-pad steers (up pushes, down brakes; in the air they lean), A crouches and ollies,
+X flips, B grabs, Y grinds, the shoulder buttons revert, the right stick
+looks round and Start pauses. It rumbles
 where the game's does (ollies, landings, grinds, reverts, flails, bails);
 the panel's Rumble box turns that off, and the `pad_check` example
 checks that a pad can rumble.
+
+The panel's **Simplified controls** box (or the game's Options > Controls >
+Pro Controls, off) plays the game's simplified scheme: the trick tables'
+`Simplified` entries, where any trick button does the direction's trick,
+grinds and lips too, and landing mid-trick loses the combo rather than
+bailing. Characters stand at their appearances' sizes (Jessie 1.12, the
+kids 0.85). The created **Kid**, boy or girl, is dressed from the Skate
+Shop's part lists, under the panel's Kid's clothes or through the game's
+own Edit Skater, Create-A-Skaters (six saved kids) and Extreme Skate
+Crew menus in the shop, with the parts' colours, the board's deck and
+griptape, and the kid's body shape. Zurg's Home's low gravity zones work
+as its scripts set them up (a goal turning on `CHEAT_MOON`).
 
 The panel's **2 minute run** is the game's single session (Trick Attack):
 two minutes from the level's start, the last combo counting once it
@@ -161,9 +211,35 @@ up within 8 feet, as `SkateLetter_InitLetter` sets. `--letters` with
 `--skate` screenshots it. The **High Score** and **Pro Score goals** read
 `AddGoal_HighScore` and `AddGoal_ProScore` the same way: the score (a
 global such as `pride_highscore_score`), the time and the goal's name;
-`--score-goal high|pro` screenshots one. `--run SECONDS`
-with `--skate` screenshots one with that much time left, and `--replay-at
-SECONDS` the replay of it that far in.
+`--score-goal high|pro` screenshots one. **Collectibles** are the
+character's `AddGoal_Collect25` objects (`jessie_collect25_objects`: 25 on
+each level of its world), shown spinning (`Obj_RotY speed = 250`) and
+hovering (`Obj_Hover`) while skating, picked up within 7 feet with the
+gap sound, and kept collected in the settings file. **Warps** come from
+the levels' scripts too: the Hub's portals are the sectors whose scripts
+call `LevelWarp level_num = N filmStrip = ...` (the level being the `N`th
+of `level_select_menu_level_info`), opening as the skater comes within 60
+feet; each level's `Warp_Master_Hub` (`HubWarp`, the Kid's way back in the
+game) is shown to everyone with the game's own sparkle
+(`TRG_Warp_Particle_Hub`), and each Hub portal starts its `warpParticle`
+as it opens. **Particle effects**
+(campfires, steam) come from the levels' `ParticleEmitter` nodes: their
+scripts' `CreateParticleSystem` names an emit script, which the
+interpreter runs (`setlife`, `setspeedrange`, `setemittarget`,
+`setcolor`, `emit`...) to throw soft glowing blobs; most emitters are
+made later by goals, so the ones there at the start show. `--run SECONDS`
+with `--skate` screenshots one with that much time left (with `--goal`,
+the goal's clock), and `--replay-at SECONDS` the replay of it that far in.
+
+**Goals** start as the game's do. What the goal asks (its `goal_text`)
+bounces up mid-screen once its start scripts have run and its pro has had
+their say, then shrinks to the top right and stays
+(`create_panel_block ... style = panel_message_goal`). Goals flagged
+`use_hud_counter` get the game's counter box ("0 | 12 Weak Spots",
+`goal_create_counter`), which pops as the count changes. Won, the goal's
+name, a check and "Complete!" (`goal_success_messages`); lost, an X and
+"Incomplete!" (`goal_fail`). `--goal KIND` with `--skate` screenshots
+one (`--goal Gaps`, `--goal Collect2`...).
 | P | Play or pause the character |
 | [ and ] | Previous or next animation |
 | F1 | Hide or show the panel |
@@ -596,7 +672,9 @@ units high and grinds the Hub's long rails.
 
 [docs/physics-notes.md](docs/physics-notes.md) maps every function read,
 with addresses. Combos score as the game does: repeats degrade (100% down
-to 50%), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
+to 50%) in a 2 minute run or a goal, as in the game's single session and
+career (free skating doesn't degrade them, and its score is the best
+combo rather than their sum, as the game's free skate has it), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
 earn points every frame, and the total is the points times the number of
 tricks. The special meter fills with points; full, each character's
 special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
@@ -610,8 +688,9 @@ Lip tricks stall on the coping of quarter pipes with a rail along it:
 press E (with a direction for other lips) as you launch off the lip, then
 balance with A and D. Holding R going up a quarter pipe spine-transfers
 to the ramp behind. Gaps score from the levels' trigger scripts, and
-teleporters (like the Hub's harbour water) put the skater back. Not yet:
-moving objects, and a frame-by-frame check against Dolphin.
+teleporters (like the Hub's harbour water) put the skater back. Moving
+level pieces carry their collision with them as their scripts move them.
+Not yet: a frame-by-frame check against Dolphin.
 Turning rates are radians a second (the steering code turns by the rate
 times the frame time), and the camera distances are feet (the camera
 code multiplies them by 12).

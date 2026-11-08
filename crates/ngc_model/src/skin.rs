@@ -37,7 +37,7 @@
 //! Groups are concatenated in vertex order, so mesh indices refer to them
 //! directly. The original tool's habit of turning `0x20` bytes into `0x00`
 //! (see `ngc_collision`) hits these counts too: a group of 32 vertices can
-//! read as 0. [`read`] tries every reading of each count and keeps the one
+//! read as 0. `read` tries every reading of each count and keeps the one
 //! where every group header lines up and the totals match.
 
 use crate::{Error, Result};

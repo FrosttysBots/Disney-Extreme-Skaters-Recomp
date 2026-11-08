@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use qb::{Definition, Symbols, Value, checksum, decompile, parse_definitions, tokenize};
+use qb::{Definition, Symbols, Token, Value, checksum, decompile, parse_definitions, tokenize};
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -44,6 +44,7 @@ fn real_scripts() {
     }
 
     let (mut scripts, mut nodes) = (0, 0);
+    let (mut compiled, mut mismatched) = (0, Vec::new());
     for (path, tokens) in &all {
         let defs = parse_definitions(tokens).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         scripts += defs
@@ -68,9 +69,56 @@ fn real_scripts() {
             "{}: unknown token",
             path.display()
         );
+        // And the text compiles back to the same (but `Random` choices,
+        // which the source compiler doesn't read).
+        let random = tokens
+            .iter()
+            .any(|(_, t)| matches!(t, Token::Random(..) | Token::Jump(_)));
+        if !random {
+            let plain = |tokens: &[(usize, Token)]| -> Vec<Token> {
+                tokens
+                    .iter()
+                    .map(|(_, t)| t.clone())
+                    .filter(|t| {
+                        !matches!(
+                            t,
+                            Token::EndOfLine | Token::LineNumber(_) | Token::ChecksumName(..)
+                        )
+                    })
+                    .collect()
+            };
+            match qb::source::compile(&text) {
+                Ok(again) if plain(&again) == plain(tokens) => compiled += 1,
+                Ok(again) => {
+                    let (a, b) = (plain(tokens), plain(&again));
+                    let at = a
+                        .iter()
+                        .zip(&b)
+                        .position(|(x, y)| x != y)
+                        .unwrap_or(a.len().min(b.len()));
+                    mismatched.push(format!(
+                        "{}: {:?} read back as {:?}",
+                        path.display(),
+                        &a[at..(at + 4).min(a.len())],
+                        &b[at..(at + 4).min(b.len())]
+                    ));
+                }
+                Err(e) => mismatched.push(format!("{}: {e}", path.display())),
+            }
+        }
     }
+    assert!(
+        mismatched.is_empty(),
+        "{} didn't read back:
+{}",
+        mismatched.len(),
+        mismatched.join(
+            "
+"
+        )
+    );
     println!(
-        "{} files, {scripts} scripts, {nodes} level nodes, {} names",
+        "{} files ({compiled} compiled back), {scripts} scripts, {nodes} level nodes, {} names",
         files.len(),
         symbols.len()
     );
