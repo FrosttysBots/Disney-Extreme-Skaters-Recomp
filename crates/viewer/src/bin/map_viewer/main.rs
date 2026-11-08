@@ -279,6 +279,25 @@ fn end_messages(s: &mut desa_viewer::screen::Screen, won: bool, name: &str, text
     }
 }
 
+/// A race's settings for its HUD counter's scripts (its caption read from
+/// the global it names), as `counter_params` a goal's.
+fn race_counter_params(program: &qb::vm::Program, level: &str) -> qb::vm::Params {
+    let caption = qb::checksum("hud_counter_caption");
+    desa_viewer::goals::generic_goal(program, level, "Race")
+        .map(|g| g.params)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(k, _)| *k != qb::checksum("trigger_obj_id"))
+        .map(|(k, v)| match v {
+            qb::Value::Name(n) if k == caption => (
+                Some(k),
+                program.value(n).cloned().unwrap_or(qb::Value::Name(n)),
+            ),
+            v => (Some(k), v),
+        })
+        .collect()
+}
+
 /// Named parameters for the game's panel scripts.
 fn goal_panel_params(pairs: &[(&str, qb::Value)]) -> qb::vm::Params {
     pairs
@@ -5444,6 +5463,11 @@ impl<'a> App<'a> {
         // `goal_create_counter`, kept up to date below); others show no
         // count.
         let waiting = s.takes_pad() || level.behaviour.goal_paused;
+        let race_counter = self
+            .racing
+            .as_ref()
+            .filter(|r| !r.over)
+            .map(|r| (r.next.min(r.points.len()), r.points.len()));
         // (A score, letters or race goal over: its objective down, as a
         // goal's end takes it.)
         let goal_on = self.goal_run.as_ref().is_some_and(|r| !r.over)
@@ -5567,6 +5591,15 @@ impl<'a> App<'a> {
                         counter_params(b, program),
                     );
                     self.hud.counted = Some(b.goal_shown());
+                } else if let Some((got, _)) = race_counter {
+                    // A race that counts its waypoints (Canyon's).
+                    if goal_setting(program, &level.id, "Race", "use_hud_counter").is_some() {
+                        s.run(
+                            qb::checksum("goal_create_counter"),
+                            race_counter_params(program, &level.id),
+                        );
+                        self.hud.counted = Some(got);
+                    }
                 }
             }
         }
@@ -5655,7 +5688,11 @@ impl<'a> App<'a> {
             .goal_params
             .iter()
             .any(|(k, _)| *k == Some(qb::checksum("Goal_Flags")));
-        s.goal_counts = (b.goal_shown(), flags.then_some(b.goal_needed));
+        s.goal_counts = match race_counter {
+            // A race's: its waypoints reached, of them all.
+            Some((got, of)) => (got, Some(of)),
+            None => (b.goal_shown(), flags.then_some(b.goal_needed)),
+        };
         let props = |items: Vec<(&str, Value)>| {
             Value::Struct(
                 items
@@ -5789,12 +5826,14 @@ impl<'a> App<'a> {
         // `goal_update_counter` (the new number popping).
         if let Some(counted) = self.hud.counted {
             let b = &level.behaviour;
-            if b.goal_shown() != counted && s.exists("goal_counter_anchor") {
-                s.run(
-                    qb::checksum("goal_update_counter"),
-                    counter_params(b, program),
-                );
-                self.hud.counted = Some(b.goal_shown());
+            let now = race_counter.map_or(b.goal_shown(), |r| r.0);
+            if now != counted && s.exists("goal_counter_anchor") {
+                let params = match race_counter {
+                    Some(_) => race_counter_params(program, &level.id),
+                    None => counter_params(b, program),
+                };
+                s.run(qb::checksum("goal_update_counter"), params);
+                self.hud.counted = Some(now);
             }
         }
         // The trick text: the combo going (its tricks, and its points times
@@ -6879,7 +6918,11 @@ impl<'a> App<'a> {
         }
         // Held still while a warp or goal's offered (`PauseSkaters`), a
         // goal's camera path plays, or paused.
-        if self.warp_offer.is_some() || self.cutscene || self.model.character.paused {
+        let told = self
+            .screen
+            .as_ref()
+            .is_some_and(|s| s.screen.exists("goal_description_anchor"));
+        if self.warp_offer.is_some() || told || self.cutscene || self.model.character.paused {
             // (The pad's still read, for Start.)
             let _ = self.pad_input();
             if let Some((at, time, stood)) = &mut self.warp_spin {
