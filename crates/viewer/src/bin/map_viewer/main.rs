@@ -145,7 +145,7 @@ struct Args {
     #[arg(long, requires = "screenshot", allow_hyphen_values = true)]
     skate_from: Option<String>,
     /// For --skate: skate a two-minute run with this many seconds left on
-    /// its clock
+    /// its clock (with --goal, the goal's clock, if it has one)
     #[arg(long, requires = "skate")]
     run: Option<f32>,
     /// For --skate: which of the game's chase cameras, 0 to 3 (near,
@@ -226,6 +226,34 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
         return Err("width and height must be 16 to 8192".into());
     }
     Ok((w, h))
+}
+
+/// What a goal asks, for its pop-up: its `goal_text`, else its name.
+fn objective(name: &str, text: &str) -> String {
+    if text.is_empty() {
+        name.to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// The objective on screen: what the goal asks, and how far it's got
+/// if it counts.
+fn goal_line(name: &str, text: &str, got: usize, needed: usize) -> String {
+    let asks = objective(name, text);
+    if needed > 0 {
+        format!("{asks}\n{got} of {needed}")
+    } else {
+        asks
+    }
+}
+
+/// Named parameters for the game's panel scripts.
+fn goal_panel_params(pairs: &[(&str, qb::Value)]) -> qb::vm::Params {
+    pairs
+        .iter()
+        .map(|(k, v)| (Some(qb::checksum(k)), v.clone()))
+        .collect()
 }
 
 fn parse_aspect(text: &str) -> Result<(u32, u32), String> {
@@ -1367,6 +1395,8 @@ struct GameHud {
     tricks: usize,
     shown: Option<f32>,
     song: Option<Instant>,
+    /// The goal text last put in `current_goal`.
+    goal_text: String,
 }
 
 /// A movie playing (through ffmpeg: see `desa_viewer::movie`), since
@@ -2310,6 +2340,9 @@ struct App<'a> {
     racing: Option<RaceRun>,
     /// A goal played from its own scripts, under way.
     goal_run: Option<GoalRun>,
+    /// A goal's objective to pop up as it starts (see `update_game_hud`),
+    /// and frames till then.
+    goal_popup: Option<(String, u32)>,
     /// The camera turned to look round (yaw, and up or down) and the right
     /// stick as last read; whether the pad's Start was down, to toggle the
     /// pause on pressing it.
@@ -2587,6 +2620,7 @@ impl<'a> App<'a> {
             letter_lines: [None; 5],
             racing: None,
             goal_run: None,
+            goal_popup: None,
             photo: false,
             movie: None,
             movie_queue: Default::default(),
@@ -3450,7 +3484,9 @@ impl<'a> App<'a> {
                 .map(|(pro, t)| (pro, t.name.clone(), t.score));
             self.model.character.run_goal_won = target.as_ref().map(|_| false);
             if let Some(pro) = goal {
-                self.goal_cutscenes(if pro { "ProScore" } else { "HighScore" });
+                let kind = if pro { "ProScore" } else { "HighScore" };
+                self.goal_cutscenes(kind);
+                self.queue_objective(kind);
             }
             self.run = Some(Run {
                 left: target.as_ref().map_or(RUN_TIME, |t| t.time),
@@ -4292,6 +4328,7 @@ impl<'a> App<'a> {
         }
         let left = first.2;
         let first_script = first.1;
+        self.queue_objective("Race");
         self.racing = Some(RaceRun {
             points,
             next: 0,
@@ -4370,6 +4407,15 @@ impl<'a> App<'a> {
     /// manager told it's on. The scripts set its flags as they're done
     /// (a gap goal's gaps' `Gapscript`s); enough of them, or a script's
     /// `GoalManager_WinGoal`, wins it.
+    /// The objective of the level's goal of `kind` to pop up as it starts:
+    /// its `goal_text` (else its name).
+    fn queue_objective(&mut self, kind: &str) {
+        let Some(level) = &self.level else { return };
+        self.goal_popup =
+            desa_viewer::goals::generic_goal(level.behaviour.program(), &level.id, kind)
+                .map(|g| (objective(&g.name, &g.text), 2));
+    }
+
     fn start_goal(&mut self, index: usize) {
         if self.skating.is_some() {
             self.toggle_skate();
@@ -4434,6 +4480,7 @@ impl<'a> App<'a> {
             b.run_level_script(script, params.clone());
         }
         self.goal_cutscenes(&kind);
+        self.queue_objective(&kind);
         let tetris = desa_viewer::goals::Tetris::of(&goal).map(TetrisRun::new);
         self.goal_run = Some(GoalRun {
             kind,
@@ -4585,6 +4632,33 @@ impl<'a> App<'a> {
             // goal's outro: Beach's cargo doors open), then its deactivate
             // told so (`just_won_goal`); lost, just the deactivate.
             let b = &mut level.behaviour;
+            // The game's messages: the goal's name and "Complete!"
+            // (`goal_success_messages`), or "Incomplete!" (`goal_fail`,
+            // which takes the objective down too).
+            let text = |s: &str| qb::Value::String(s.to_string());
+            b.screen_scripts.push((
+                qb::checksum(if won {
+                    "goal_success_messages"
+                } else {
+                    "goal_fail"
+                }),
+                goal_panel_params(&[
+                    ("view_goals_text", text(&run.goal.name)),
+                    (
+                        "goal_text",
+                        text(&objective(&run.goal.name, &run.goal.text)),
+                    ),
+                ]),
+            ));
+            if won {
+                b.screen_calls.push((
+                    qb::checksum("DestroyScreenElement"),
+                    qb::Value::Struct(goal_panel_params(&[(
+                        "id",
+                        qb::Value::Name(qb::checksum("current_goal")),
+                    )])),
+                ));
+            }
             let mut params = b.goal_params.clone();
             if won {
                 if let Some(script) = run.goal.success {
@@ -4653,6 +4727,7 @@ impl<'a> App<'a> {
                 .run_script(object, qb::checksum("bounce_skate_letter"));
         }
         self.goal_cutscenes("SKATE");
+        self.queue_objective("Skate");
         self.letter_lines = goal.streams;
         self.letters = Some(LetterRun {
             objects,
@@ -5135,9 +5210,18 @@ impl<'a> App<'a> {
     /// to date as the game's code does; or, not skating, none.
     fn update_game_hud(&mut self) {
         use qb::Value;
+        // (Kept for the game's panel while it's coming up: a goal's pop-up
+        // is queued as the skating starts.)
+        let ready = self.skating.is_none()
+            || (self.hud.up
+                && self
+                    .screen
+                    .as_ref()
+                    .is_some_and(|s| s.screen.exists("the_score")));
         let (screen_calls, screen_scripts) = self
             .level
             .as_mut()
+            .filter(|_| ready)
             .map(|l| {
                 (
                     std::mem::take(&mut l.behaviour.screen_calls),
@@ -5168,6 +5252,7 @@ impl<'a> App<'a> {
                 s.destroy_id("minigame_timer");
             }
             self.model.character.game_hud = false;
+            self.goal_popup = None;
             return;
         };
         if !self.hud.up {
@@ -5189,6 +5274,45 @@ impl<'a> App<'a> {
         }
         for (script, params) in screen_scripts {
             s.run(script, params);
+        }
+        // A goal's objective, popped up mid-screen and then kept small at
+        // the top right (`create_panel_block id = current_goal style =
+        // panel_message_goal`): as the game does, once its start's own
+        // scripts have run (they clear the panel's messages, a frame on)
+        // and any speech box is closed; with how far it's got, if it
+        // counts (kept up to date below).
+        let waiting = s.takes_pad() || level.behaviour.goal_paused;
+        // (A score, letters or race goal over: its objective down, as a
+        // goal's end takes it.)
+        let goal_on = self.goal_run.as_ref().is_some_and(|r| !r.over)
+            || self.letters.as_ref().is_some_and(|r| !r.over)
+            || self.racing.as_ref().is_some_and(|r| !r.over)
+            || self
+                .run
+                .as_ref()
+                .is_some_and(|r| r.goal.is_some() && !r.over);
+        if !goal_on && self.goal_popup.is_none() && s.exists("current_goal") {
+            s.destroy_id("current_goal");
+        }
+        if let Some((text, frames)) = self.goal_popup.as_mut().filter(|_| !waiting) {
+            if *frames > 0 {
+                *frames -= 1;
+            } else {
+                let line = match &self.model.character.goal_progress {
+                    Some((name, text, got, needed)) => goal_line(name, text, *got, *needed),
+                    None => text.clone(),
+                };
+                s.run(
+                    qb::checksum("create_panel_block"),
+                    goal_panel_params(&[
+                        ("id", Value::Name(qb::checksum("current_goal"))),
+                        ("text", Value::String(line.clone())),
+                        ("style", Value::Name(qb::checksum("panel_message_goal"))),
+                    ]),
+                );
+                self.hud.goal_text = line;
+                self.goal_popup = None;
+            }
         }
         // The goal on, for the UI's scripts that ask after it (and
         // whether there's one to retry).
@@ -5401,19 +5525,17 @@ impl<'a> App<'a> {
             program,
         );
         // The goal on, and how far it's got, in the game's goal text.
-        let goal = match &self.model.character.goal_progress {
-            Some((name, _, got, needed)) if *needed > 0 => format!(
-                "{name}
-{got} of {needed}"
-            ),
-            Some((name, ..)) => name.clone(),
-            None => " ".to_string(),
-        };
-        s.set(
-            "current_goal",
-            &props(vec![("text", Value::String(goal))]),
-            program,
-        );
+        if let Some((name, text, got, needed)) = &self.model.character.goal_progress {
+            let goal = goal_line(name, text, *got, *needed);
+            if self.hud.goal_text != goal && s.exists("current_goal") {
+                s.set(
+                    "current_goal",
+                    &props(vec![("text", Value::String(goal.clone()))]),
+                    program,
+                );
+                self.hud.goal_text = goal;
+            }
+        }
         // The trick text: the combo going (its tricks, and its points times
         // its multiplier), the game's own scripts animating each new
         // trick, the landing or the bail, and fading it after.
@@ -8528,7 +8650,12 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
             } else {
                 app.toggle_skate();
             }
-            if let Some(left) = args.run {
+            if let (Some(left), Some(goal)) = (args.run, &mut app.goal_run) {
+                // A goal from its scripts, with this long left.
+                if goal.left.is_some() {
+                    goal.left = Some(left);
+                }
+            } else if let Some(left) = args.run {
                 // A run (or the score goal started), with this long left.
                 match &mut app.run {
                     Some(run) => run.left = left,
