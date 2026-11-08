@@ -618,6 +618,11 @@ impl Screen {
             let Some(e) = self.el(i).filter(|e| !e.hidden) else {
                 continue;
             };
+            // (A pro's offer, `goal_start_dialog`, leaves the pad to the
+            // skating: only its B, the viewer's, talks.)
+            if e.id == checksum("goal_start_dialog") {
+                continue;
+            }
             if e.focused {
                 return true;
             }
@@ -1131,9 +1136,32 @@ impl Screen {
             self.draw_scrolled(i, &children, at, scale, alpha, inner, out);
             return;
         }
+        // (A text over its sibling sprites at its z_priority, even made
+        // before them: a speech box makes its text, then its frame, and
+        // the game shows the text on the frame.)
+        let sprite_after = |c: usize| {
+            let cz = self.el(c).map_or(0.0, |e| e.z);
+            children
+                .iter()
+                .copied()
+                .filter(|&s| {
+                    s > c
+                        && self.el(s).is_some_and(|e| {
+                            e.kind == Kind::Sprite && !e.behind_parent && e.z == cz
+                        })
+                })
+                .max()
+        };
         for &c in &children {
-            if self.el(c).is_some_and(|c| !c.behind_parent) {
-                self.draw_element(c, at, scale, alpha, inner, out);
+            let Some(child) = self.el(c).filter(|c| !c.behind_parent) else {
+                continue;
+            };
+            let text = matches!(child.kind, Kind::Text | Kind::TextBlock);
+            match sprite_after(c).filter(|_| text && inner.1.is_none()) {
+                Some(last) => {
+                    self.draw_element(c, at, scale, alpha, (z, Some(last as f64 + 0.25)), out)
+                }
+                None => self.draw_element(c, at, scale, alpha, inner, out),
             }
         }
     }
@@ -1776,9 +1804,10 @@ fn unescape(raw: &str) -> String {
             }
             Some('m') => {
                 if let Some(n) = chars.next().and_then(|d| d.to_digit(16)) {
+                    // (5, `pad_circle`'s: B on the GameCube.)
                     out.push(button(match n {
                         0 => 3,
-                        1 => 1,
+                        1 | 5 => 1,
                         n => n,
                     }));
                 }

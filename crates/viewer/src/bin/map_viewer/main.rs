@@ -1299,6 +1299,54 @@ struct GoalPro {
     line: Option<u32>,
     start: ui::Action,
     declined: bool,
+    /// The game's offer, as its speech box says it (`Woody: Press \m5 to
+    /// talk.`).
+    talk: String,
+}
+
+/// What a goal's pro says offering it (`goal_trigger_wait`'s
+/// `accept_text`, the GameCube's): their `full_name`, or `pro` and its
+/// `goal_pro_last_names` entry, then "Press (B) to talk.".
+fn talk_text(program: &qb::vm::Program, level: &str, kind: &str) -> String {
+    use qb::Value;
+    let params = desa_viewer::goals::generic_goal(program, level, kind)
+        .map(|g| g.params)
+        .unwrap_or_default();
+    let get = |key: &str| {
+        let v = params
+            .iter()
+            .find(|(k, _)| *k == qb::checksum(key))
+            .map(|(_, v)| v)?;
+        match v {
+            Value::Name(n) => program.value(*n).or(Some(v)),
+            v => Some(v),
+        }
+    };
+    let string = |v: &Value| match v {
+        Value::String(s) | Value::LocalString(s) => Some(s.clone()),
+        _ => None,
+    };
+    let name = get("full_name").and_then(string).or_else(|| {
+        let pro = get("pro").and_then(string)?;
+        let last =
+            program
+                .value(qb::checksum("goal_pro_last_names"))
+                .and_then(|names| match names {
+                    Value::Struct(items) => items
+                        .iter()
+                        .find(|(k, _)| *k == Some(qb::checksum(&pro)))
+                        .and_then(|(_, v)| string(v)),
+                    _ => None,
+                });
+        Some(match last {
+            Some(last) => format!("{pro} {last}"),
+            None => pro,
+        })
+    });
+    match name {
+        Some(name) => format!("{name}: Press \\m5 to talk."),
+        None => "Press \\m5 to talk.".to_string(),
+    }
 }
 
 /// The pros of the goals the viewer plays (`trigger_obj_id`).
@@ -1320,6 +1368,7 @@ fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> V
             line: desa_viewer::goals::goal_intro_line(program, level, script),
             start,
             declined: false,
+            talk: talk_text(program, level, kind),
         })
     })
     .collect();
@@ -1343,6 +1392,7 @@ fn goal_pros(program: &qb::vm::Program, level: &str, behaviour: &Behaviour) -> V
             line: desa_viewer::goals::goal_intro_line(program, level, &goal.kind),
             start: ui::Action::StartGoal(i),
             declined: false,
+            talk: talk_text(program, level, &goal.kind),
         });
     }
     pros
@@ -1428,6 +1478,8 @@ struct GameHud {
     song: Option<Instant>,
     /// The count last shown on a goal's HUD counter (`goal_counter_anchor`).
     counted: Option<usize>,
+    /// The pro whose offer the game's speech box shows.
+    offer: Option<usize>,
 }
 
 /// A movie playing (through ffmpeg: see `desa_viewer::movie`), since
@@ -2413,6 +2465,9 @@ struct App<'a> {
     /// A created skater's slot for the other kid, put on once it's shown.
     kid_pending_slot: Option<usize>,
     pad_back: bool,
+    /// The pad's B, as last read, and pressed since (to talk to a pro).
+    pad_talk: bool,
+    talk_pressed: bool,
     /// What a teleporter created or killed on the way, to apply.
     pending_creates: Vec<(desa_viewer::triggers::CreateTarget, bool)>,
     /// After a splash: the camera held where it was, and for how long.
@@ -2700,6 +2755,8 @@ impl<'a> App<'a> {
             kid_pending: None,
             kid_pending_slot: None,
             pad_back: false,
+            pad_talk: false,
+            talk_pressed: false,
             session: Session::default(),
             look: glam::Vec2::ZERO,
             pad_look: glam::Vec2::ZERO,
@@ -4000,7 +4057,26 @@ impl<'a> App<'a> {
             || self.racing.is_some()
             || self.goal_run.is_some()
             || starting;
+        // The pad's B at a pro: their goal (`pad_circle_script =
+        // goal_accept_trigger`).
+        if std::mem::take(&mut self.talk_pressed) && self.goal_offer.is_some() {
+            self.take_goal();
+            return;
+        }
+        let on_ground = self.skating.as_ref().is_some_and(|(s, ..)| s.on_ground);
         let Some(level) = &mut self.level else { return };
+        // Rolled off out of reach: the offer's taken back
+        // (`goal_trigger_refuse`), to come again next time.
+        if let (Some(i), Some(at)) = (self.goal_offer, skating) {
+            let far = level
+                .pros
+                .get(i)
+                .is_none_or(|p| at.distance(level.behaviour.position(p.object)) > PRO_LEAVE);
+            if far {
+                self.goal_offer = None;
+                self.model.character.goal_prompt = None;
+            }
+        }
         for (i, pro) in level.pros.iter_mut().enumerate() {
             let Some(at) = skating else {
                 pro.declined = false;
@@ -4011,7 +4087,12 @@ impl<'a> App<'a> {
                 pro.declined = near < PRO_LEAVE;
                 continue;
             }
-            if !busy && self.goal_offer.is_none() && self.warp_offer.is_none() && near < PRO_NEAR {
+            if !busy
+                && on_ground
+                && self.goal_offer.is_none()
+                && self.warp_offer.is_none()
+                && near < PRO_NEAR
+            {
                 self.goal_offer = Some(i);
                 self.model.character.goal_prompt = Some(pro.title.clone());
                 // They turn to the skater (`Obj_LookAtObject Type = skater`).
@@ -4937,6 +5018,7 @@ impl<'a> App<'a> {
         let mut look = glam::Vec2::ZERO;
         let mut start = false;
         let mut back = false;
+        let mut talk = false;
         for (_, pad) in gilrs.gamepads() {
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
@@ -4972,6 +5054,7 @@ impl<'a> App<'a> {
             }
             start |= pressed(Button::Start);
             back |= pressed(Button::Select);
+            talk |= pressed(Button::East);
         }
         self.pad_look = look;
         if start && !self.pad_start && self.skating.is_some() {
@@ -4982,6 +5065,8 @@ impl<'a> App<'a> {
             self.next_camera();
         }
         self.pad_back = back;
+        self.talk_pressed |= talk && !self.pad_talk;
+        self.pad_talk = talk;
         input
     }
 
@@ -5285,6 +5370,7 @@ impl<'a> App<'a> {
                 s.destroy_id("current_goal");
                 s.destroy_id("goal_points_text");
                 s.destroy_id("minigame_timer");
+                s.destroy_id("goal_start_dialog");
             }
             self.model.character.game_hud = false;
             self.goal_popup = None;
@@ -5340,6 +5426,42 @@ impl<'a> App<'a> {
         // A score, letters or race goal's end: the game's messages, as
         // for any goal (`goal_success_messages`, `goal_fail`); the
         // letters' own off the HUD first (`kill_skate_messages`).
+        // A pro's offer: the game's speech box at the bottom ("Woody:
+        // Press (B) to talk.", `create_speech_box anchor_id =
+        // goal_start_dialog`), gone when it's taken or turned down.
+        if self.hud.offer != self.goal_offer {
+            if self.hud.offer.take().is_some() {
+                s.run(
+                    qb::checksum("speech_box_exit"),
+                    goal_panel_params(&[
+                        ("anchor_id", Value::Name(qb::checksum("goal_start_dialog"))),
+                        ("no_pad_start", Value::Integer(1)),
+                    ]),
+                );
+            }
+            if let Some(pro) = self.goal_offer.and_then(|i| level.pros.get(i)) {
+                s.run(
+                    qb::checksum("create_speech_box"),
+                    goal_panel_params(&[
+                        ("anchor_id", Value::Name(qb::checksum("goal_start_dialog"))),
+                        ("text", Value::String(pro.talk.clone())),
+                        ("no_pad_choose", Value::Integer(1)),
+                        ("no_pad_start", Value::Integer(1)),
+                        (
+                            "bg_rgba",
+                            Value::Array([100, 100, 100, 128].map(Value::Integer).to_vec()),
+                        ),
+                        (
+                            "text_rgba",
+                            Value::Array([128, 128, 128, 128].map(Value::Integer).to_vec()),
+                        ),
+                        ("bg_x_scale", Value::Float(1.1)),
+                        ("z_priority", Value::Integer(5)),
+                    ]),
+                );
+                self.hud.offer = self.goal_offer;
+            }
+        }
         match self.goal_end.take() {
             Some((won, GoalEnded::Goal(name, text))) => end_messages(s, won, &name, &text),
             Some((won, GoalEnded::Kind(kind))) => {
@@ -6689,11 +6811,7 @@ impl<'a> App<'a> {
         }
         // Held still while a warp or goal's offered (`PauseSkaters`), a
         // goal's camera path plays, or paused.
-        if self.warp_offer.is_some()
-            || self.goal_offer.is_some()
-            || self.cutscene
-            || self.model.character.paused
-        {
+        if self.warp_offer.is_some() || self.cutscene || self.model.character.paused {
             // (The pad's still read, for Start.)
             let _ = self.pad_input();
             if let Some((at, time, stood)) = &mut self.warp_spin {
@@ -8093,11 +8211,16 @@ impl<'a> App<'a> {
         // At a goal's pro: Enter starts it, Esc not now.
         if self.goal_offer.is_some() {
             match code {
-                KeyCode::Enter | KeyCode::NumpadEnter if !repeat => self.take_goal(),
-                KeyCode::Escape if !repeat => self.not_now(),
+                KeyCode::Enter | KeyCode::NumpadEnter if !repeat => {
+                    self.take_goal();
+                    return;
+                }
+                KeyCode::Escape if !repeat => {
+                    self.not_now();
+                    return;
+                }
                 _ => {}
             }
-            return;
         }
         // At a warp: Enter goes through, Esc stays.
         if self.warp_offer.is_some() {

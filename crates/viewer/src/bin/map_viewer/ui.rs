@@ -915,7 +915,7 @@ pub fn draw(ctx: &egui::Context, model: &mut Model) -> Vec<Action> {
                     });
                 });
         }
-        if let Some(goal) = &model.character.goal_prompt {
+        if let (Some(goal), false) = (&model.character.goal_prompt, game_hud) {
             egui::Area::new(egui::Id::new("goal_offer"))
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
                 .show(ctx, |ui| {
