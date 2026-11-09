@@ -572,9 +572,9 @@ fn real_video_options() {
         .collect();
     let display = Some(qb::checksum("video_display"));
     assert_eq!(asked, [(display, Some(1)), (display, Some(-1))]);
-    // Apply (six down): asked for by name.
+    // Apply (seven down, past Advanced): asked for by name.
     screen.requests.clear();
-    for _ in 0..6 {
+    for _ in 0..7 {
         screen.pad(Pad::Down);
         frames(&mut screen, 2);
     }
@@ -587,6 +587,30 @@ fn real_video_options() {
         .and_then(|(_, args)| args.get(qb::checksum("option")))
         .and_then(qb::Value::as_name);
     assert_eq!(apply, Some(qb::checksum("video_apply")));
+    // Up to Advanced: its menu, placeholders greyed out, so focus is on
+    // Done; Done is back to VIDEO.
+    screen.pad(Pad::Up);
+    frames(&mut screen, 2);
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 30);
+    let text = screen.describe();
+    assert!(text.contains("\"ADVANCED\""), "{text}");
+    for id in [
+        "advanced_aa",
+        "advanced_filtering",
+        "advanced_scale",
+        "advanced_done",
+    ] {
+        assert!(
+            screen.exists(id),
+            "no {id}:
+{text}"
+        );
+    }
+    assert!(!screen.exists("video_menu"));
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 30);
+    assert!(screen.exists("video_menu"), "{}", screen.describe());
     // Back: the Options.
     screen.pad(Pad::Back);
     frames(&mut screen, 30);
