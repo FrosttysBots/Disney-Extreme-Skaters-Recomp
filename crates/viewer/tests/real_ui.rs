@@ -609,7 +609,8 @@ fn real_video_options() {
         );
     }
     assert!(!screen.exists("video_menu"));
-    // Atmosphere: the sky, clouds, time of day, day cycle and fog.
+    // Atmosphere: the sky, clouds, time of day, day cycle, rain, snow and
+    // fog.
     screen.pad(Pad::Choose);
     frames(&mut screen, 30);
     let text = screen.describe();
@@ -619,6 +620,8 @@ fn real_video_options() {
         "look_clouds",
         "look_hour",
         "look_day",
+        "look_rain",
+        "look_snow",
         "look_fog",
     ] {
         assert!(

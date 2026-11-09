@@ -260,6 +260,18 @@ pub struct Renderer {
     atmos: crate::atmos::Sky,
     /// The time of day this frame.
     tod: crate::atmos::TimeOfDay,
+    /// Rain and snow (see [`crate::weather`]), the shelter map once made
+    /// (the level from above: where they can't fall) and what it covers.
+    weather: crate::weather::Weather,
+    shelter: Option<wgpu::TextureView>,
+    shelter_area: crate::weather::ShelterArea,
+    /// How wet the ground is and how much snow has settled, 0..1, coming
+    /// and going with the weather; and the clock they last moved at.
+    wetness: f32,
+    snow_cover: f32,
+    weather_time: Option<f32>,
+    /// This frame's views, for the post pass.
+    view_infos: Vec<crate::post::ViewInfo>,
     depth: Option<(wgpu::TextureView, u32, u32)>,
 }
 
@@ -331,6 +343,12 @@ impl Renderer {
         let sky_globals = make_globals(&device, &globals_layout);
         let world_globals2 = make_globals(&device, &globals_layout);
         let sky_globals2 = make_globals(&device, &globals_layout);
+        let weather =
+            crate::weather::Weather::new(&device, &globals_layout, color_format, DEPTH_FORMAT);
+        let shelter_area = crate::weather::ShelterArea::round(
+            world.focus,
+            world.vertices.iter().map(|v| glam::Vec3::from(v.position)),
+        );
         let world = upload_level(&device, &queue, &pass_layout, &sampler, world, false);
         let sky = sky.map(|sky| upload_level(&device, &queue, &pass_layout, &sampler, sky, false));
         let collision = collision.and_then(|vertices| color_buffer(&device, "collision", vertices));
@@ -407,6 +425,13 @@ impl Renderer {
             post,
             atmos,
             tod: crate::atmos::TimeOfDay::at(-1.0),
+            weather,
+            shelter: None,
+            shelter_area,
+            wetness: 0.0,
+            snow_cover: 0.0,
+            weather_time: None,
+            view_infos: Vec::new(),
             depth: None,
         }
     }
@@ -766,22 +791,187 @@ impl Renderer {
             (target.clone(), None)
         };
         self.tod = self.atmos.time_of_day(&self.look, time);
+        self.update_weather(time);
+        self.view_infos.clear();
         for (n, (rect, camera)) in views.into_iter().enumerate() {
             let post = targets.as_ref().map(|(d, s, sd)| (d, s, sd));
             self.encode_view(encoder, &scene, post, n, rect, &camera, time);
         }
         if post {
             let sky_drawn = crate::atmos::wanted(&self.look);
+            let frame = crate::post::Frame {
+                world_light: self.tod.world_light,
+                wetness: self.wetness,
+                snow_cover: self.snow_cover,
+                sky: self.sky_colour(),
+                views: self.view_infos.clone(),
+                time,
+                shelter: self.shelter.as_ref().map(|_| self.shelter_area),
+            };
             self.post.draw(
                 &self.queue,
                 encoder,
                 target,
                 &self.look,
                 NEAR,
-                self.tod.world_light,
+                &frame,
                 sky_drawn,
             );
         }
+    }
+
+    /// The sky's colour (linear) on the whole: what puddles show past the
+    /// screen's edge.
+    fn sky_colour(&self) -> glam::Vec3 {
+        let c = &self.atmos.colours;
+        if self.look.physical_sky {
+            let day = glam::Vec3::new(0.35, 0.45, 0.6);
+            day * self.tod.world_light
+        } else {
+            c.average.lerp(c.zenith, 0.5) * self.tod.world_light
+        }
+    }
+
+    /// The ground's wetness and settled snow, a step toward the weather's
+    /// (wetting in a minute, drying in three; snow settling in two and
+    /// melting in four), and the shelter map made once there's weather.
+    fn update_weather(&mut self, time: f32) {
+        let (rain, snow) = (
+            self.look.rain.clamp(0.0, 1.0),
+            self.look.snow.clamp(0.0, 1.0),
+        );
+        match self.weather_time {
+            // (The first frame, a screenshot's: as it would be by now.)
+            None => (self.wetness, self.snow_cover) = (rain, snow),
+            Some(last) => {
+                let dt = (time - last).clamp(0.0, 0.5);
+                let toward = |now: f32, want: f32, up: f32, down: f32| {
+                    let rate = if want > now { up } else { down };
+                    if want > now {
+                        (now + dt / rate).min(want)
+                    } else {
+                        (now - dt / rate).max(want)
+                    }
+                };
+                self.wetness = toward(self.wetness, rain, 60.0, 180.0);
+                self.snow_cover = toward(self.snow_cover, snow, 120.0, 240.0);
+            }
+        }
+        self.weather_time = Some(time);
+        if (rain > 0.0 || snow > 0.0) && self.shelter.is_none() {
+            self.make_shelter();
+        }
+    }
+
+    /// The shelter map: the level drawn from straight above, depth only.
+    fn make_shelter(&mut self) {
+        let size = crate::weather::SHELTER_SIZE;
+        let view = self
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("shelter"),
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let layout = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("shelter"),
+                entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+            });
+        let shader = self
+            .device
+            .create_shader_module(wgpu::include_wgsl!("shelter.wgsl"));
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("shelter"),
+                bind_group_layouts: &[&layout],
+                push_constant_ranges: &[],
+            });
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("shelter"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    }],
+                },
+                fragment: None,
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            });
+        let projection = self.shelter_area.projection();
+        let uniform = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("shelter"),
+                contents: bytemuck::cast_slice(&projection.to_cols_array()),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shelter"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            }],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shelter"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_vertex_buffer(0, self.world.vertices.slice(..));
+            pass.set_index_buffer(self.world.indices.slice(..), wgpu::IndexFormat::Uint32);
+            for batch in &self.world.batches {
+                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+        self.weather.bind(&self.device, &view);
+        self.post.set_shelter(&self.device, &view);
+        self.shelter = Some(view);
     }
 
     /// Records one view: the level from `camera` in `rect` of the
@@ -818,6 +1008,14 @@ impl Renderer {
         };
         let projection =
             glam::camera::rh::proj::directx::perspective_infinite_reverse(fov_y, aspect, NEAR);
+        let view_proj = projection * view;
+        let eye = view.inverse().w_axis.truncate();
+        self.view_infos.push(crate::post::ViewInfo {
+            view_proj,
+            inv: view_proj.inverse(),
+            rect: [picture.0, picture.1, picture.2, picture.3],
+            eye,
+        });
         let min_light = self.min_light;
         let write = |globals: &Globals, view: Mat4| {
             let data = GlobalsData {
@@ -960,6 +1158,20 @@ impl Renderer {
             if let Some(character) = self.character2.as_ref().filter(|_| second) {
                 pass.set_bind_group(0, &world_globals.bind_group, &[]);
                 draw(&mut pass, character, &self.world_pipelines);
+            }
+            // Rain and snow round the eye.
+            if !only_collision && (self.look.rain > 0.0 || self.look.snow > 0.0) {
+                pass.set_bind_group(0, &world_globals.bind_group, &[]);
+                self.weather.draw(
+                    &self.queue,
+                    &mut pass,
+                    n,
+                    eye,
+                    &self.look,
+                    &self.tod,
+                    &self.shelter_area,
+                    time,
+                );
             }
             pass.set_bind_group(0, &world_globals.bind_group, &[]);
             if let Some((buffer, count)) = self.shadow.as_ref().filter(|_| !only_collision) {

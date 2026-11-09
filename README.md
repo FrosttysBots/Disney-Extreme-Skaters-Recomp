@@ -63,17 +63,21 @@ frames are drawn as the game draws them.
   volumetric **Clouds** over either (Few to Overcast), **Time of Day**
   (Dawn to Night: the sun, moon and stars move, and the level's baked
   light dims and warms with them), **Day Cycle** (the clock running, a
-  day in 24 or 4 minutes) and **Fog**, where distant things fade into the
-  sky behind them.
+  day in 24 or 4 minutes), **Rain** (Drizzle to Downpour: streaks,
+  splashes, the ground soaking dark and puddles mirroring the level),
+  **Snow** (Light to Blizzard: flakes, and snow settling on what faces
+  up) and **Fog**, where distant things fade into the sky behind them.
+  Rain and snow keep off what's under a roof or indoors, and the ground
+  wets, dries, whitens and melts over a few minutes as you change them.
 - **Colour:** **Exposure**, **Warmth**, **Tint**, **Contrast** and
   **Saturation**.
 - **Reset Look** goes back to the disc's.
 
 These are ported from [bevy_atmos](https://github.com/Nilbong/bevy_atmos)
-(MIT or Apache-2.0); its weather and water are next. The settings still
+(MIT or Apache-2.0); its water is next. The settings still
 to come in Advanced (anti-aliasing, texture filtering, render scale,
 field of view, draw distance) are greyed out. `--look
-sky=1,clouds=0.45,hour=17.8,fog=200` sets the look from the command line,
+sky=1,clouds=0.45,hour=17.8,fog=200,rain=0.6` sets the look from the command line,
 for screenshots.
 
 ## Building it yourself

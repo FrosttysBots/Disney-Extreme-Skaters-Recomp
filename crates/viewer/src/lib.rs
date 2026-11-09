@@ -21,3 +21,4 @@ pub mod sounds;
 pub mod source;
 pub mod triggers;
 pub mod warps;
+pub mod weather;
