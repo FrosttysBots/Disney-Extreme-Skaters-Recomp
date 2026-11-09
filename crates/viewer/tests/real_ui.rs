@@ -657,6 +657,41 @@ fn real_exit_game() {
     );
 }
 
+/// The main menu's 2 Player greyed out for now (`not_focusable`, as the
+/// game's demo builds have it): down from Free Skate is Options.
+#[test]
+#[ignore = "needs the game data"]
+fn real_main_menu_2_player_off() {
+    use desa_viewer::screen::Pad;
+    let path = std::env::var("DESA_GAME_DATA")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted").into());
+    let mut data = GameData::open(Path::new(&path)).unwrap();
+    let (mut screen, mut program, _) = screen_from_disc(&mut data);
+    for file in &data.load_level("SkateShop").unwrap().scripts {
+        let _ = program.add(file);
+    }
+    desa_viewer::behaviour::add_viewer_menus(&mut program);
+    screen.level = Some(qb::checksum("load_SkateShop"));
+    let frames = |screen: &mut desa_viewer::screen::Screen, n| {
+        for _ in 0..n {
+            screen.update(&program, 1.0 / 60.0);
+        }
+    };
+    screen.run(qb::checksum("launch_main_menu"), Vec::new());
+    frames(&mut screen, 120);
+    assert!(screen.exists("main_menu_2_player_option"));
+    // Play Game, Load, Save, Free Skate, (not 2 Player) Options.
+    for _ in 0..4 {
+        screen.pad(Pad::Down);
+        frames(&mut screen, 10);
+    }
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 60);
+    let text = screen.describe();
+    assert!(text.contains("\"Video Options\""), "{text}");
+    assert!(!screen.exists("main_menu"), "{text}");
+}
+
 /// The main menu's demo movie (`attract_mode_timer`): two minutes idle,
 /// each key starting the wait again, and none once the menu's left.
 #[test]
