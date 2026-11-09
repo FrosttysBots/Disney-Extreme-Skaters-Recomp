@@ -531,7 +531,7 @@ impl GameData {
                 id,
             })
             .collect();
-        // The created kid as a girl too (the skater select's first kid),
+        // The created kid as a girl too (the skater select's second kid),
         // on the kid's animations.
         if characters.iter().any(|c| c.id.eq_ignore_ascii_case("kid")) {
             characters.push(LevelInfo {

@@ -6374,9 +6374,14 @@ impl<'a> App<'a> {
         let seconds = started.elapsed().as_secs_f64();
         let (width, height) = (movie.info.width, movie.info.height);
         if let Some((frame, true)) = movie.frame_at(seconds) {
+            // The screen's mesh has its pictures bottom row first (the
+            // game's Bink frames come up that way): the frame upside
+            // down, for it to show the right way up.
+            let row = width as usize * 4;
+            let flipped: Vec<u8> = frame.chunks_exact(row).rev().flatten().copied().collect();
             level
                 .renderer
-                .show_on_layer(level.movie_screen, width, height, frame);
+                .show_on_layer(level.movie_screen, width, height, &flipped);
         }
         if movie.finished() && *looping {
             // Round again.
@@ -6555,10 +6560,12 @@ impl<'a> App<'a> {
         }
         // Not set yet: the character the viewer has.
         if now < 0 || name_of(now).is_none() {
-            // (The girl kid is the first kid, the boy the one after.)
-            let index = if current == Some(c("kid_girl")) {
+            // (The boy kid is the first kid, the girl the one after: the
+            // stage's kids are `info_esc`'s Ryan and Mallie Ann, though the
+            // game names the first one's mug shot and music the girl's.)
+            let index = if current == Some(c("kid")) {
                 Some(0)
-            } else if current == Some(c("kid")) {
+            } else if current == Some(c("kid_girl")) {
                 Some(1)
             } else {
                 (0..skaters.len() as i32).find(|&i| name_of(i).is_some() && name_of(i) == current)
@@ -6573,9 +6580,9 @@ impl<'a> App<'a> {
             return;
         }
         self.shop_skater = Some(now);
-        // (The first kid's the girl: its theme's CAS_Girl.)
+        // (The second kid's the girl: `stage_profile1`, Mallie Ann.)
         let name = match name_of(now) {
-            Some(n) if n == c("kid") && now == 0 => Some(c("kid_girl")),
+            Some(n) if n == c("kid") && now == 1 => Some(c("kid_girl")),
             n => n,
         };
         let wanted = name.filter(|n| Some(*n) != current).and_then(|n| {
