@@ -198,7 +198,9 @@ struct Args {
     kid_color: String,
     /// The Advanced menu's look, as NAME=VALUE separated by commas:
     /// fog (metres to half-hidden; 0 off), exposure (stops), warmth, tint
-    /// (-1 to 1), contrast, saturation (1 as it is)
+    /// (-1 to 1), contrast, saturation (1 as it is), sky (1 physical),
+    /// clouds (cover 0 to 1), hour (0 to 24; -1 the level's), day_speed
+    /// (game hours a second)
     #[arg(long, default_value = "")]
     look: String,
     /// For --skate: play another of the level's goals from its own
@@ -2635,7 +2637,7 @@ struct App<'a> {
     /// The Video Options' values as last shown in its menu.
     video_labels: Option<[String; 6]>,
     /// The Advanced menu's look values as last shown.
-    look_labels: Option<[String; 6]>,
+    look_labels: Option<[String; 10]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
     /// it, which forgets them).
     video_pending: Option<Video>,
@@ -6971,7 +6973,7 @@ impl<'a> App<'a> {
             self.video_pending = None;
         }
         // The Advanced menu's look values, as they are.
-        if screen.screen.exists("look_fog_text") {
+        if screen.screen.exists("look_fog_text") || screen.screen.exists("look_exposure_text") {
             let labels = look_labels(&self.settings.look);
             if self.look_labels.as_ref() != Some(&labels) {
                 let ids = [
@@ -6981,8 +6983,15 @@ impl<'a> App<'a> {
                     "look_tint_text",
                     "look_contrast_text",
                     "look_saturation_text",
+                    "look_sky_text",
+                    "look_clouds_text",
+                    "look_hour_text",
+                    "look_day_text",
                 ];
                 for (id, label) in ids.iter().zip(&labels) {
+                    if !screen.screen.exists(id) {
+                        continue;
+                    }
                     let props = qb::Value::Struct(vec![(
                         Some(qb::checksum("text")),
                         qb::Value::String(label.clone()),
@@ -8387,6 +8396,14 @@ impl<'a> App<'a> {
             Some(o) if o == c("look_tint") => step(&mut look.tint, 0.1, -1.0, 1.0),
             Some(o) if o == c("look_contrast") => step(&mut look.contrast, 0.1, 0.5, 2.0),
             Some(o) if o == c("look_saturation") => step(&mut look.saturation, 0.1, 0.0, 2.0),
+            Some(o) if o == c("look_sky") => look.physical_sky = !look.physical_sky,
+            Some(o) if o == c("look_clouds") => {
+                look.clouds = cycle(&CLOUD_STEPS, look.clouds, dir);
+            }
+            Some(o) if o == c("look_hour") => look.hour = cycle(&HOUR_STEPS, look.hour, dir),
+            Some(o) if o == c("look_day") => {
+                look.day_speed = cycle(&DAY_STEPS, look.day_speed, dir)
+            }
             _ => return,
         }
         self.settings.save();
@@ -9187,8 +9204,48 @@ const FOG_STEPS: [(&str, f32); 5] = [
     ("Thick", 50.0),
 ];
 
+/// The Advanced menu's clouds: names and cover.
+const CLOUD_STEPS: [(&str, f32); 5] = [
+    ("Off", 0.0),
+    ("Few", 0.3),
+    ("Scattered", 0.45),
+    ("Broken", 0.65),
+    ("Overcast", 0.9),
+];
+
+/// The Advanced menu's times of day: names and hours (-1 the level's).
+const HOUR_STEPS: [(&str, f32); 8] = [
+    ("Level's", -1.0),
+    ("Dawn", 6.2),
+    ("Morning", 9.0),
+    ("Noon", 12.0),
+    ("Afternoon", 15.0),
+    ("Sunset", 17.8),
+    ("Dusk", 18.4),
+    ("Night", 23.0),
+];
+
+/// The Advanced menu's day cycle: names and game hours a real second
+/// (Slow: a day in 24 minutes; Fast: in 4).
+const DAY_STEPS: [(&str, f32); 3] = [("Off", 0.0), ("Slow", 1.0 / 60.0), ("Fast", 0.1)];
+
+/// The next (`dir` 1) or last of `steps` from `value` (the first if it's
+/// none of them).
+fn cycle(steps: &[(&str, f32)], value: f32, dir: i32) -> f32 {
+    let at = steps.iter().position(|(_, v)| *v == value).unwrap_or(0) as i32;
+    steps[(at + dir.signum()).rem_euclid(steps.len() as i32) as usize].1
+}
+
+/// A step's name, or the value itself.
+fn step_name(steps: &[(&str, f32)], value: f32) -> String {
+    steps
+        .iter()
+        .find(|(_, v)| *v == value)
+        .map_or_else(|| format!("{value}"), |(n, _)| n.to_string())
+}
+
 /// The Advanced menu's look values, as shown.
-fn look_labels(look: &desa_viewer::post::Look) -> [String; 6] {
+fn look_labels(look: &desa_viewer::post::Look) -> [String; 10] {
     let fog = FOG_STEPS
         .iter()
         .find(|(_, d)| *d == look.fog_distance)
@@ -9214,6 +9271,17 @@ fn look_labels(look: &desa_viewer::post::Look) -> [String; 6] {
         format!("Tint: {}", signed(look.tint)),
         format!("Contrast: {}", percent(look.contrast)),
         format!("Saturation: {}", percent(look.saturation)),
+        format!(
+            "Sky: {}",
+            if look.physical_sky {
+                "Physical"
+            } else {
+                "Level's"
+            }
+        ),
+        format!("Clouds: {}", step_name(&CLOUD_STEPS, look.clouds)),
+        format!("Time of Day: {}", step_name(&HOUR_STEPS, look.hour)),
+        format!("Day Cycle: {}", step_name(&DAY_STEPS, look.day_speed)),
     ]
 }
 
@@ -9227,7 +9295,7 @@ fn parse_look(text: &str) -> Result<desa_viewer::post::Look> {
         let value: f32 = value.trim().parse().context("--look's numbers")?;
         anyhow::ensure!(
             settings::set_look(&mut look, key.trim(), value),
-            "--look: no {} (fog, exposure, warmth, tint, contrast, saturation)",
+            "--look: no {} (fog, exposure, warmth, tint, contrast, saturation, sky, clouds, hour, day_speed)",
             key.trim()
         );
     }

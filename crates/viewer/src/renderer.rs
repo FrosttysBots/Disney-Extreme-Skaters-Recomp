@@ -255,6 +255,11 @@ pub struct Renderer {
     /// [`crate::post`]. The default leaves frames as the game draws them.
     pub look: crate::post::Look,
     post: crate::post::Post,
+    /// The sky pass (a physical sky, clouds, the time of day): see
+    /// [`crate::atmos`].
+    atmos: crate::atmos::Sky,
+    /// The time of day this frame.
+    tod: crate::atmos::TimeOfDay,
     depth: Option<(wgpu::TextureView, u32, u32)>,
 }
 
@@ -267,6 +272,7 @@ impl Renderer {
         sky: Option<&Level>,
         collision: Option<&[ColorVertex]>,
     ) -> Self {
+        let atmos = crate::atmos::Sky::new(&device, &queue, color_format, sky);
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
             entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
@@ -399,6 +405,8 @@ impl Renderer {
             min_light: 0.0,
             look: crate::post::Look::default(),
             post,
+            atmos,
+            tod: crate::atmos::TimeOfDay::at(-1.0),
             depth: None,
         }
     }
@@ -750,19 +758,29 @@ impl Renderer {
         // The look on: drawn into the post pass's frame and depth, then
         // onto the target with it.
         let post = self.look.is_on();
-        let (scene, depth, sky) = if post {
-            let (color, depth, sky) = self.post.targets(&self.device, DEPTH_FORMAT, width, height);
-            (color, Some(depth), Some(sky))
+        let (scene, targets) = if post {
+            let [color, depth, sky, sky_drawn] =
+                self.post.targets(&self.device, DEPTH_FORMAT, width, height);
+            (color, Some((depth, sky, sky_drawn)))
         } else {
-            (target.clone(), None, None)
+            (target.clone(), None)
         };
+        self.tod = self.atmos.time_of_day(&self.look, time);
         for (n, (rect, camera)) in views.into_iter().enumerate() {
-            let post = depth.as_ref().zip(sky.as_ref());
+            let post = targets.as_ref().map(|(d, s, sd)| (d, s, sd));
             self.encode_view(encoder, &scene, post, n, rect, &camera, time);
         }
         if post {
-            self.post
-                .draw(&self.queue, encoder, target, &self.look, NEAR);
+            let sky_drawn = crate::atmos::wanted(&self.look);
+            self.post.draw(
+                &self.queue,
+                encoder,
+                target,
+                &self.look,
+                NEAR,
+                self.tod.world_light,
+                sky_drawn,
+            );
         }
     }
 
@@ -774,8 +792,9 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         // The post pass's depth, kept for it (else the renderer's own),
-        // and its sky, drawn there alone (what fog fades into).
-        post: Option<(&wgpu::TextureView, &wgpu::TextureView)>,
+        // its sky, the dome drawn there alone, and the sky as drawn (the
+        // sky pass's, what fog fades into).
+        post: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
         n: usize,
         rect: (f32, f32, f32, f32),
         camera: &FlyCamera,
@@ -823,7 +842,8 @@ impl Renderer {
         } else {
             CLEAR_COLOR
         };
-        if let Some((_, sky_target)) = post {
+        let atmos = post.is_some() && crate::atmos::wanted(&self.look);
+        if let Some((_, sky_target, _)) = post {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sky alone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -856,6 +876,22 @@ impl Renderer {
                 draw(&mut pass, sky, &self.sky_pipelines);
             }
         }
+        // The sky pass over the dome: the frame's sky, and the sky alone.
+        if let Some((_, dome, sky_drawn)) = post.filter(|_| atmos) {
+            self.atmos.draw(
+                &self.device,
+                &self.queue,
+                encoder,
+                (target, sky_drawn, dome),
+                n,
+                picture,
+                projection * rotation_view,
+                &self.look,
+                &self.tod,
+                time,
+                clear,
+            );
+        }
         {
             let depth_view = post_depth.unwrap_or(&self.depth.as_ref().unwrap().0);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -867,14 +903,11 @@ impl Renderer {
                     ops: wgpu::Operations {
                         // (Black, round a picture not the window's shape;
                         // the second view over the first's.)
-                        load: if n > 0 {
+                        // (The sky pass drew the sky first.)
+                        load: if n > 0 || atmos {
                             wgpu::LoadOp::Load
                         } else {
-                            wgpu::LoadOp::Clear(if self.aspect.is_some() {
-                                wgpu::Color::BLACK
-                            } else {
-                                CLEAR_COLOR
-                            })
+                            wgpu::LoadOp::Clear(clear)
                         },
                         store: wgpu::StoreOp::Store,
                     },
@@ -907,7 +940,7 @@ impl Renderer {
                 .filter(|_| self.collision_view != CollisionView::Hidden);
             let only_collision = collision.is_some() && self.collision_view == CollisionView::Only;
             if !only_collision {
-                let sky = self.sky.as_ref().filter(|_| self.show_sky);
+                let sky = self.sky.as_ref().filter(|_| self.show_sky && !atmos);
                 if let Some(sky) = sky {
                     pass.set_bind_group(0, &sky_globals.bind_group, &[]);
                     draw(&mut pass, sky, &self.sky_pipelines);

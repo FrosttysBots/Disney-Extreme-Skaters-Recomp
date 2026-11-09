@@ -169,18 +169,24 @@ script viewer_advanced_menu
         menu_title = "ADVANCED"
         helper_text = generic_helper_text
     }
-    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 13
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 9
     SetScreenElementProps {
         id = advanced_vmenu
         event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_video_menu } } ]
         replace_handlers
     }
-    viewer_look_item id = look_fog text_id = look_fog_text
-    viewer_look_item id = look_exposure text_id = look_exposure_text
-    viewer_look_item id = look_warmth text_id = look_warmth_text
-    viewer_look_item id = look_tint text_id = look_tint_text
-    viewer_look_item id = look_contrast text_id = look_contrast_text
-    viewer_look_item id = look_saturation text_id = look_saturation_text
+    main_menu_add_item {
+        text = "Atmosphere"
+        id = advanced_atmosphere
+        pad_choose_script = viewer_atmosphere_menu
+        highlight_bar_scale = (1.015, 1.3)
+    }
+    main_menu_add_item {
+        text = "Colour"
+        id = advanced_colour
+        pad_choose_script = viewer_colour_menu
+        highlight_bar_scale = (1.015, 1.3)
+    }
     main_menu_add_item {
         text = "Reset Look"
         id = look_reset
@@ -197,6 +203,65 @@ script viewer_advanced_menu
         text = "Done"
         id = advanced_done
         pad_choose_script = viewer_video_menu
+        highlight_bar_scale = (1.015, 1.3)
+    }
+    RunScriptOnScreenElement id = current_menu_anchor animate_in
+endscript
+
+// ADVANCED's Atmosphere: the sky, clouds, the time of day and fog.
+script viewer_atmosphere_menu
+    viewer_advanced_submenu title = "ATMOSPHERE" num_items = 6
+    viewer_look_item id = look_sky text_id = look_sky_text
+    viewer_look_item id = look_clouds text_id = look_clouds_text
+    viewer_look_item id = look_hour text_id = look_hour_text
+    viewer_look_item id = look_day text_id = look_day_text
+    viewer_look_item id = look_fog text_id = look_fog_text
+    viewer_advanced_submenu_done
+endscript
+
+// ADVANCED's Colour: the grade.
+script viewer_colour_menu
+    viewer_advanced_submenu title = "COLOUR" num_items = 6
+    viewer_look_item id = look_exposure text_id = look_exposure_text
+    viewer_look_item id = look_warmth text_id = look_warmth_text
+    viewer_look_item id = look_tint text_id = look_tint_text
+    viewer_look_item id = look_contrast text_id = look_contrast_text
+    viewer_look_item id = look_saturation text_id = look_saturation_text
+    viewer_advanced_submenu_done
+endscript
+
+// A menu under ADVANCED, Back to it.
+script viewer_advanced_submenu
+    if ObjectExists id = current_menu_anchor
+        DestroyScreenElement id = current_menu_anchor
+    endif
+    if LevelIs load_skateshop
+        <menu_pos> = (160.0, 89.0)
+    else
+        <menu_pos> = (320.0, 89.0)
+    endif
+    make_new_skateshop_menu {
+        pos = <menu_pos>
+        menu_just = [ center top ]
+        internal_just = [ center center ]
+        menu_id = advanced_sub_menu
+        vmenu_id = advanced_sub_vmenu
+        menu_title = <title>
+        helper_text = generic_helper_text
+    }
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = <num_items>
+    SetScreenElementProps {
+        id = advanced_sub_vmenu
+        event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_advanced_menu } } ]
+        replace_handlers
+    }
+endscript
+
+script viewer_advanced_submenu_done
+    main_menu_add_item {
+        text = "Done"
+        id = advanced_sub_done
+        pad_choose_script = viewer_advanced_menu
         highlight_bar_scale = (1.015, 1.3)
     }
     RunScriptOnScreenElement id = current_menu_anchor animate_in

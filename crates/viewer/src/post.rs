@@ -28,6 +28,15 @@ pub struct Look {
     pub contrast: f32,
     /// 1 as it is, 0 grey (`grade.saturation`).
     pub saturation: f32,
+    /// A physical sky in place of the level's dome (`sky.physical`).
+    pub physical_sky: bool,
+    /// Volumetric clouds' cover, 0 none .. 1 overcast (`sky.cover`).
+    pub clouds: f32,
+    /// The hour, 0..24 (below 0: the level's own) (`time.hour`).
+    pub hour: f32,
+    /// Game hours a real second while the day runs (0: it stands)
+    /// (`time.speed`, in hours).
+    pub day_speed: f32,
 }
 
 impl Default for Look {
@@ -41,6 +50,10 @@ impl Default for Look {
             tint: 0.0,
             contrast: 1.0,
             saturation: 1.0,
+            physical_sky: false,
+            clouds: 0.0,
+            hour: -1.0,
+            day_speed: 0.0,
         }
     }
 }
@@ -54,9 +67,11 @@ impl Look {
             || self.tint != 0.0
             || self.contrast != 1.0
             || self.saturation != 1.0
+            || crate::atmos::wanted(self)
     }
 
-    fn uniform(&self, near: f32) -> [f32; 16] {
+    /// `world_light`: the time of day's light over the level's baked own.
+    fn uniform(&self, near: f32, world_light: glam::Vec3) -> [f32; 16] {
         let [r, g, b] = self.fog_color;
         [
             r,
@@ -72,9 +87,9 @@ impl Look {
             self.tint.clamp(-1.0, 1.0),
             self.contrast.clamp(0.2, 3.0),
             self.saturation.clamp(0.0, 3.0),
-            0.0,
-            0.0,
-            0.0,
+            world_light.x,
+            world_light.y,
+            world_light.z,
         ]
     }
 }
@@ -91,9 +106,13 @@ pub struct Post {
 struct Targets {
     color: wgpu::TextureView,
     depth: wgpu::TextureView,
-    /// The sky alone: what fog fades into.
+    /// The level's dome alone, and the sky as drawn (the dome, or the
+    /// sky pass's over it): what fog fades into.
     sky: wgpu::TextureView,
+    sky_drawn: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+    /// Fog fading into `sky_drawn`.
+    bind_group_drawn: wgpu::BindGroup,
     size: (u32, u32),
 }
 
@@ -177,7 +196,7 @@ impl Post {
         });
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("post look"),
-            contents: bytemuck::cast_slice(&Look::default().uniform(1.0)),
+            contents: bytemuck::cast_slice(&Look::default().uniform(1.0, glam::Vec3::ONE)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         Post {
@@ -189,15 +208,15 @@ impl Post {
         }
     }
 
-    /// The frame, depth and sky to draw into instead of the window, made
-    /// (or remade) at its size.
+    /// The frame, depth, dome and drawn sky to draw into instead of the
+    /// window, made (or remade) at its size.
     pub fn targets(
         &mut self,
         device: &wgpu::Device,
         depth_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
-    ) -> (wgpu::TextureView, wgpu::TextureView, wgpu::TextureView) {
+    ) -> [wgpu::TextureView; 4] {
         if self
             .targets
             .as_ref()
@@ -226,41 +245,54 @@ impl Post {
             let color = make("post frame", self.format, wgpu::TextureUsages::empty());
             let depth = make("post depth", depth_format, wgpu::TextureUsages::empty());
             let sky = make("post sky", self.format, wgpu::TextureUsages::empty());
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("post"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&color),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&depth),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&sky),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.uniform.as_entire_binding(),
-                    },
-                ],
-            });
+            let sky_drawn = make("post sky drawn", self.format, wgpu::TextureUsages::empty());
+            let group = |fades_into: &wgpu::TextureView| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("post"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&color),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&depth),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(fades_into),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.uniform.as_entire_binding(),
+                        },
+                    ],
+                })
+            };
+            let (bind_group, bind_group_drawn) = (group(&sky), group(&sky_drawn));
             self.targets = Some(Targets {
                 color,
                 depth,
                 sky,
+                sky_drawn,
                 bind_group,
+                bind_group_drawn,
                 size: (width, height),
             });
         }
         let t = self.targets.as_ref().unwrap();
-        (t.color.clone(), t.depth.clone(), t.sky.clone())
+        [
+            t.color.clone(),
+            t.depth.clone(),
+            t.sky.clone(),
+            t.sky_drawn.clone(),
+        ]
     }
 
-    /// The look over the frame drawn into `targets`, onto `target`.
+    /// The look over the frame drawn into `targets`, onto `target`; fog
+    /// fading into the sky pass's sky (`sky_drawn`) or the dome alone.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &self,
         queue: &wgpu::Queue,
@@ -268,9 +300,15 @@ impl Post {
         target: &wgpu::TextureView,
         look: &Look,
         near: f32,
+        world_light: glam::Vec3,
+        sky_drawn: bool,
     ) {
         let Some(t) = &self.targets else { return };
-        queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&look.uniform(near)));
+        queue.write_buffer(
+            &self.uniform,
+            0,
+            bytemuck::cast_slice(&look.uniform(near, world_light)),
+        );
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("post"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -287,7 +325,15 @@ impl Post {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &t.bind_group, &[]);
+        pass.set_bind_group(
+            0,
+            if sky_drawn {
+                &t.bind_group_drawn
+            } else {
+                &t.bind_group
+            },
+            &[],
+        );
         pass.draw(0..3, 0..1);
     }
 }
