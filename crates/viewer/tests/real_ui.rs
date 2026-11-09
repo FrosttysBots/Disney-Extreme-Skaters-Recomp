@@ -622,6 +622,7 @@ fn real_video_options() {
         "look_day",
         "look_rain",
         "look_snow",
+        "look_water",
         "look_fog",
     ] {
         assert!(

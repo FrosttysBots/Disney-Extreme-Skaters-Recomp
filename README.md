@@ -69,15 +69,20 @@ frames are drawn as the game draws them.
   up) and **Fog**, where distant things fade into the sky behind them.
   Rain and snow keep off what's under a roof or indoors, and the ground
   wets, dries, whitens and melts over a few minutes as you change them.
+  **Water** (Calm, Waves or Rough; the disc's own by default) turns the
+  levels' seas, lakes and pools into live water: rolling waves, the level
+  and sky mirrored at a glance, the sun glittering, the bottom seen
+  through it where it's shallow and lost in its colour where it's deep,
+  and foam along the shore.
 - **Colour:** **Exposure**, **Warmth**, **Tint**, **Contrast** and
   **Saturation**.
 - **Reset Look** goes back to the disc's.
 
 These are ported from [bevy_atmos](https://github.com/Nilbong/bevy_atmos)
-(MIT or Apache-2.0); its water is next. The settings still
+(MIT or Apache-2.0). The settings still
 to come in Advanced (anti-aliasing, texture filtering, render scale,
 field of view, draw distance) are greyed out. `--look
-sky=1,clouds=0.45,hour=17.8,fog=200,rain=0.6` sets the look from the command line,
+sky=1,clouds=0.45,hour=17.8,fog=200,rain=0.6,water=0.6` sets the look from the command line,
 for screenshots.
 
 ## Building it yourself

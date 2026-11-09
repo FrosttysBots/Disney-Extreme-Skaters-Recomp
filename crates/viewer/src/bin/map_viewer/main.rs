@@ -200,7 +200,7 @@ struct Args {
     /// fog (metres to half-hidden; 0 off), exposure (stops), warmth, tint
     /// (-1 to 1), contrast, saturation (1 as it is), sky (1 physical),
     /// clouds (cover 0 to 1), hour (0 to 24; -1 the level's), day_speed
-    /// (game hours a second), rain, snow (0 to 1)
+    /// (game hours a second), rain, snow, water (0 to 1)
     #[arg(long, default_value = "")]
     look: String,
     /// For --skate: play another of the level's goals from its own
@@ -2637,7 +2637,7 @@ struct App<'a> {
     /// The Video Options' values as last shown in its menu.
     video_labels: Option<[String; 6]>,
     /// The Advanced menu's look values as last shown.
-    look_labels: Option<[String; 12]>,
+    look_labels: Option<[String; 13]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
     /// it, which forgets them).
     video_pending: Option<Video>,
@@ -6989,6 +6989,7 @@ impl<'a> App<'a> {
                     "look_day_text",
                     "look_rain_text",
                     "look_snow_text",
+                    "look_water_text",
                 ];
                 for (id, label) in ids.iter().zip(&labels) {
                     if !screen.screen.exists(id) {
@@ -8408,6 +8409,7 @@ impl<'a> App<'a> {
             }
             Some(o) if o == c("look_rain") => look.rain = cycle(&RAIN_STEPS, look.rain, dir),
             Some(o) if o == c("look_snow") => look.snow = cycle(&SNOW_STEPS, look.snow, dir),
+            Some(o) if o == c("look_water") => look.water = cycle(&WATER_STEPS, look.water, dir),
             _ => return,
         }
         self.settings.save();
@@ -9233,6 +9235,14 @@ const HOUR_STEPS: [(&str, f32); 8] = [
 /// (Slow: a day in 24 minutes; Fast: in 4).
 const DAY_STEPS: [(&str, f32); 3] = [("Off", 0.0), ("Slow", 1.0 / 60.0), ("Fast", 0.1)];
 
+/// The Advanced menu's water: the disc's own, or waves this high.
+const WATER_STEPS: [(&str, f32); 4] = [
+    ("Disc's", 0.0),
+    ("Calm", 0.3),
+    ("Waves", 0.6),
+    ("Rough", 1.0),
+];
+
 /// The Advanced menu's rain and snow: names and how much.
 const RAIN_STEPS: [(&str, f32); 4] = [
     ("Off", 0.0),
@@ -9263,7 +9273,7 @@ fn step_name(steps: &[(&str, f32)], value: f32) -> String {
 }
 
 /// The Advanced menu's look values, as shown.
-fn look_labels(look: &desa_viewer::post::Look) -> [String; 12] {
+fn look_labels(look: &desa_viewer::post::Look) -> [String; 13] {
     let fog = FOG_STEPS
         .iter()
         .find(|(_, d)| *d == look.fog_distance)
@@ -9302,6 +9312,7 @@ fn look_labels(look: &desa_viewer::post::Look) -> [String; 12] {
         format!("Day Cycle: {}", step_name(&DAY_STEPS, look.day_speed)),
         format!("Rain: {}", step_name(&RAIN_STEPS, look.rain)),
         format!("Snow: {}", step_name(&SNOW_STEPS, look.snow)),
+        format!("Water: {}", step_name(&WATER_STEPS, look.water)),
     ]
 }
 
@@ -9315,7 +9326,7 @@ fn parse_look(text: &str) -> Result<desa_viewer::post::Look> {
         let value: f32 = value.trim().parse().context("--look's numbers")?;
         anyhow::ensure!(
             settings::set_look(&mut look, key.trim(), value),
-            "--look: no {} (fog, exposure, warmth, tint, contrast, saturation, sky, clouds, hour, day_speed, rain, snow)",
+            "--look: no {} (fog, exposure, warmth, tint, contrast, saturation, sky, clouds, hour, day_speed, rain, snow, water)",
             key.trim()
         );
     }

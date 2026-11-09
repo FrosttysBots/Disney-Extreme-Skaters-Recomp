@@ -208,16 +208,17 @@ script viewer_advanced_menu
     RunScriptOnScreenElement id = current_menu_anchor animate_in
 endscript
 
-// ADVANCED's Atmosphere: the sky, clouds, the time of day, the weather
-// and fog.
+// ADVANCED's Atmosphere: the sky, clouds, the time of day, the weather,
+// water and fog.
 script viewer_atmosphere_menu
-    viewer_advanced_submenu title = "ATMOSPHERE" num_items = 8
+    viewer_advanced_submenu title = "ATMOSPHERE" num_items = 9
     viewer_look_item id = look_sky text_id = look_sky_text
     viewer_look_item id = look_clouds text_id = look_clouds_text
     viewer_look_item id = look_hour text_id = look_hour_text
     viewer_look_item id = look_day text_id = look_day_text
     viewer_look_item id = look_rain text_id = look_rain_text
     viewer_look_item id = look_snow text_id = look_snow_text
+    viewer_look_item id = look_water text_id = look_water_text
     viewer_look_item id = look_fog text_id = look_fog_text
     viewer_advanced_submenu_done
 endscript
