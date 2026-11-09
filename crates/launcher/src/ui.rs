@@ -53,6 +53,7 @@ enum Msg {
     Installed(Result<(String, bool), String>),
     SetupDone(Result<(), String>),
     Background(ngc_texture::Image),
+    Logo(ngc_texture::Image),
 }
 
 /// The first run's steps.
@@ -90,6 +91,11 @@ pub struct Launcher {
     loading_art: bool,
     /// Your own `logo.png`, if you've put one by the launcher.
     logo: Option<Option<TextureHandle>>,
+    /// The game's logo from your disc (the Skate Shop's poster of it).
+    disc_logo: Option<TextureHandle>,
+    pending_logo: Option<ngc_texture::Image>,
+    /// The logo for the window's icon, once it's in: RGBA, width, height.
+    pub icon: Option<(Vec<u8>, u32, u32)>,
 }
 
 impl Launcher {
@@ -122,6 +128,9 @@ impl Launcher {
             quit: false,
             loading_art: false,
             logo: None,
+            disc_logo: None,
+            pending_logo: None,
+            icon: None,
         };
         l.refresh();
         l.load_art();
@@ -135,7 +144,7 @@ impl Launcher {
             if let Ok(msg) = self.rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 self.handle(msg);
             }
-            if self.pending.len() >= 2 {
+            if self.pending.len() >= 2 && self.icon.is_some() {
                 self.loading_art = false;
             }
         }
@@ -157,6 +166,15 @@ impl Launcher {
         };
         self.loading_art = true;
         let tx = self.tx.clone();
+        {
+            let tx = tx.clone();
+            let disc = disc.clone();
+            std::thread::spawn(move || {
+                if let Some(image) = disc_logo(&disc) {
+                    let _ = tx.send(Msg::Logo(image));
+                }
+            });
+        }
         std::thread::spawn(move || {
             let Ok(mut data) = desa_viewer::source::GameData::open(&disc) else {
                 return;
@@ -164,7 +182,11 @@ impl Launcher {
             let mut names: Vec<String> = data
                 .loading_screens()
                 .into_iter()
-                .filter(|n| n.to_ascii_lowercase().starts_with("loadscrn"))
+                .filter(|n| {
+                    // (Not `loadscrn_ngc`: the copyright notices.)
+                    let n = n.to_ascii_lowercase();
+                    n.starts_with("loadscrn") && n != "loadscrn_ngc"
+                })
                 .collect();
             // A different order each run.
             let seed = std::time::SystemTime::now()
@@ -181,6 +203,14 @@ impl Launcher {
                 }
             }
         });
+    }
+
+    /// Your `logo.png`, else the disc's logo, else none (the drawn title).
+    fn shown_logo(&self) -> Option<TextureHandle> {
+        self.logo
+            .clone()
+            .flatten()
+            .or_else(|| self.disc_logo.clone())
     }
 
     fn handle(&mut self, msg: Msg) {
@@ -214,6 +244,10 @@ impl Launcher {
                 }
             }
             Msg::Background(image) => self.pending.push(image),
+            Msg::Logo(image) => {
+                self.icon = Some((image.rgba.clone(), image.width, image.height));
+                self.pending_logo = Some(image);
+            }
         }
     }
 
@@ -325,6 +359,14 @@ impl Launcher {
         while let Ok(msg) = self.rx.try_recv() {
             self.handle(msg);
         }
+        if let Some(image) = self.pending_logo.take() {
+            let color = egui::ColorImage::from_rgba_unmultiplied(
+                [image.width as usize, image.height as usize],
+                &image.rgba,
+            );
+            self.disc_logo =
+                Some(ctx.load_texture("disc_logo", color, egui::TextureOptions::LINEAR));
+        }
         for image in self.pending.drain(..) {
             let color = egui::ColorImage::from_rgba_unmultiplied(
                 [image.width as usize, image.height as usize],
@@ -358,7 +400,7 @@ impl Launcher {
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
-        let logo = self.logo.clone().flatten();
+        let logo = self.shown_logo();
         let head = if logo.is_some() { 214.0 } else { 196.0 };
         let area =
             Rect::from_min_size(rect.left_top() + vec2(18.0, 14.0), vec2(200.0, head - 24.0));
@@ -1040,7 +1082,7 @@ impl Launcher {
                         ui.set_width(560.0);
                         let (r, _) = ui.allocate_exact_size(vec2(560.0, 150.0), Sense::hover());
                         let area = Rect::from_center_size(r.center(), vec2(200.0, 150.0));
-                        title(ui.painter(), area, self.logo.clone().flatten().as_ref());
+                        title(ui.painter(), area, self.shown_logo().as_ref());
                         self.setup_step(ui);
                     });
             });
@@ -1291,8 +1333,43 @@ pub fn impact(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("impact".into()))
 }
 
+/// The game's logo, read from your disc: the poster of it in the Skate
+/// Shop (`6f9103fc` in its scene's textures), cut round. The launcher
+/// carries no picture of the game's own.
+fn disc_logo(disc: &std::path::Path) -> Option<ngc_texture::Image> {
+    const POSTER: u32 = 0x6f91_03fc;
+    let mut data = desa_viewer::source::GameData::open(disc).ok()?;
+    let id = data
+        .levels()
+        .into_iter()
+        .find(|l| l.id.eq_ignore_ascii_case("skateshop"))?
+        .id;
+    let files = data.load_level(&id).ok()?;
+    let bytes = files.textures?;
+    let dict = ngc_texture::tex::TexDictionary::parse(&bytes).ok()?;
+    let mut image = dict
+        .textures
+        .iter()
+        .find(|t| t.checksum == POSTER)?
+        .decode_level(0)
+        .ok()?;
+    // Only the round badge: the square's corners clear, softly.
+    let (w, h) = (image.width as f32, image.height as f32);
+    let radius = w.min(h) / 2.0;
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let d =
+                ((x as f32 + 0.5 - w / 2.0).powi(2) + (y as f32 + 0.5 - h / 2.0).powi(2)).sqrt();
+            let keep = (radius - d).clamp(0.0, 1.0);
+            let i = ((y * image.width + x) * 4 + 3) as usize;
+            image.rgba[i] = (image.rgba[i] as f32 * keep) as u8;
+        }
+    }
+    Some(image)
+}
+
 /// Your own `logo.png`, from beside the launcher or in its settings
-/// folder: the launcher carries no logo of the game's.
+/// folder.
 fn user_logo() -> Option<egui::ColorImage> {
     let mut places = Vec::new();
     if let Some(dir) = std::env::current_exe()
@@ -1331,7 +1408,7 @@ fn user_logo() -> Option<egui::ColorImage> {
     })
 }
 
-/// The title in `area`: your logo fitted in, or our own type.
+/// The title in `area`: the logo fitted in, or our own type.
 fn title(p: &egui::Painter, area: Rect, logo: Option<&TextureHandle>) {
     match logo {
         Some(tex) => {

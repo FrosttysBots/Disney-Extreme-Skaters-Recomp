@@ -157,6 +157,16 @@ impl App {
         let raw = gpu.egui_state.take_egui_input(&gpu.window);
         let launcher = &mut self.launcher;
         let output = gpu.egui_ctx.run(raw, |ctx| launcher.ui(ctx));
+        // The disc's logo, once read, on the title bar and the taskbar.
+        if let Some((rgba, w, h)) = self.launcher.icon.take() {
+            let icon = |rgba: Vec<u8>| winit::window::Icon::from_rgba(rgba, w, h).ok();
+            #[cfg(windows)]
+            {
+                use winit::platform::windows::WindowExtWindows;
+                gpu.window.set_taskbar_icon(icon(rgba.clone()));
+            }
+            gpu.window.set_window_icon(icon(rgba));
+        }
         gpu.egui_state
             .handle_platform_output(&gpu.window, output.platform_output.clone());
         if self.launcher.quit {
