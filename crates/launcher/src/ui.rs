@@ -96,6 +96,8 @@ pub struct Launcher {
     pending_logo: Option<ngc_texture::Image>,
     /// The logo for the window's icon, once it's in: RGBA, width, height.
     pub icon: Option<(Vec<u8>, u32, u32)>,
+    /// Drawing a screenshot: nothing written to the computer.
+    pub screenshot: bool,
 }
 
 impl Launcher {
@@ -131,6 +133,7 @@ impl Launcher {
             disc_logo: None,
             pending_logo: None,
             icon: None,
+            screenshot: false,
         };
         l.refresh();
         l.load_art();
@@ -246,6 +249,18 @@ impl Launcher {
             Msg::Background(image) => self.pending.push(image),
             Msg::Logo(image) => {
                 self.icon = Some((image.rgba.clone(), image.width, image.height));
+                // The shortcuts' icon, made once (it runs PowerShell).
+                if !self.screenshot {
+                    let (config, rgba, w, h) = (
+                        self.config.clone(),
+                        image.rgba.clone(),
+                        image.width,
+                        image.height,
+                    );
+                    std::thread::spawn(move || {
+                        let _ = install::write_logo_icon(&config, &rgba, w, h);
+                    });
+                }
                 self.pending_logo = Some(image);
             }
         }

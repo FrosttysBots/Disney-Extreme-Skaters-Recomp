@@ -22,7 +22,7 @@ The easy way is **DESA-Launcher.exe**:
 - **Setup on first run**: it installs itself (to `%LOCALAPPDATA%\Programs\DESA Recomp`), makes Desktop and Start menu shortcuts, asks for your disc image and downloads the latest release.
 - **Updates from GitHub**: each time it opens it checks the releases, and the big button turns to **UPDATE** when there's a newer one. It updates itself too.
 - **Play** the game or the Map Viewer, the latest or any older version; **Patch Notes** and **Installations** pages; **Uninstall** in Settings.
-- The background is your disc's own loading screens, and the logo (in the sidebar and on the window) is the game's own, read from your disc's Skate Shop poster. A `logo.png` next to the launcher, or in `%APPDATA%\desa-launcher`, is shown instead.
+- The background is your disc's own loading screens, and the logo (in the sidebar and on the window) is the game's own, read from your disc's Skate Shop poster, which also becomes the shortcuts' icon. A `logo.png` next to the launcher, or in `%APPDATA%\desa-launcher`, is shown instead.
 
 <br clear="right">
 
