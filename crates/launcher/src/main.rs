@@ -295,6 +295,7 @@ fn screenshot(out: &str, page: &str) -> Result<()> {
     let setup = page == "setup";
     config.setup_done = !setup;
     let mut launcher = Launcher::new(config);
+    launcher.screenshot = true;
     if let Some(p) = Page::parse(page) {
         launcher.page = p;
     }

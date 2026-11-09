@@ -285,9 +285,63 @@ fn shortcut_dirs() -> Vec<(bool, PathBuf)> {
     out
 }
 
-/// Desktop and Start menu shortcuts to the installed launcher.
+/// The game's logo as an icon file, for the shortcuts: made from your
+/// disc on this computer, never downloaded.
+pub fn logo_icon_path(config: &Config) -> PathBuf {
+    config.install_dir.join("logo.ico")
+}
+
+/// Writes the logo (RGBA) as `logo.ico` in the install folder, if it's
+/// installed there and the icon isn't yet; then gives the shortcuts
+/// already made that icon. True if it was written.
+pub fn write_logo_icon(config: &Config, rgba: &[u8], width: u32, height: u32) -> Result<bool> {
+    let path = logo_icon_path(config);
+    if !config.launcher_path().is_file() || path.is_file() {
+        return Ok(false);
+    }
+    let ico = ico_bytes(rgba, width, height)?;
+    fs::write(&path, ico).with_context(|| format!("couldn't write {}", path.display()))?;
+    let (mut desktop, mut start_menu) = (false, false);
+    for (is_desktop, dir) in shortcut_dirs() {
+        if dir.join(SHORTCUT).is_file() {
+            if is_desktop {
+                desktop = true;
+            } else {
+                start_menu = true;
+            }
+        }
+    }
+    if desktop || start_menu {
+        make_shortcuts(config, desktop, start_menu)?;
+    }
+    Ok(true)
+}
+
+/// An `.ico` of one PNG picture of `rgba`.
+fn ico_bytes(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(rgba)?;
+    }
+    // (0 for a side means 256.)
+    let side = |n: u32| if n >= 256 { 0 } else { n as u8 };
+    let mut ico = vec![0, 0, 1, 0, 1, 0];
+    ico.extend_from_slice(&[side(width), side(height), 0, 0, 1, 0, 32, 0]);
+    ico.extend_from_slice(&(png_bytes.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22u32.to_le_bytes());
+    ico.extend_from_slice(&png_bytes);
+    Ok(ico)
+}
+
+/// Desktop and Start menu shortcuts to the installed launcher, with the
+/// logo from the disc if it's been made, else the launcher's own icon.
 pub fn make_shortcuts(config: &Config, desktop: bool, start_menu: bool) -> Result<()> {
     let target = config.launcher_path();
+    let logo = logo_icon_path(config);
+    let icon = if logo.is_file() { logo } else { target.clone() };
     for (is_desktop, dir) in shortcut_dirs() {
         if (is_desktop && !desktop) || (!is_desktop && !start_menu) {
             continue;
@@ -299,7 +353,7 @@ pub fn make_shortcuts(config: &Config, desktop: bool, start_menu: bool) -> Resul
             quote(&link),
             quote(&target),
             quote(&config.install_dir),
-            quote(&target),
+            quote(&icon),
         );
         let status = hidden(Command::new("powershell").args([
             "-NoProfile",
@@ -355,6 +409,7 @@ pub fn remove_version(config: &Config, tag: &str) -> Result<()> {
 /// (`%APPDATA%\desa-map-viewer`) are kept.
 pub fn uninstall(config: &Config) -> Result<()> {
     let _ = fs::remove_dir_all(config.versions_dir());
+    let _ = fs::remove_file(logo_icon_path(config));
     for (_, dir) in shortcut_dirs() {
         let _ = fs::remove_file(dir.join(SHORTCUT));
     }
@@ -376,4 +431,18 @@ pub fn uninstall(config: &Config) -> Result<()> {
 pub fn open_folder(path: &Path) {
     let _ = fs::create_dir_all(path);
     let _ = Command::new("explorer").arg(path).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn logo_icon_is_an_ico() {
+        let rgba = vec![200u8; 4 * 4 * 4];
+        let ico = super::ico_bytes(&rgba, 4, 4).unwrap();
+        assert_eq!(&ico[..6], &[0, 0, 1, 0, 1, 0]);
+        assert_eq!(&ico[22..26], &[0x89, b'P', b'N', b'G']);
+        if let Ok(out) = std::env::var("ICO_TEST_OUT") {
+            std::fs::write(out, &ico).unwrap();
+        }
+    }
 }
