@@ -101,7 +101,8 @@ skater is and what it's doing.
 
 ## What to try
 
-- Two players: the main menu's 2 Player, a level, then each player's
+- Two players are greyed out on the main menu for now, while they're
+  being finished. (As built: the main menu's 2 Player, a level, then each player's
   skater ("PLAYER ONE", Ready; "PLAYER TWO", Ready). The level comes up
   split under the game's TWO PLAYERS menu. Start Game opens GAME
   OPTIONS: pick Horse, King of the Hill or Score Challenge and its
@@ -110,7 +111,7 @@ skater is and what it's doing.
   0 ollie (hold, let go), 1 flip, 2 grab, 3 grind, 5 revert (no numpad:
   Right Shift, comma, period, slash, semicolon). Player one keeps W A S D
   and the first pad. In Horse it's one player at a time: wait for your
-  name, then start a trick before the clock runs out.
+  name, then start a trick before the clock runs out.)
 
 - Pushing, steering, ollies and flips/grabs around a level.
 - Grinding rails (each direction is a different grind), and balancing;

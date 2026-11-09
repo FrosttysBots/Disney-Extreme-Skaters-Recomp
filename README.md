@@ -23,7 +23,7 @@ to that engine family too.
 | Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
 | Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players split screen: Horse, King of the Hill and Score Challenge |
+| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players split screen: Horse, King of the Hill and Score Challenge (greyed out on the main menu for now) |
 | Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit) |
 | Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
@@ -243,8 +243,11 @@ one (`--goal Gaps`, `--goal Collect2`...). Their pros offer them with the game's
 ("Army Man: Press B to talk."): B on the pad or Enter starts the goal,
 and you skate on while it's offered.
 
-**Two players** come in through the game's own menus: the main menu's 2
-Player (`start_2p`, `SetGameType freeskate2p`), its level select, then
+**Two players** are switched off on the main menu for now: its 2 Player
+is greyed out (`not_focusable`, as the game's demo builds have it) while
+the games are being finished. `--two-player` still plays them for
+screenshots. As built, they come in through the game's own menus: the
+main menu's 2 Player (`start_2p`, `SetGameType freeskate2p`), its level select, then
 the skater select twice ("PLAYER ONE", Ready; "PLAYER TWO", Ready). The
 level arrives split in two, one player over the other, under the game's
 TWO PLAYERS menu (Start Game, Change Level, Split Mode for side by side,

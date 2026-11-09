@@ -22,6 +22,12 @@ script main_menu_add_item
                 highlight_bar_scale = (1.015, 1.3)
             }
         endif
+        // 2 Player greyed out for now, as the game's demo builds have it
+        // (not_focusable), while two players' games are being finished.
+        if (<id> = main_menu_2_player_option)
+            viewer_disc_main_menu_add_item <...> not_focusable = not_focusable
+            return
+        endif
     endif
     viewer_disc_main_menu_add_item <...>
     // ... and the main menu's Exit Game after its Options, as the game's
