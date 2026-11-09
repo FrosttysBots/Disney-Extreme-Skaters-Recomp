@@ -196,6 +196,11 @@ struct Args {
     /// "Part:hue:saturation:value" separated by commas (`Shirt:0:100:50`)
     #[arg(long, requires = "character", default_value = "")]
     kid_color: String,
+    /// The Advanced menu's look, as NAME=VALUE separated by commas:
+    /// fog (metres to half-hidden; 0 off), exposure (stops), warmth, tint
+    /// (-1 to 1), contrast, saturation (1 as it is)
+    #[arg(long, default_value = "")]
+    look: String,
     /// For --skate: play another of the level's goals from its own
     /// scripts, by its type (`Gaps`, `Gaps2`...)
     #[arg(long, requires = "skate")]
@@ -341,6 +346,10 @@ fn main() -> Result<()> {
 pub fn run(game: bool) -> Result<()> {
     let args = Args::parse();
     let mut settings = Settings::load();
+    if !args.look.is_empty() {
+        settings.look = parse_look(&args.look)?;
+        settings.read_only = true;
+    }
     let data_path = args
         .data
         .clone()
@@ -1655,6 +1664,7 @@ impl ScreenUi {
             "really_change_level",
             "skip_track",
             "viewer_video",
+            "viewer_look",
             "viewer_exit_game",
             "StartNetworkGame",
         ]);
@@ -2624,6 +2634,8 @@ struct App<'a> {
     exit_game: bool,
     /// The Video Options' values as last shown in its menu.
     video_labels: Option<[String; 6]>,
+    /// The Advanced menu's look values as last shown.
+    look_labels: Option<[String; 6]>,
     /// The Video Options as changed in its menu, till Apply (or leaving
     /// it, which forgets them).
     video_pending: Option<Video>,
@@ -2855,6 +2867,7 @@ impl<'a> App<'a> {
             camera_hold: false,
             exit_game: false,
             video_labels: None,
+            look_labels: None,
             video_pending: None,
             bars: None,
             next_frame: Instant::now(),
@@ -6957,6 +6970,30 @@ impl<'a> App<'a> {
             self.video_labels = None;
             self.video_pending = None;
         }
+        // The Advanced menu's look values, as they are.
+        if screen.screen.exists("look_fog_text") {
+            let labels = look_labels(&self.settings.look);
+            if self.look_labels.as_ref() != Some(&labels) {
+                let ids = [
+                    "look_fog_text",
+                    "look_exposure_text",
+                    "look_warmth_text",
+                    "look_tint_text",
+                    "look_contrast_text",
+                    "look_saturation_text",
+                ];
+                for (id, label) in ids.iter().zip(&labels) {
+                    let props = qb::Value::Struct(vec![(
+                        Some(qb::checksum("text")),
+                        qb::Value::String(label.clone()),
+                    )]);
+                    screen.screen.set(id, &props, level.behaviour.program());
+                }
+                self.look_labels = Some(labels);
+            }
+        } else {
+            self.look_labels = None;
+        }
         let sounds = std::mem::take(&mut screen.screen.sounds);
         let requests = std::mem::take(&mut screen.screen.requests);
         // Player two's skater select: player one's pick kept.
@@ -6982,6 +7019,13 @@ impl<'a> App<'a> {
             if name == c("viewer_exit_game") {
                 // The main menu's Exit Game: closing, as the window would.
                 self.exit_game = true;
+                continue;
+            }
+            if name == c("viewer_look") {
+                // The Advanced menu's look: a value turned, or reset.
+                let option = args.get(c("option")).and_then(qb::Value::as_name);
+                let dir = args.get(c("dir")).and_then(qb::Value::as_int).unwrap_or(1);
+                self.change_look(option, dir);
                 continue;
             }
             if name == c("viewer_video") {
@@ -8152,6 +8196,7 @@ impl<'a> App<'a> {
         let Some(level) = &mut self.level else { return };
         level.renderer.show_sky = self.model.show_sky;
         level.renderer.min_light = self.model.brighten;
+        level.renderer.look = self.settings.look;
         level.renderer.collision_view = self.model.collision;
         let wanted = (self.model.show_rails, self.model.show_spawns);
         if level.markers != wanted {
@@ -8318,6 +8363,36 @@ impl<'a> App<'a> {
 
     /// A Video Options setting turned (`dir` 1 the next value, -1 the one
     /// before), shown till Apply puts them to the window and keeps them.
+    /// An Advanced menu look value turned (`dir` 1 more, -1 less), or
+    /// all reset; shown at once and kept.
+    fn change_look(&mut self, option: Option<u32>, dir: i32) {
+        let c = qb::checksum;
+        let look = &mut self.settings.look;
+        let step = |value: &mut f32, by: f32, min: f32, max: f32| {
+            *value = ((*value + by * dir.signum() as f32) / by).round() * by;
+            *value = value.clamp(min, max);
+        };
+        match option {
+            Some(o) if o == c("look_reset") => *look = desa_viewer::post::Look::default(),
+            Some(o) if o == c("look_fog") => {
+                let at = FOG_STEPS
+                    .iter()
+                    .position(|(_, d)| *d == look.fog_distance)
+                    .unwrap_or(0) as i32;
+                let to = (at + dir.signum()).rem_euclid(FOG_STEPS.len() as i32) as usize;
+                look.fog_distance = FOG_STEPS[to].1;
+            }
+            Some(o) if o == c("look_exposure") => step(&mut look.exposure, 0.25, -3.0, 3.0),
+            Some(o) if o == c("look_warmth") => step(&mut look.warmth, 0.1, -1.0, 1.0),
+            Some(o) if o == c("look_tint") => step(&mut look.tint, 0.1, -1.0, 1.0),
+            Some(o) if o == c("look_contrast") => step(&mut look.contrast, 0.1, 0.5, 2.0),
+            Some(o) if o == c("look_saturation") => step(&mut look.saturation, 0.1, 0.0, 2.0),
+            _ => return,
+        }
+        self.settings.save();
+        self.sync_view();
+    }
+
     fn change_video(&mut self, option: Option<u32>, dir: i32) {
         let c = qb::checksum;
         if option == Some(c("video_apply")) {
@@ -9103,6 +9178,62 @@ fn shown_size(video: &Video, window: Option<&Arc<Window>>) -> (u32, u32) {
 }
 
 /// The Video Options' items' text, as the settings are.
+/// The Advanced menu's fog: names and metres to half-hidden.
+const FOG_STEPS: [(&str, f32); 5] = [
+    ("Off", 0.0),
+    ("Light", 400.0),
+    ("Medium", 200.0),
+    ("Heavy", 100.0),
+    ("Thick", 50.0),
+];
+
+/// The Advanced menu's look values, as shown.
+fn look_labels(look: &desa_viewer::post::Look) -> [String; 6] {
+    let fog = FOG_STEPS
+        .iter()
+        .find(|(_, d)| *d == look.fog_distance)
+        .map_or_else(
+            || format!("{} m", look.fog_distance),
+            |(n, _)| n.to_string(),
+        );
+    let signed = |v: f32| {
+        if v.abs() < 0.005 {
+            "0".to_string()
+        } else {
+            format!("{v:+.2}")
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
+        }
+    };
+    let percent = |v: f32| format!("{}%", (v * 100.0).round() as i32);
+    [
+        format!("Fog: {fog}"),
+        format!("Exposure: {}", signed(look.exposure)),
+        format!("Warmth: {}", signed(look.warmth)),
+        format!("Tint: {}", signed(look.tint)),
+        format!("Contrast: {}", percent(look.contrast)),
+        format!("Saturation: {}", percent(look.saturation)),
+    ]
+}
+
+/// `--look`'s NAME=VALUE pairs over the default look.
+fn parse_look(text: &str) -> Result<desa_viewer::post::Look> {
+    let mut look = desa_viewer::post::Look::default();
+    for part in text.split(',').filter(|p| !p.trim().is_empty()) {
+        let (key, value) = part
+            .split_once('=')
+            .context("--look takes NAME=VALUE pairs")?;
+        let value: f32 = value.trim().parse().context("--look's numbers")?;
+        anyhow::ensure!(
+            settings::set_look(&mut look, key.trim(), value),
+            "--look: no {} (fog, exposure, warmth, tint, contrast, saturation)",
+            key.trim()
+        );
+    }
+    Ok(look)
+}
+
 fn video_labels(video: &Video, window: Option<&Arc<Window>>) -> [String; 6] {
     let (w, h) = shown_size(video, window);
     [
@@ -9777,6 +9908,7 @@ fn screenshot(data_path: &Path, args: &Args, out: &Path) -> Result<()> {
     }
 
     let view = target.create_view(&Default::default());
+    loaded.renderer.look = parse_look(&args.look)?;
     paint(
         &device,
         &queue,

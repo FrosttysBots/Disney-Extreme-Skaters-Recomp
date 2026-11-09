@@ -148,8 +148,9 @@ script viewer_video_item
     }
 endscript
 
-// Advanced Graphics: placeholders for now, greyed out (not_focusable),
-// with Done back to the Video Options.
+// Advanced Graphics: the look over the frame (after bevy_atmos's fog and
+// colour grade), changed as it's turned and kept; the settings still to
+// come greyed out (not_focusable); Done back to the Video Options.
 script viewer_advanced_menu
     if ObjectExists id = current_menu_anchor
         DestroyScreenElement id = current_menu_anchor
@@ -168,11 +169,24 @@ script viewer_advanced_menu
         menu_title = "ADVANCED"
         helper_text = generic_helper_text
     }
-    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 6
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 13
     SetScreenElementProps {
         id = advanced_vmenu
         event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_video_menu } } ]
         replace_handlers
+    }
+    viewer_look_item id = look_fog text_id = look_fog_text
+    viewer_look_item id = look_exposure text_id = look_exposure_text
+    viewer_look_item id = look_warmth text_id = look_warmth_text
+    viewer_look_item id = look_tint text_id = look_tint_text
+    viewer_look_item id = look_contrast text_id = look_contrast_text
+    viewer_look_item id = look_saturation text_id = look_saturation_text
+    main_menu_add_item {
+        text = "Reset Look"
+        id = look_reset
+        pad_choose_script = viewer_look
+        pad_choose_params = { option = look_reset }
+        highlight_bar_scale = (1.015, 1.3)
     }
     main_menu_add_item text = "Anti-Aliasing" id = advanced_aa not_focusable = not_focusable
     main_menu_add_item text = "Texture Filtering" id = advanced_filtering not_focusable = not_focusable
@@ -186,6 +200,25 @@ script viewer_advanced_menu
         highlight_bar_scale = (1.015, 1.3)
     }
     RunScriptOnScreenElement id = current_menu_anchor animate_in
+endscript
+
+// One of the look's: chosen or Right, more; Left, less.
+script viewer_look_item
+    main_menu_add_item {
+        text = " "
+        id = <id>
+        text_id = <text_id>
+        pad_choose_script = viewer_look
+        pad_choose_params = { option = <id> dir = 1 }
+        highlight_bar_scale = (1.015, 1.3)
+    }
+    SetScreenElementProps {
+        id = <id>
+        event_handlers = [
+            { pad_left viewer_look params = { option = <id> dir = -1 } }
+            { pad_right viewer_look params = { option = <id> dir = 1 } }
+        ]
+    }
 endscript
 
 script viewer_video_exit

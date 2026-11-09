@@ -251,6 +251,10 @@ pub struct Renderer {
     /// Minimum vertex lighting (0 = as the game lights it). Raising it
     /// shows detail in dark corners.
     pub min_light: f32,
+    /// The look over the frame (fog, the colour grade): see
+    /// [`crate::post`]. The default leaves frames as the game draws them.
+    pub look: crate::post::Look,
+    post: crate::post::Post,
     depth: Option<(wgpu::TextureView, u32, u32)>,
 }
 
@@ -357,6 +361,7 @@ impl Renderer {
             )
         });
 
+        let post = crate::post::Post::new(&device, color_format);
         Self {
             device,
             queue,
@@ -392,6 +397,8 @@ impl Renderer {
             solo_character2: false,
             character2: None,
             min_light: 0.0,
+            look: crate::post::Look::default(),
+            post,
             depth: None,
         }
     }
@@ -740,17 +747,35 @@ impl Renderer {
                 }
             }
         };
+        // The look on: drawn into the post pass's frame and depth, then
+        // onto the target with it.
+        let post = self.look.is_on();
+        let (scene, depth, sky) = if post {
+            let (color, depth, sky) = self.post.targets(&self.device, DEPTH_FORMAT, width, height);
+            (color, Some(depth), Some(sky))
+        } else {
+            (target.clone(), None, None)
+        };
         for (n, (rect, camera)) in views.into_iter().enumerate() {
-            self.encode_view(encoder, target, n, rect, &camera, time);
+            let post = depth.as_ref().zip(sky.as_ref());
+            self.encode_view(encoder, &scene, post, n, rect, &camera, time);
+        }
+        if post {
+            self.post
+                .draw(&self.queue, encoder, target, &self.look, NEAR);
         }
     }
 
     /// Records one view: the level from `camera` in `rect` of the
     /// target, cleared first if it's the first (`n` 0).
+    #[allow(clippy::too_many_arguments)]
     fn encode_view(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        // The post pass's depth, kept for it (else the renderer's own),
+        // and its sky, drawn there alone (what fog fades into).
+        post: Option<(&wgpu::TextureView, &wgpu::TextureView)>,
         n: usize,
         rect: (f32, f32, f32, f32),
         camera: &FlyCamera,
@@ -792,8 +817,47 @@ impl Renderer {
         write(world_globals, view);
         write(sky_globals, rotation_view);
 
+        let post_depth = post.map(|p| p.0);
+        let clear = if self.aspect.is_some() {
+            wgpu::Color::BLACK
+        } else {
+            CLEAR_COLOR
+        };
+        if let Some((_, sky_target)) = post {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sky alone"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: sky_target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if n > 0 {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(clear)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth.as_ref().unwrap().0,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_viewport(picture.0, picture.1, picture.2, picture.3, 0.0, 1.0);
+            if let Some(sky) = self.sky.as_ref().filter(|_| self.show_sky) {
+                pass.set_bind_group(0, &sky_globals.bind_group, &[]);
+                draw(&mut pass, sky, &self.sky_pipelines);
+            }
+        }
         {
-            let (depth_view, _, _) = self.depth.as_ref().unwrap();
+            let depth_view = post_depth.unwrap_or(&self.depth.as_ref().unwrap().0);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -819,8 +883,17 @@ impl Renderer {
                     view: depth_view,
                     // Reversed Z: 0 is infinitely far away.
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Discard,
+                        load: if n > 0 && post_depth.is_some() {
+                            // (The second view's half: the first's kept.)
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(0.0)
+                        },
+                        store: if post_depth.is_some() {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Discard
+                        },
                     }),
                     stencil_ops: None,
                 }),
@@ -834,7 +907,8 @@ impl Renderer {
                 .filter(|_| self.collision_view != CollisionView::Hidden);
             let only_collision = collision.is_some() && self.collision_view == CollisionView::Only;
             if !only_collision {
-                if let Some(sky) = self.sky.as_ref().filter(|_| self.show_sky) {
+                let sky = self.sky.as_ref().filter(|_| self.show_sky);
+                if let Some(sky) = sky {
                     pass.set_bind_group(0, &sky_globals.bind_group, &[]);
                     draw(&mut pass, sky, &self.sky_pipelines);
                 }

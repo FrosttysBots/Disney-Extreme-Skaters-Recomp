@@ -13,6 +13,7 @@ pub mod movie;
 pub mod nodes;
 pub mod objects;
 pub mod particles;
+pub mod post;
 pub mod renderer;
 pub mod screen;
 pub mod sounds;
