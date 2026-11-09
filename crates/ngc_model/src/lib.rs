@@ -208,9 +208,33 @@ impl Scene {
         Ok(Self { materials, sectors })
     }
 
+    /// The material a mesh names. The original export tool wrote some
+    /// `0x20` bytes as `0x00`, in material checksums too (Kerchak's face is
+    /// stored as `3ac66f00`, his mesh asks for `3ac66f20`): with no exact
+    /// match, the one material whose checksum differs only by that is
+    /// taken.
     pub fn material(&self, checksum: u32) -> Option<&Material> {
-        self.materials.iter().find(|m| m.checksum == checksum)
+        if let Some(m) = self.materials.iter().find(|m| m.checksum == checksum) {
+            return Some(m);
+        }
+        let mut close = self
+            .materials
+            .iter()
+            .filter(|m| zeroed_alike(m.checksum, checksum));
+        match (close.next(), close.next()) {
+            (Some(m), None) => Some(m),
+            _ => None,
+        }
     }
+}
+
+/// Whether `a` and `b` differ only in bytes one of them has as `0x00` and
+/// the other as `0x20` (the export tool's corruption).
+fn zeroed_alike(a: u32, b: u32) -> bool {
+    a.to_be_bytes()
+        .iter()
+        .zip(b.to_be_bytes())
+        .all(|(&x, y)| x == y || (x.min(y) == 0 && x.max(y) == 0x20))
 }
 
 fn read_material(r: &mut Reader) -> Result<Material> {
@@ -414,4 +438,17 @@ fn read_mesh(r: &mut Reader, vertex_count: usize) -> Result<Mesh> {
         bsphere,
         strips,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zeroed_alike;
+
+    #[test]
+    fn zeroed_checksums_match() {
+        assert!(zeroed_alike(0x3ac6_6f00, 0x3ac6_6f20));
+        assert!(zeroed_alike(0x3ac6_6f20, 0x3ac6_6f00));
+        assert!(!zeroed_alike(0x3ac6_6f01, 0x3ac6_6f20));
+        assert!(!zeroed_alike(0x3ac6_6f00, 0x3ac6_6f10));
+    }
 }
