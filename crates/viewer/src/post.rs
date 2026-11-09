@@ -40,6 +40,9 @@ pub struct Look {
     /// Rain and snow, 0..1 (`weather.rain`, `weather.snow`).
     pub rain: f32,
     pub snow: f32,
+    /// The water's waves, 0 (the disc's own water) .. 1 rough
+    /// (`modern_water`'s wave height).
+    pub water: f32,
 }
 
 impl Default for Look {
@@ -59,6 +62,7 @@ impl Default for Look {
             day_speed: 0.0,
             rain: 0.0,
             snow: 0.0,
+            water: 0.0,
         }
     }
 }
@@ -75,6 +79,7 @@ impl Look {
             || crate::atmos::wanted(self)
             || self.rain > 0.0
             || self.snow > 0.0
+            || self.water > 0.0
     }
 
     fn params(&self, near: f32, frame: &Frame) -> Params {
@@ -119,6 +124,9 @@ impl Look {
             shelter_y: frame
                 .shelter
                 .map_or([0.0; 4], |a| [a.top, a.bottom, 0.0, 0.0]),
+            water: [self.water.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            sun: frame.sun_dir.extend(0.0).to_array(),
+            sun_color: frame.sun_color.extend(0.0).to_array(),
         }
     }
 }
@@ -148,6 +156,10 @@ pub struct Frame {
     /// What the shelter map covers (world units), once made: rain and snow
     /// only wet what's open to the sky.
     pub shelter: Option<crate::weather::ShelterArea>,
+    /// Toward the key light (the sun, or by night the moon), and its
+    /// colour and strength: the water's glitter.
+    pub sun_dir: glam::Vec3,
+    pub sun_color: glam::Vec3,
 }
 
 /// The post pass's uniform: see `Look` in `post.wgsl`.
@@ -166,6 +178,9 @@ struct Params {
     eye: [[f32; 4]; 2],
     shelter: [f32; 4],
     shelter_y: [f32; 4],
+    water: [f32; 4],
+    sun: [f32; 4],
+    sun_color: [f32; 4],
 }
 
 /// The pass, and the frame and depth it reads (the window's size).
@@ -179,6 +194,16 @@ pub struct Post {
     shelter: wgpu::TextureView,
 }
 
+/// The views a bind group reads.
+struct TargetViews {
+    color: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    sky: wgpu::TextureView,
+    sky_drawn: wgpu::TextureView,
+    water: wgpu::TextureView,
+    water_depth: wgpu::TextureView,
+}
+
 struct Targets {
     color: wgpu::TextureView,
     depth: wgpu::TextureView,
@@ -186,6 +211,9 @@ struct Targets {
     /// sky pass's over it): what fog fades into.
     sky: wgpu::TextureView,
     sky_drawn: wgpu::TextureView,
+    /// The water drawn alone: its own colour, and its depth.
+    water: wgpu::TextureView,
+    water_depth: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     /// Fog fading into `sky_drawn`.
     bind_group_drawn: wgpu::BindGroup,
@@ -222,6 +250,26 @@ impl Post {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -316,9 +364,17 @@ impl Post {
     pub fn set_shelter(&mut self, device: &wgpu::Device, shelter: &wgpu::TextureView) {
         self.shelter = shelter.clone();
         if let Some(t) = self.targets.take() {
+            let views = TargetViews {
+                color: t.color.clone(),
+                depth: t.depth.clone(),
+                sky: t.sky.clone(),
+                sky_drawn: t.sky_drawn.clone(),
+                water: t.water.clone(),
+                water_depth: t.water_depth.clone(),
+            };
             let (bind_group, bind_group_drawn) = (
-                self.group(device, &t.color, &t.depth, &t.sky),
-                self.group(device, &t.color, &t.depth, &t.sky_drawn),
+                self.group(device, &views, &views.sky),
+                self.group(device, &views, &views.sky_drawn),
             );
             self.targets = Some(Targets {
                 bind_group,
@@ -331,10 +387,16 @@ impl Post {
     fn group(
         &self,
         device: &wgpu::Device,
-        color: &wgpu::TextureView,
-        depth: &wgpu::TextureView,
+        t: &TargetViews,
         fades_into: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
+        let TargetViews {
+            color,
+            depth,
+            water,
+            water_depth,
+            ..
+        } = t;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("post"),
             layout: &self.layout,
@@ -356,6 +418,14 @@ impl Post {
                     resource: wgpu::BindingResource::TextureView(&self.shelter),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(water),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(water_depth),
+                },
+                wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.uniform.as_entire_binding(),
                 },
@@ -371,7 +441,7 @@ impl Post {
         depth_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
-    ) -> [wgpu::TextureView; 4] {
+    ) -> [wgpu::TextureView; 6] {
         if self
             .targets
             .as_ref()
@@ -401,15 +471,39 @@ impl Post {
             let depth = make("post depth", depth_format, wgpu::TextureUsages::empty());
             let sky = make("post sky", self.format, wgpu::TextureUsages::empty());
             let sky_drawn = make("post sky drawn", self.format, wgpu::TextureUsages::empty());
-            let (bind_group, bind_group_drawn) = (
-                self.group(device, &color, &depth, &sky),
-                self.group(device, &color, &depth, &sky_drawn),
+            let water = make("post water", self.format, wgpu::TextureUsages::empty());
+            let water_depth = make(
+                "post water depth",
+                depth_format,
+                wgpu::TextureUsages::empty(),
             );
+            let views = TargetViews {
+                color,
+                depth,
+                sky,
+                sky_drawn,
+                water,
+                water_depth,
+            };
+            let (bind_group, bind_group_drawn) = (
+                self.group(device, &views, &views.sky),
+                self.group(device, &views, &views.sky_drawn),
+            );
+            let TargetViews {
+                color,
+                depth,
+                sky,
+                sky_drawn,
+                water,
+                water_depth,
+            } = views;
             self.targets = Some(Targets {
                 color,
                 depth,
                 sky,
                 sky_drawn,
+                water,
+                water_depth,
                 bind_group,
                 bind_group_drawn,
                 size: (width, height),
@@ -421,6 +515,8 @@ impl Post {
             t.depth.clone(),
             t.sky.clone(),
             t.sky_drawn.clone(),
+            t.water.clone(),
+            t.water_depth.clone(),
         ]
     }
 

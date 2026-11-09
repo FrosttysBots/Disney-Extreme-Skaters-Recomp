@@ -31,6 +31,11 @@ struct Look {
     // 0: not made), and its top and bottom heights.
     shelter: vec4<f32>,
     shelter_y: vec4<f32>,
+    // x: the water's waves (0: the disc's own water)
+    water: vec4<f32>,
+    // xyz: toward the key light (the sun, or the moon); its colour.
+    sun: vec4<f32>,
+    sun_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var scene: texture_2d<f32>;
@@ -40,6 +45,9 @@ struct Look {
 @group(0) @binding(3) var sky: texture_2d<f32>;
 // The level from straight above (depth 0 at the top): what's under a roof.
 @group(0) @binding(4) var shelter: texture_depth_2d;
+// The water drawn alone: its own colour (as the disc paints it) and depth.
+@group(0) @binding(5) var water_base: texture_2d<f32>;
+@group(0) @binding(6) var water_depth: texture_depth_2d;
 
 // How open to the sky `p` is, 0..1: whether nothing's above it on the
 // shelter map (looked up a little out along its normal `n`, so walls count
@@ -202,6 +210,113 @@ fn rings(xz: vec2<f32>) -> vec2<f32> {
     return tilt * look.weather.z;
 }
 
+// The water's slope at `xz` (metres): Gerstner waves (bevy_atmos's
+// `modern_water`, as slopes: the surface itself stays the level's), and
+// finer ripples drifting over them; each fading out as its waves get
+// smaller than the pixels (`fp`: metres a pixel spans there), so far
+// water doesn't shimmer.
+fn wave_slope(xz: vec2<f32>, t: f32, strength: f32, fp: f32) -> vec2<f32> {
+    var g = vec2<f32>(0.0);
+    let wind = vec2<f32>(0.5, -0.866);
+    for (var i = 0; i < 6; i += 1) {
+        let fi = f32(i);
+        let a = (hash2(vec2<f32>(fi, 3.0)) - 0.5) * 1.8;
+        let dir = vec2<f32>(cos(a) * wind.x - sin(a) * wind.y, sin(a) * wind.x + cos(a) * wind.y);
+        let wl = 12.0 * pow(0.63, fi);
+        let k = 6.2831853 / wl;
+        let speed = sqrt(9.8 / k);
+        let height = wl * 0.014 * strength * clamp(wl / (fp * 8.0) - 0.5, 0.0, 1.0);
+        g += dir * (k * height * cos(k * (dot(dir, xz) - speed * t) + fi * 1.7));
+    }
+    for (var j = 0; j < 2; j += 1) {
+        let s = select(2.3, 4.1, j == 1);
+        let fine = clamp(1.0 / (s * fp * 8.0) - 0.5, 0.0, 1.0);
+        if fine > 0.0 {
+            let drift = select(vec2<f32>(0.31, -0.22), vec2<f32>(-0.27, -0.35), j == 1) * t;
+            let q = xz * s + drift;
+            let n0 = noise2(q);
+            let gx = noise2(q + vec2<f32>(0.05, 0.0)) - n0;
+            let gz = noise2(q + vec2<f32>(0.0, 0.05)) - n0;
+            g += vec2<f32>(gx, gz) / 0.05 * 0.06 * (0.4 + strength) * fine;
+        }
+    }
+    return g;
+}
+
+// The sky toward `r` in view `v`: the sky drawn alone where that is on
+// screen, its nearest edge where not.
+fn sky_toward(r_in: vec3<f32>, v: i32) -> vec3<f32> {
+    // (Behind the camera: turned forward till it's in view, smoothly.)
+    let mid = look.inv[v] * vec4<f32>(0.0, 0.0, 0.5, 1.0);
+    let f = normalize(mid.xyz / mid.w - look.eye[v].xyz);
+    let r = normalize(r_in + f * max(0.25 - dot(r_in, f), 0.0));
+    let clip = look.view_proj[v] * vec4<f32>(r, 0.0);
+    if clip.w <= 1e-4 {
+        return look.sky.rgb;
+    }
+    let ndc = clamp(clip.xy / clip.w, vec2<f32>(-1.0), vec2<f32>(1.0));
+    let rect = look.rect[v];
+    let px = rect.xy + (ndc * vec2<f32>(0.5, -0.5) + 0.5) * max(rect.zw - 1.0, vec2<f32>(0.0));
+    return to_linear(textureLoad(sky, vec2<i32>(px), 0).rgb);
+}
+
+// The water at `at` (its depth `wd`; the level beneath, `under`, at `d`):
+// the waves; the level and sky mirrored by Fresnel; what's beneath seen
+// through it, bent by the waves and lost to the water's own colour with
+// depth; the sun's glitter; foam where it's shallow; rain's rings.
+fn water_at(at: vec2<i32>, under: vec3<f32>, d: f32, wd: f32, px: vec2<f32>) -> vec3<f32> {
+    let v = view_of(px);
+    let units = look.fog_shape.z;
+    let t = look.fog_shape.w;
+    let strength = look.water.x;
+    let p = world_at(at, wd, v);
+    let eye = look.eye[v].xyz;
+    let dist = length(p - eye) / units;
+    let xz = p.xz / units;
+    let grazing = max(abs(normalize(p - eye).y), 0.03);
+    let fp = dist / (look.rect[v].w * grazing);
+    var slope = wave_slope(xz, t, strength, fp);
+    if look.weather.z > 0.0 {
+        slope -= rings(xz) * 0.6;
+    }
+    let n = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
+    let e = normalize(p - eye);
+    var r = reflect(e, n);
+    r.y = abs(r.y);
+    let facing = max(dot(-e, n), 0.0);
+    let fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
+    // The disc's own water colour, lit as the level is.
+    let own = to_linear(textureLoad(water_base, at, 0).rgb) * look.grade2.xyz;
+    var below = under;
+    // Metres through the water, and straight down to the bottom.
+    var thick = 1.0e4;
+    var deep = 1.0e4;
+    if d > 0.0 {
+        let pf = world_at(at, d, v);
+        thick = length(pf - p) / units;
+        deep = (p.y - pf.y) / units;
+        let size = vec2<i32>(textureDimensions(scene));
+        let bend = vec2<i32>(slope * 30.0 * min(thick, 1.5) / max(dist * 0.1, 1.0));
+        let at2 = clamp(at + bend, vec2<i32>(0), size - 1);
+        let d2 = textureLoad(depth, at2, 0);
+        if d2 > 0.0 && d2 < wd {
+            below = to_linear(textureLoad(scene, at2, 0).rgb) * look.grade2.xyz;
+        }
+    }
+    let through = exp(-vec3<f32>(0.55, 0.22, 0.16) * thick);
+    var col = below * through + own * 0.9 * (1.0 - through);
+    let hit = reflect_ray(p, r, v);
+    let mirrored = mix(sky_toward(r, v), hit.rgb, hit.w);
+    col = mix(col, mirrored, fresnel);
+    let shallow = 1.0 - smoothstep(0.0, 0.35 + 0.3 * strength, deep);
+    let lace = smoothstep(0.35, 0.75, noise2(xz * 3.0 + vec2<f32>(t * 0.15, 0.0)) * 0.6 + noise2(xz * 9.0 - t * 0.2) * 0.4 + shallow * 0.5);
+    let foam = shallow * lace;
+    let toward = max(dot(r, normalize(look.sun.xyz)), 0.0);
+    col += look.sun_color.rgb * (pow(toward, 900.0) * 30.0 + pow(toward, 90.0) * 0.25) * (1.0 - foam);
+    col = mix(col, vec3<f32>(0.85) * luminance(look.grade2.xyz), foam * 0.85);
+    return col;
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let at = vec2<i32>(in.clip.xy);
@@ -212,6 +327,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if d > 0.0 {
         // The time of day's light over the level's own.
         c = c * look.grade2.xyz;
+    }
+    // The water, drawn alone, over what's beneath it where it's nearer.
+    let wd = textureLoad(water_depth, at, 0);
+    let water = look.water.x > 0.0 && wd > 0.0 && wd > d;
+    var seen = d;
+    if water {
+        c = water_at(at, c, d, wd, in.clip.xy);
+        seen = wd;
+    }
+    if d > 0.0 && !water {
         if look.weather.x > 0.0 || look.weather.y > 0.0 {
             let v = view_of(in.clip.xy);
             let p = world_at(at, d, v);
@@ -241,7 +366,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 let sheen = wet * up * fresnel * 0.5;
                 if puddle > 0.0 || sheen > 0.02 {
                     let hit = reflect_ray(p, r, v);
-                    let refl = mix(look.sky.rgb * air, hit.rgb, hit.w);
+                    let refl = mix(sky_toward(vec3<f32>(r.x, abs(r.y), r.z), v) * air, hit.rgb, hit.w);
                     c = mix(c, refl, puddle * (0.45 + 0.5 * fresnel));
                     c = c + refl * sheen * (1.0 - puddle);
                 }
@@ -259,8 +384,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // exponential, half-hidden at `fog.a` past `fog_shape.x`, fading into
     // the sky behind (as bevy_atmos's is the sky's horizon colour), a
     // little of `fog.rgb`'s haze in it.
-    if d > 0.0 && look.fog.a > 0.0 {
-        let distance = look.fog_shape.y / d;
+    if seen > 0.0 && look.fog.a > 0.0 {
+        let distance = look.fog_shape.y / seen;
         let past = max(distance - look.fog_shape.x, 0.0);
         let hidden = 1.0 - exp(-0.6931472 * past / look.fog.a);
         let haze = mix(behind, to_linear(look.fog.rgb), 0.25);

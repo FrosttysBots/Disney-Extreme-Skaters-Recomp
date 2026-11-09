@@ -92,6 +92,29 @@ pub struct Batch {
     /// Drawn after all opaque materials, in `draw_order`.
     pub transparent: bool,
     pub draw_order: f32,
+    /// A water surface: flat, in one of the disc's water textures (see
+    /// [`WATER_TEXTURES`]).
+    pub water: bool,
+}
+
+/// The disc's water textures: the Hub's and the beach's sea, and the
+/// camp's, canyon's, Pride Rock's and the treehouse's water. (The
+/// graveyard's mist and Pizza Planet's and Zurg's scrolling floors aren't.)
+pub const WATER_TEXTURES: [u32; 4] = [0x89f0_d488, 0x8d24_93d0, 0x633d_de58, 0xc73f_eb80];
+
+/// Whether most of `triangles` (by area) face straight up or down.
+fn faces_up(vertices: &[Vertex], triangles: &[u32]) -> bool {
+    let (mut all, mut flat) = (0.0f32, 0.0f32);
+    for t in triangles.chunks_exact(3) {
+        let p = |i: u32| Vec3::from(vertices[i as usize].position);
+        let n = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
+        let area = n.length();
+        all += area;
+        if area > 0.0 && (n.y / area).abs() > 0.97 {
+            flat += area;
+        }
+    }
+    all > 0.0 && flat >= all * 0.9
 }
 
 pub struct Level {
@@ -358,12 +381,20 @@ impl Level {
             if passes.is_empty() {
                 passes.push(pass_draw_untextured());
             }
+            // (Not the canyon's: its water texture lit additively, as
+            // caustics on a floor.)
+            let water = passes
+                .iter()
+                .any(|p| WATER_TEXTURES.contains(&level.textures[p.texture].checksum))
+                && passes[0].blend_mode != blend::ADD
+                && faces_up(&level.vertices, &triangles);
             level.batches.push(Batch {
                 first_index: level.indices.len() as u32,
                 index_count: triangles.len() as u32,
                 transparent: passes[0].blend_mode != blend::DIFFUSE,
                 draw_order: material.map_or(0.0, |m| m.draw_order),
                 passes,
+                water,
             });
             level.indices.extend(triangles);
         }

@@ -157,6 +157,7 @@ struct GpuBatch {
     passes: Vec<GpuPass>,
     transparent: bool,
     draw_order: f32,
+    water: bool,
 }
 
 struct GpuLevel {
@@ -260,6 +261,8 @@ pub struct Renderer {
     atmos: crate::atmos::Sky,
     /// The time of day this frame.
     tod: crate::atmos::TimeOfDay,
+    /// Draws the water alone for the post pass (see `post.wgsl`).
+    water_pipeline: wgpu::RenderPipeline,
     /// Rain and snow (see [`crate::weather`]), the shelter map once made
     /// (the level from above: where they can't fall) and what it covers.
     weather: crate::weather::Weather,
@@ -326,6 +329,7 @@ impl Renderer {
         };
         let world_pipelines = pipelines(false);
         let sky_pipelines = pipelines(true);
+        let water_pipeline = make_water_pipeline(&device, &layout, &shader, color_format);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("level"),
@@ -425,6 +429,7 @@ impl Renderer {
             post,
             atmos,
             tod: crate::atmos::TimeOfDay::at(-1.0),
+            water_pipeline,
             weather,
             shelter: None,
             shelter_area,
@@ -784,9 +789,9 @@ impl Renderer {
         // onto the target with it.
         let post = self.look.is_on();
         let (scene, targets) = if post {
-            let [color, depth, sky, sky_drawn] =
+            let [color, depth, sky, sky_drawn, water, water_depth] =
                 self.post.targets(&self.device, DEPTH_FORMAT, width, height);
-            (color, Some((depth, sky, sky_drawn)))
+            (color, Some((depth, sky, sky_drawn, water, water_depth)))
         } else {
             (target.clone(), None)
         };
@@ -794,7 +799,7 @@ impl Renderer {
         self.update_weather(time);
         self.view_infos.clear();
         for (n, (rect, camera)) in views.into_iter().enumerate() {
-            let post = targets.as_ref().map(|(d, s, sd)| (d, s, sd));
+            let post = targets.as_ref().map(|(d, s, sd, w, wd)| (d, s, sd, w, wd));
             self.encode_view(encoder, &scene, post, n, rect, &camera, time);
         }
         if post {
@@ -806,6 +811,8 @@ impl Renderer {
                 sky: self.sky_colour(),
                 views: self.view_infos.clone(),
                 time,
+                sun_dir: self.tod.key_dir,
+                sun_color: self.tod.key_color,
                 shelter: self.shelter.as_ref().map(|_| self.shelter_area),
             };
             self.post.draw(
@@ -982,9 +989,15 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         // The post pass's depth, kept for it (else the renderer's own),
-        // its sky, the dome drawn there alone, and the sky as drawn (the
-        // sky pass's, what fog fades into).
-        post: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
+        // its sky, the dome drawn there alone, the sky as drawn (the sky
+        // pass's, what fog fades into), and the water's colour and depth.
+        post: Option<(
+            &wgpu::TextureView,
+            &wgpu::TextureView,
+            &wgpu::TextureView,
+            &wgpu::TextureView,
+            &wgpu::TextureView,
+        )>,
         n: usize,
         rect: (f32, f32, f32, f32),
         camera: &FlyCamera,
@@ -1041,7 +1054,9 @@ impl Renderer {
             CLEAR_COLOR
         };
         let atmos = post.is_some() && crate::atmos::wanted(&self.look);
-        if let Some((_, sky_target, _)) = post {
+        // The water drawn by the post pass instead (after bevy_atmos's).
+        let water = post.is_some() && self.look.water > 0.0;
+        if let Some((_, sky_target, ..)) = post {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sky alone"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1075,7 +1090,7 @@ impl Renderer {
             }
         }
         // The sky pass over the dome: the frame's sky, and the sky alone.
-        if let Some((_, dome, sky_drawn)) = post.filter(|_| atmos) {
+        if let Some((_, dome, sky_drawn, ..)) = post.filter(|_| atmos) {
             self.atmos.draw(
                 &self.device,
                 &self.queue,
@@ -1144,9 +1159,9 @@ impl Renderer {
                     draw(&mut pass, sky, &self.sky_pipelines);
                 }
                 pass.set_bind_group(0, &world_globals.bind_group, &[]);
-                draw(&mut pass, &self.world, &self.world_pipelines);
+                draw_batches(&mut pass, &self.world, &self.world_pipelines, water);
                 for (layer, _) in self.layers.iter().filter(|l| l.1) {
-                    draw(&mut pass, layer, &self.world_pipelines);
+                    draw_batches(&mut pass, layer, &self.world_pipelines, water);
                 }
             }
             let first = !self.hide_character && !self.solo_character2;
@@ -1206,6 +1221,46 @@ impl Renderer {
                 });
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
+            }
+        }
+        // The water alone: its own colour and depth, for the post pass.
+        if let Some((_, _, _, water_target, water_depth)) = post.filter(|_| water) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("water"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: water_target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if n > 0 {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: water_depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if n > 0 {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(0.0)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_viewport(picture.0, picture.1, picture.2, picture.3, 0.0, 1.0);
+            pass.set_pipeline(&self.water_pipeline);
+            pass.set_bind_group(0, &world_globals.bind_group, &[]);
+            draw_water(&mut pass, &self.world);
+            for (layer, _) in self.layers.iter().filter(|l| l.1) {
+                draw_water(&mut pass, layer);
             }
         }
     }
@@ -1373,15 +1428,87 @@ fn make_collision_pipeline(
 }
 
 fn draw(pass: &mut wgpu::RenderPass, level: &GpuLevel, pipelines: &[wgpu::RenderPipeline]) {
+    draw_batches(pass, level, pipelines, false);
+}
+
+/// `level`, its water left out when `dry` (drawn by the water pass).
+fn draw_batches(
+    pass: &mut wgpu::RenderPass,
+    level: &GpuLevel,
+    pipelines: &[wgpu::RenderPipeline],
+    dry: bool,
+) {
     pass.set_vertex_buffer(0, level.vertices.slice(..));
     pass.set_index_buffer(level.indices.slice(..), wgpu::IndexFormat::Uint32);
-    for batch in &level.batches {
+    for batch in level.batches.iter().filter(|b| !(dry && b.water)) {
         for layer in &batch.passes {
             pass.set_pipeline(&pipelines[layer.kind.index()]);
             pass.set_bind_group(1, &layer.bind_group, &[]);
             pass.draw_indexed(batch.indices.clone(), 0, 0..1);
         }
     }
+}
+
+/// `level`'s water alone, in its first pass's colour (the water pipeline).
+fn draw_water(pass: &mut wgpu::RenderPass, level: &GpuLevel) {
+    pass.set_vertex_buffer(0, level.vertices.slice(..));
+    pass.set_index_buffer(level.indices.slice(..), wgpu::IndexFormat::Uint32);
+    for batch in level.batches.iter().filter(|b| b.water) {
+        if let Some(layer) = batch.passes.first() {
+            pass.set_bind_group(1, &layer.bind_group, &[]);
+            pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+        }
+    }
+}
+
+/// The water drawn alone: its colour and depth, for the post pass.
+fn make_water_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    color_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("water"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![
+                    0 => Float32x3, 1 => Float32x3, 2 => Float32x2,
+                    3 => Float32x2, 4 => Float32x2, 5 => Unorm8x4
+                ],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_water"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::GreaterEqual,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -1552,6 +1679,7 @@ fn upload_level(
                 passes,
                 transparent: batch.transparent,
                 draw_order: batch.draw_order,
+                water: batch.water,
             }
         })
         .collect();

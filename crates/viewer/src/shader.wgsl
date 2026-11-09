@@ -85,6 +85,13 @@ fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(texel.rgb * in.color.rgb, 1.0);
 }
 
+// Water drawn alone for the post pass: its own colour, opaque.
+@fragment
+fn fs_water(in: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(base_texture, base_sampler, in.uv);
+    return vec4<f32>(texel.rgb * in.color.rgb, 1.0);
+}
+
 @fragment
 fn fs_blend(in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(base_texture, base_sampler, in.uv);

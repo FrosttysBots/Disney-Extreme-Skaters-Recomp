@@ -311,7 +311,7 @@ impl Settings {
 }
 
 /// The look's values by name (as saved, and as `--look` takes them).
-pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 12] {
+pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 13] {
     [
         ("fog", look.fog_distance),
         ("exposure", look.exposure),
@@ -325,6 +325,7 @@ pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 12] 
         ("day_speed", look.day_speed),
         ("rain", look.rain),
         ("snow", look.snow),
+        ("water", look.water),
     ]
 }
 
@@ -352,6 +353,7 @@ pub fn set_look(look: &mut desa_viewer::post::Look, key: &str, value: f32) -> bo
         "day_speed" => look.day_speed = value.clamp(0.0, 10.0),
         "rain" => look.rain = value.clamp(0.0, 1.0),
         "snow" => look.snow = value.clamp(0.0, 1.0),
+        "water" => look.water = value.clamp(0.0, 1.0),
         _ => return false,
     }
     true
