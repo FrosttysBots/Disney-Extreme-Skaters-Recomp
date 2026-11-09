@@ -102,10 +102,12 @@ skater is and what it's doing.
 ## What to try
 
 - Options, Video Options, Advanced: Atmosphere (Sky, Clouds, Time of
-  Day, Day Cycle, Fog) and Colour (Exposure, Warmth, Tint, Contrast,
+  Day, Day Cycle, Rain, Snow, Fog) and Colour (Exposure, Warmth, Tint, Contrast,
   Saturation) change the picture as you turn them, Left and Right, and
   are kept. Reset Look puts the disc's back. Tell us where something
   looks wrong (a level, a spot), and if clouds slow the game down.
+  With Rain or Snow on, look for rain falling indoors or under cover, or
+  dry patches out in the open; puddles only mirror what's on screen.
 
 - Two players are greyed out on the main menu for now, while they're
   being finished. (As built: the main menu's 2 Player, a level, then each player's
