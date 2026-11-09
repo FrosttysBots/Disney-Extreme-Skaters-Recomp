@@ -10,7 +10,8 @@ struct Look {
     fog_shape: vec4<f32>,
     // x: exposure (stops), y: warmth, z: tint, w: contrast
     grade: vec4<f32>,
-    // x: saturation
+    // x: saturation, yzw: the time of day's light over the level's own
+    // (baked) light
     grade2: vec4<f32>,
 };
 
@@ -56,6 +57,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // the sky behind (as bevy_atmos's is the sky's horizon colour), a
     // little of `fog.rgb`'s haze in it.
     let d = textureLoad(depth, at, 0);
+    if d > 0.0 {
+        c = c * look.grade2.yzw;
+    }
     if d > 0.0 && look.fog.a > 0.0 {
         let distance = look.fog_shape.y / d;
         let past = max(distance - look.fog_shape.x, 0.0);

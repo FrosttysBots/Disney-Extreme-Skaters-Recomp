@@ -311,7 +311,7 @@ impl Settings {
 }
 
 /// The look's values by name (as saved, and as `--look` takes them).
-pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 6] {
+pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 10] {
     [
         ("fog", look.fog_distance),
         ("exposure", look.exposure),
@@ -319,6 +319,10 @@ pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 6] {
         ("tint", look.tint),
         ("contrast", look.contrast),
         ("saturation", look.saturation),
+        ("sky", if look.physical_sky { 1.0 } else { 0.0 }),
+        ("clouds", look.clouds),
+        ("hour", look.hour),
+        ("day_speed", look.day_speed),
     ]
 }
 
@@ -334,6 +338,16 @@ pub fn set_look(look: &mut desa_viewer::post::Look, key: &str, value: f32) -> bo
         "tint" => look.tint = value.clamp(-1.0, 1.0),
         "contrast" => look.contrast = value.clamp(0.2, 3.0),
         "saturation" => look.saturation = value.clamp(0.0, 3.0),
+        "sky" => look.physical_sky = value > 0.5,
+        "clouds" => look.clouds = value.clamp(0.0, 1.0),
+        "hour" => {
+            look.hour = if value < 0.0 {
+                -1.0
+            } else {
+                value.rem_euclid(24.0)
+            }
+        }
+        "day_speed" => look.day_speed = value.clamp(0.0, 10.0),
         _ => return false,
     }
     true

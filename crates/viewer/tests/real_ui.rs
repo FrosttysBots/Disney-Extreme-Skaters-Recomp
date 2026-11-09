@@ -587,8 +587,8 @@ fn real_video_options() {
         .and_then(|(_, args)| args.get(qb::checksum("option")))
         .and_then(qb::Value::as_name);
     assert_eq!(apply, Some(qb::checksum("video_apply")));
-    // Up to Advanced: its menu, the look first, the settings to come
-    // greyed out.
+    // Up to Advanced: its menu, Atmosphere and Colour first, the settings
+    // to come greyed out.
     screen.pad(Pad::Up);
     frames(&mut screen, 2);
     screen.pad(Pad::Choose);
@@ -596,9 +596,8 @@ fn real_video_options() {
     let text = screen.describe();
     assert!(text.contains("\"ADVANCED\""), "{text}");
     for id in [
-        "look_fog",
-        "look_exposure",
-        "look_saturation",
+        "advanced_atmosphere",
+        "advanced_colour",
         "look_reset",
         "advanced_aa",
         "advanced_done",
@@ -610,7 +609,26 @@ fn real_video_options() {
         );
     }
     assert!(!screen.exists("video_menu"));
-    // Fog turned right, then left: the viewer asked, which and which way.
+    // Atmosphere: the sky, clouds, time of day, day cycle and fog.
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 30);
+    let text = screen.describe();
+    assert!(text.contains("\"ATMOSPHERE\""), "{text}");
+    for id in [
+        "look_sky",
+        "look_clouds",
+        "look_hour",
+        "look_day",
+        "look_fog",
+    ] {
+        assert!(
+            screen.exists(id),
+            "no {id}:
+{text}"
+        );
+    }
+    // The sky turned right, then left: the viewer asked, which and which
+    // way.
     screen.requests.clear();
     screen.pad(Pad::Right);
     frames(&mut screen, 2);
@@ -628,9 +646,26 @@ fn real_video_options() {
             )
         })
         .collect();
-    let fog = Some(qb::checksum("look_fog"));
-    assert_eq!(asked, [(fog, Some(1)), (fog, Some(-1))]);
-    // Up from the first: Done (the placeholders skipped), back to VIDEO.
+    let sky = Some(qb::checksum("look_sky"));
+    assert_eq!(asked, [(sky, Some(1)), (sky, Some(-1))]);
+    // Back: ADVANCED; down to Colour, its grade.
+    screen.pad(Pad::Back);
+    frames(&mut screen, 30);
+    assert!(screen.exists("advanced_menu"), "{}", screen.describe());
+    screen.pad(Pad::Down);
+    frames(&mut screen, 2);
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 30);
+    let text = screen.describe();
+    assert!(text.contains("\"COLOUR\""), "{text}");
+    assert!(screen.exists("look_exposure") && screen.exists("look_saturation"));
+    // Its Done (up from the first): ADVANCED; up from its first, Done
+    // (the placeholders skipped): VIDEO.
+    screen.pad(Pad::Up);
+    frames(&mut screen, 2);
+    screen.pad(Pad::Choose);
+    frames(&mut screen, 30);
+    assert!(screen.exists("advanced_menu"), "{}", screen.describe());
     screen.pad(Pad::Up);
     frames(&mut screen, 2);
     screen.pad(Pad::Choose);
