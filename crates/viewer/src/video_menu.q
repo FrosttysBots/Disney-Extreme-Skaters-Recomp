@@ -95,7 +95,7 @@ script viewer_video_menu
         menu_title = "VIDEO"
         helper_text = generic_helper_text
     }
-    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 8
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 9
     SetScreenElementProps {
         id = video_vmenu
         event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_video_exit } } ]
@@ -107,6 +107,12 @@ script viewer_video_menu
     viewer_video_item id = video_bars text_id = video_bars_text
     viewer_video_item id = video_vsync text_id = video_vsync_text
     viewer_video_item id = video_fps text_id = video_fps_text
+    main_menu_add_item {
+        text = "Advanced"
+        id = video_advanced
+        pad_choose_script = viewer_advanced_menu
+        highlight_bar_scale = (1.015, 1.3)
+    }
     main_menu_add_item {
         text = "Apply"
         id = video_apply
@@ -140,6 +146,46 @@ script viewer_video_item
             { pad_right viewer_video params = { option = <id> dir = 1 } }
         ]
     }
+endscript
+
+// Advanced Graphics: placeholders for now, greyed out (not_focusable),
+// with Done back to the Video Options.
+script viewer_advanced_menu
+    if ObjectExists id = current_menu_anchor
+        DestroyScreenElement id = current_menu_anchor
+    endif
+    if LevelIs load_skateshop
+        <menu_pos> = (160.0, 89.0)
+    else
+        <menu_pos> = (320.0, 89.0)
+    endif
+    make_new_skateshop_menu {
+        pos = <menu_pos>
+        menu_just = [ center top ]
+        internal_just = [ center center ]
+        menu_id = advanced_menu
+        vmenu_id = advanced_vmenu
+        menu_title = "ADVANCED"
+        helper_text = generic_helper_text
+    }
+    create_menu_bg pos = (<menu_pos> + (0.0, 87.0)) num_items = 6
+    SetScreenElementProps {
+        id = advanced_vmenu
+        event_handlers = [ { pad_back generic_menu_pad_back params = { callback = viewer_video_menu } } ]
+        replace_handlers
+    }
+    main_menu_add_item text = "Anti-Aliasing" id = advanced_aa not_focusable = not_focusable
+    main_menu_add_item text = "Texture Filtering" id = advanced_filtering not_focusable = not_focusable
+    main_menu_add_item text = "Render Scale" id = advanced_scale not_focusable = not_focusable
+    main_menu_add_item text = "Field of View" id = advanced_fov not_focusable = not_focusable
+    main_menu_add_item text = "Draw Distance" id = advanced_distance not_focusable = not_focusable
+    main_menu_add_item {
+        text = "Done"
+        id = advanced_done
+        pad_choose_script = viewer_video_menu
+        highlight_bar_scale = (1.015, 1.3)
+    }
+    RunScriptOnScreenElement id = current_menu_anchor animate_in
 endscript
 
 script viewer_video_exit

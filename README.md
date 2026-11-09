@@ -24,7 +24,7 @@ to that engine family too.
 | Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
 | Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
 | Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players split screen: Horse, King of the Hill and Score Challenge (greyed out on the main menu for now) |
-| Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit) |
+| Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit; an Advanced menu with placeholders) |
 | Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
 
 Every format is checked against every file on the US disc (`GEXE52`):
@@ -56,6 +56,9 @@ what fills the **Bars** round a fixed aspect: black, one of the game's
 loading screens, or your own picture saved as `bars.png` or `bars.jpg`
 next to the exe. Menus and cutscenes see up to 21:9 across, so ultrawide
 screens show them whole.
+Its **Advanced** menu holds the advanced graphics settings to come
+(anti-aliasing, texture filtering, render scale, field of view, draw
+distance), greyed out as placeholders for now.
 
 ## Building it yourself
 
