@@ -1,798 +1,104 @@
 # Disney's Extreme Skate Adventure, in Rust
 
-![Twelve characters mid-trick across the game's levels, rendered by the Map Viewer](docs/screenshots/collage.png)
+![Twelve characters mid-trick across the game's levels](docs/screenshots/collage.png)
 
 A from-scratch Rust reimplementation of *Disney's Extreme Skate Adventure*
-(Toys for Bob, 2003), built by studying the GameCube release. The game runs
-on Neversoft's THPS4-era engine, so most of what's worked out here applies
-to that engine family too.
+(Toys for Bob, 2003), built by studying the GameCube release, with the
+game's own physics, tricks, goals and menus, plus optional modern graphics.
 
-> **No game data is included.** You need your own copy of the game; the
-> tools read it from your disc image, and `.gitignore` keeps extracted files
-> out of the repository. This project isn't affiliated with or endorsed by
-> Disney, Toys for Bob, Neversoft or Activision.
-
-## What works so far
-
-| Area | Status |
-|---|---|
-| Disc images and `.prg` archives | Read straight from the ISO, no unpacking needed |
-| Textures, models, skinned characters, levels | Decoded and drawn with their real blend modes |
-| Skeletons, animations, camera paths | Decoded; all 12 characters animate in the viewer |
-| Collision meshes and BSP trees | Decoded, with fast "faces near here" queries |
-| Level scripts (QB) | Decompiled; rails, spawn points, objects and pedestrians placed; an interpreter runs objects' scripts, so vehicles follow their paths |
-| Skater physics | The game's own code, ported from `main.dol`: push, steer, ollie, walls, landing, grinding, vert air (riding straight up to a quarter pipe's lip, the bathtub in Andy's Room...), manuals, lips and balance, on any level |
-| Tricks | Every character's flips, grabs, five grinds, five manuals, lips and specials, reverts, the game's combo scoring and special meter: an [alpha](docs/alpha-testing.md) |
-| Gameplay | The levels' goals from their own scripts (score, letters, races, collecting, gaps, trick spots, Skatetris...), each popping up what it asks as the game does, with its HUD counter and its Complete! / Incomplete!; 2-minute runs, gaps, collectibles, warps, cheats, records; two players split screen: Horse, King of the Hill and Score Challenge (greyed out on the main menu for now) |
-| Menus | The game's own screens run from its scripts: main menu (and its idle demo), skater and level select, the Skate Shop's Create-A-Skater, pause menu, options, plus Video Options for the PC (display, size, aspect ratio, bars, VSync, frame limit; Advanced: sky, clouds, time of day, fog and a colour grade) |
-| Audio | Sound effects by terrain, music and ambience, the characters' voice lines, movies |
-
-Every format is checked against every file on the US disc (`GEXE52`):
-69 archives (5,616 files), 3,364 textures and 48 loading screens, 408
-models, characters and levels, 271 collision files (458,036 faces, 110,174
-BSP nodes), 347 scripts, 53 skeletons, 2,197 animations and 292 camera
-paths all load. The original export tool corrupted many count and offset
-fields (it turned `0x20` bytes into `0x00`); the parsers repair them, and
-each section below says how.
+> **No game data is included.** You need your own copy of the game (a plain
+> `.iso` / `.gcm` of the US GameCube release, `GEXE52`). This project isn't
+> affiliated with or endorsed by Disney, Toys for Bob, Neversoft or
+> Activision.
 
 ## Download
 
-Ready-built Windows programs are on the
+Get the Windows builds from the
 [Releases page](https://github.com/FrosttysBots/Disney-Extreme-Skaters-Recomp/releases):
 
-- **Disney Extreme Skate Adventure.exe** is the game: it plays the opening
-  movies, then the main menu.
-- **DESA Map Viewer.exe** is the same game with the viewer's panel, for
-  flying round the levels, picking animations and debugging.
+- **Disney Extreme Skate Adventure.exe**: the game (opening movies, then the main menu).
+- **DESA Map Viewer.exe**: the same game with a panel for flying round levels, characters, animations and debugging.
 
-Put either next to your own disc image (a plain `.iso` / `.gcm` of the US
-GameCube release, `GEXE52`), or pick it with **Open disc image...** the
-first time. No game data comes with them. Settings are kept in
+Put either next to your disc image, or pick it with **Open disc image...**
+the first time. Convert `.rvz` and other formats to ISO in Dolphin first
+(right-click the game, **Convert File...**). Settings are kept in
 `%APPDATA%\desa-map-viewer\settings.txt`.
 
-**Video Options** (in the Skate Shop's Options) sets the display mode,
-window size, **Aspect Ratio** (Auto, the window's own shape; or 4:3, 16:10, 16:9, 21:9, 32:9) and
-what fills the **Bars** round a fixed aspect: black, one of the game's
-loading screens, or your own picture saved as `bars.png` or `bars.jpg`
-next to the exe. Menus and cutscenes see up to 21:9 across, so ultrawide
-screens show them whole.
-Its **Advanced** menu changes the look, live, and keeps it. Left alone,
-frames are drawn as the game draws them.
+## Gallery
 
-- **Atmosphere:** **Sky** (the level's own, or a **Physical** sky),
-  volumetric **Clouds** over either (Few to Overcast), **Time of Day**
-  (Dawn to Night: the sun, moon and stars move, and the level's baked
-  light dims and warms with them), **Day Cycle** (the clock running, a
-  day in 24 or 4 minutes), **Rain** (Drizzle to Downpour: streaks,
-  splashes, the ground soaking dark and puddles mirroring the level),
-  **Snow** (Light to Blizzard: flakes, and snow settling on what faces
-  up) and **Fog**, where distant things fade into the sky behind them.
-  Rain and snow keep off what's under a roof or indoors, and the ground
-  wets, dries, whitens and melts over a few minutes as you change them.
-  **Water** (Calm, Waves or Rough; the disc's own by default) turns the
-  levels' seas, lakes and pools into live water: rolling waves, the level
-  and sky mirrored at a glance, the sun glittering, the bottom seen
-  through it where it's shallow and lost in its colour where it's deep,
-  and foam along the shore.
-- **Colour:** **Exposure**, **Warmth**, **Tint**, **Contrast** and
-  **Saturation**.
-- **Reset Look** goes back to the disc's.
+Every shot uses the optional **Advanced** graphics (sky, clouds, time of day,
+weather and water). Left off, the game looks as it did on the GameCube.
 
-These are ported from [bevy_atmos](https://github.com/Nilbong/bevy_atmos)
-(MIT or Apache-2.0). The settings still
-to come in Advanced (anti-aliasing, texture filtering, render scale,
-field of view, draw distance) are greyed out. `--look
-sky=1,clouds=0.45,hour=17.8,fog=200,rain=0.6,water=0.6` sets the look from the command line,
-for screenshots.
+<img src="docs/screenshots/beach-sunset.jpg" alt="Sunset over the sea from the beach ship" width="100%">
 
-## Building it yourself
+<table>
+<tr><td width="33%"><img src="docs/screenshots/beach-day-waves.jpg" alt="Rough water off the beach at noon" width="100%"></td><td width="33%"><img src="docs/screenshots/hub-sea-morning.jpg" alt="Morning over the Hub sea" width="100%"></td><td width="33%"><img src="docs/screenshots/hub-pier-dusk.jpg" alt="The Hub pier at dusk" width="100%"></td></tr>
+<tr><td width="33%"><img src="docs/screenshots/hub-rain.jpg" alt="A downpour over the Hub" width="100%"></td><td width="33%"><img src="docs/screenshots/hub-snow.jpg" alt="Snow on the Hub pier" width="100%"></td><td width="33%"><img src="docs/screenshots/canyon-sunset.jpg" alt="Sunset over the canyon" width="100%"></td></tr>
+<tr><td width="33%"><img src="docs/screenshots/priderock-dawn.jpg" alt="Dawn haze at Pride Rock" width="100%"></td><td width="33%"><img src="docs/screenshots/treehouse-pool.jpg" alt="The jungle pool by the treehouse" width="100%"></td><td width="33%"><img src="docs/screenshots/camp-afternoon.jpg" alt="Afternoon clouds over the camp" width="100%"></td></tr>
+<tr><td width="33%"><img src="docs/screenshots/graveyard-fog.jpg" alt="Fog over the graveyard" width="100%"></td><td width="33%"><img src="docs/screenshots/bedroom-warm.jpg" alt="Andy's room" width="100%"></td><td width="33%"><img src="docs/screenshots/zurg-planet.jpg" alt="Zurg's planet" width="100%"></td></tr>
+</table>
 
-1. Install [Rust](https://rustup.rs) (1.85 or newer).
-2. Build the Map Viewer:
-   ```
-   cargo build --release -p desa_viewer
-   ```
-3. Run `target/release/desa-map-viewer`, then pick your disc image with
-   **Open disc image...** (or put the `.iso` next to the program). It must
-   be a plain `.iso` / `.gcm`; convert `.rvz` and other formats in Dolphin
-   first (right-click the game, **Convert File...**, **Format: ISO**).
+## What works
 
-Developed on Windows; other platforms should work (it uses wgpu and winit)
-but haven't been tried.
-
-## Contents
-
-- [Download](#download) the ready-built programs, or [build them](#building-it-yourself)
-- [Map Viewer](#map-viewer): fly around the levels with characters,
-  pedestrians and camera paths
-- [Crates](#crates) and [command-line tools](#usage)
-- Formats: [levels](#level-viewer), [objects and pedestrians](#objects-and-pedestrians),
-  [scripts](#scripts-qb), [collision](#collision-format),
-  [models](#model-formats), [skeletons and animations](#skeletons-and-animations),
-  [textures](#texture-formats)
-- [Skater physics](#skater-physics): skating the levels with the game's
-  own physics code and constants
-- [Roadmap](#roadmap) and [reverse-engineering setup](#reverse-engineering-setup)
-
-| | |
+| Area | Status |
 |---|---|
-| ![Jessie in a handstand manual on the Hub pier](docs/screenshots/jessie_handstand.png) | ![Buzz in an air grab over Zurg's Home](docs/screenshots/buzz_grab.png) |
-| ![Timon riding Pumbaa through the canyon](docs/screenshots/timon_grab.png) | ![Tarzan grinding by the treehouse waterfall](docs/screenshots/tarzan_grind.png) |
+| Levels and characters | All 11 levels and 12 characters, with objects, pedestrians, vehicles on their paths, particles and the game's blend modes |
+| Skating | The game's own physics from `main.dol`: ollies, grinds, manuals, lips, reverts, vert air and spine transfers |
+| Tricks and scoring | Every character's flips, grabs, grinds, manuals and specials, combo scoring and the special meter ([alpha](docs/alpha-testing.md)) |
+| Gameplay | Goals from the levels' scripts (score, S-K-A-T-E, races, collecting, gaps, trick spots, Skatetris), 2-minute runs, collectibles, warps, cheats and records. Two-player modes are built but greyed out for now |
+| Menus and audio | The game's own screens run from its scripts (main menu, skater and level select, Create-A-Skater, pause, options); sound effects, music, voices and movies |
+| PC extras | Video Options: display mode, size, VSync, frame limit, aspect ratio (4:3 to 32:9), bars, and **Advanced** graphics |
+| Input | Gamepad with rumble, laid out like the GameCube pad, or keyboard |
 
-## Map Viewer
+### Advanced graphics
 
-`DESA Map Viewer.exe` lets you fly around every level, straight from your
-disc image; nothing needs unpacking first. Any of the 12 playable
-characters can stand in the level on their board and play their
-animations.
+Options → Video Options → **Advanced**, ported from
+[bevy_atmos](https://github.com/Nilbong/bevy_atmos) (MIT or Apache-2.0).
+All of it is off by default, and **Reset Look** puts the disc's look back.
+
+- **Atmosphere:**
+  - **Sky:** the level's own, or a physical sky.
+  - **Clouds:** volumetric clouds over either sky.
+  - **Time of Day** and **Day Cycle:** the sun, moon and stars move, and the level's light follows them.
+  - **Rain** and **Snow:** the ground gets wet and puddles reflect the level, snow settles, and neither falls under a roof.
+  - **Water:** waves, reflections, sun glitter, see-through shallows and shoreline foam.
+  - **Fog:** distant things fade into the sky.
+- **Colour:** Exposure, Warmth, Tint, Contrast and Saturation.
+
+Anti-aliasing, texture filtering, render scale, FOV and draw distance are
+greyed-out placeholders for now.
+
+## Controls
+
+| Keyboard | Gamepad | Action |
+|---|---|---|
+| W / S, A / D | Left stick | Push, brake, steer (lean in the air) |
+| Space (hold, release) | A | Crouch, ollie |
+| Q / F (+ direction) | X / B | Flip / grab |
+| E | Y | Grind, or a lip trick on the coping |
+| W then S | | Manual (W / S balance; A / D balance grinds) |
+| R | L / R | Revert |
+| J / L | Right stick | Look round |
+| P / Esc | Start | Pause |
+
+The Map Viewer's fly camera, panel, debug keys and screenshot options are in
+[docs/map-viewer.md](docs/map-viewer.md).
+
+## Building
+
+Install [Rust](https://rustup.rs) 1.85 or newer, then:
 
 ```
 cargo build --release -p desa_viewer
 ```
 
-This builds `target/release/desa-map-viewer.exe`, which needs no installs.
-On first run it looks for the disc image (`.iso`) next to itself and in the
-folders above it; otherwise use **Open disc image...** in the panel. It
-remembers the disc, the last level, the character and the camera speed in
-`%APPDATA%\desa-map-viewer\settings.txt`.
-
-The same build makes `target/release/desa-game.exe`: the game on its own,
-without the viewer's panel, debug keys, rails, spawn markers or map. It
-plays the opening movies, then comes up in the main menu (Esc pauses
-while skating). It shares the viewer's settings, so a disc opened in
-either is found by both; with no disc found it shows the panel to open
-one.
-
-The side panel lists the 11 levels and has toggles for the sky, rails
-(magenta tubes), spawn points (green = player 1 start, blue = others) and
-collision, a brighten slider for dark areas, camera speed, and every
-spawn point by name to jump to.
-
-Levels are shown as they start, with every object and pedestrian the node
-array places there: goal pickups, vehicles and about 300 pedestrians, from
-Scar and Kerchak to hyena tourists and birds, each playing its idle
-animation. Objects run their own scripts, so vehicles like the Hub's
-airplane follow their paths (see [Scripts](#scripts-qb)). **Goal objects** adds what goals and scripts create later
-(the S-K-A-T-E letters, goal pedestrians, warp portals, pickups); see
-[Objects and pedestrians](#objects-and-pedestrians).
-
-Under **Character**, pick a character and one of their 125-133
-animations, then play, pause, change the speed or drag the time slider.
-The character stands on the level's start, and moves to each spawn point
-you go to (the spawn markers are switched off then, since they'd stand
-right through the character). **Look at the character** puts the camera in
-front of them, and **Blink** makes them blink every few seconds (see
-[Blinking](#blinking)); Tantor, Tarzan, Woody and Zurg have no blink
-frames.
-
-**Skate** puts the character on the level (an alpha: see
-[docs/alpha-testing.md](docs/alpha-testing.md) for how to test it and the
-full controls): W pushes, S brakes, A/D steer,
-holding Space crouches and letting go ollies, E grinds (ollie at a rail
-holding E: like the game, grinds start in the air, with the button held;
-with the simplified controls a press within half a second does),
-tapping W then S starts a manual, Q flips and F grabs in the air (with a
-direction: W, S, A, D), and Esc stops. Manuals balance with W and S, grinds
-with A and D, on a meter at the bottom of the screen; the combo and the
-score show above it and top right. The physics is the game's own code as far as it's been read
-(see [Skater physics](#skater-physics)), with its constants and the
-character's stats, and a chase camera set like the game's.
-
-Under **Camera paths**, each level lists its cutscene, goal and warp
-cameras (7 to 46 per level). Click one to watch it; moving or looking
-around takes over from wherever it is.
-
-| Control | Action |
-|---|---|
-| Hold right mouse | Look around |
-| W A S D | Move |
-| E / Space, Q / Ctrl | Up, down |
-| Shift | Move 5x faster |
-| Mouse wheel | Change speed |
-| Tab | Next spawn point |
-| K | Cycle collision view |
-| R | Back to the start |
-| W / S, A / D, Space, E, Esc | While skating: push, brake (in the air, lean forward or back), steer, crouch (let go to ollie), grind (in the air), stop |
-| W then S | While skating: manual (then W / S balance it; A / D balance grinds) |
-| F + W / S / A / D | On the ground or in a manual: manuals 2 to 5 (each character has five) |
-| W / S / A / D with E | Onto a rail: grinds 2 to 5 (none: grind 1) |
-| Q / F (+ W, S, A, D) | While skating, in the air: flip trick / grab (hold to keep grabbing) |
-| Two directions, then Q (or E in a manual) | With the special meter full: the character's special grab (or manual) |
-| E off a quarter pipe's lip | Lip trick on the coping (A / D balance, Space drops back in) |
-| R as you land from vert | Revert (keeps the combo going into a manual) |
-| Tab | While skating: to the next spawn point |
-| J / L | While skating: look round (springs back) |
-| P | While skating: pause (Resume, Restart, Stop skating) |
-| M | While skating: show or hide the map (the level from above round the skater, drawn from its collision, with collectibles, letters and warps marked) |
-| C | While skating: the next of the game's chase cameras (`Skater_Camera_Array`: near, standard, far, standard LTG) |
-| F12 | Save a picture of the window to `Pictures\DESA Map Viewer` |
-
-A gamepad works too while skating, laid out like the GameCube game: the
-left stick or D-pad steers (up pushes, down brakes; in the air they lean), A crouches and ollies,
-X flips, B grabs, Y grinds, the shoulder buttons revert, the right stick
-looks round and Start pauses. It rumbles
-where the game's does (ollies, landings, grinds, reverts, flails, bails);
-the panel's Rumble box turns that off, and the `pad_check` example
-checks that a pad can rumble.
-
-The panel's **Simplified controls** box (or the game's Options > Controls >
-Pro Controls, off) plays the game's simplified scheme: the trick tables'
-`Simplified` entries, where any trick button does the direction's trick,
-grinds and lips too, and landing mid-trick loses the combo rather than
-bailing. Characters stand at their appearances' sizes (Jessie 1.12, the
-kids 0.85). The created **Kid**, boy or girl, is dressed from the Skate
-Shop's part lists, under the panel's Kid's clothes or through the game's
-own Edit Skater, Create-A-Skaters (six saved kids) and Extreme Skate
-Crew menus in the shop, with the parts' colours, the board's deck and
-griptape, and the kid's body shape. Zurg's Home's low gravity zones work
-as its scripts set them up (a goal turning on `CHEAT_MOON`).
-
-The panel's **2 minute run** is the game's single session (Trick Attack):
-two minutes from the level's start, the last combo counting once it
-lands, and the best score for each level and character kept in the
-settings file; Replay plays the run back as it was shown. **S-K-A-T-E
-letters** plays the level's letters goal: its settings come from running
-the level's `<level>_AddGoal_SKATE` script and catching what it hands
-`GoalManager_AddGoal` (the time, the letters' objects, the restart node),
-the letters spin and bob with the goal's own scripts, and each is picked
-up within 8 feet, as `SkateLetter_InitLetter` sets. `--letters` with
-`--skate` screenshots it. The **High Score** and **Pro Score goals** read
-`AddGoal_HighScore` and `AddGoal_ProScore` the same way: the score (a
-global such as `pride_highscore_score`), the time and the goal's name;
-`--score-goal high|pro` screenshots one. **Collectibles** are the
-character's `AddGoal_Collect25` objects (`jessie_collect25_objects`: 25 on
-each level of its world), shown spinning (`Obj_RotY speed = 250`) and
-hovering (`Obj_Hover`) while skating, picked up within 7 feet with the
-gap sound, and kept collected in the settings file. **Warps** come from
-the levels' scripts too: the Hub's portals are the sectors whose scripts
-call `LevelWarp level_num = N filmStrip = ...` (the level being the `N`th
-of `level_select_menu_level_info`), opening as the skater comes within 60
-feet; each level's `Warp_Master_Hub` (`HubWarp`, the Kid's way back in the
-game) is shown to everyone with the game's own sparkle
-(`TRG_Warp_Particle_Hub`), and each Hub portal starts its `warpParticle`
-as it opens. **Particle effects**
-(campfires, steam) come from the levels' `ParticleEmitter` nodes: their
-scripts' `CreateParticleSystem` names an emit script, which the
-interpreter runs (`setlife`, `setspeedrange`, `setemittarget`,
-`setcolor`, `emit`...) to throw soft glowing blobs; most emitters are
-made later by goals, so the ones there at the start show. `--run SECONDS`
-with `--skate` screenshots one with that much time left (with `--goal`,
-the goal's clock), and `--replay-at SECONDS` the replay of it that far in.
-
-**Goals** start as the game's do. What the goal asks (its `goal_text`)
-bounces up mid-screen once its start scripts have run and its pro has had
-their say, then shrinks to the top right and stays
-(`create_panel_block ... style = panel_message_goal`). Goals flagged
-`use_hud_counter` get the game's counter box ("0 | 12 Weak Spots",
-`goal_create_counter`), which pops as the count changes. Won, the goal's
-name, a check and "Complete!" (`goal_success_messages`); lost, an X and
-"Incomplete!" (`goal_fail`). `--goal KIND` with `--skate` screenshots
-one (`--goal Gaps`, `--goal Collect2`...). Their pros offer them with the game's speech box
-("Army Man: Press B to talk."): B on the pad or Enter starts the goal,
-and you skate on while it's offered.
-
-**Two players** are switched off on the main menu for now: its 2 Player
-is greyed out (`not_focusable`, as the game's demo builds have it) while
-the games are being finished. `--two-player` still plays them for
-screenshots. As built, they come in through the game's own menus: the
-main menu's 2 Player (`start_2p`, `SetGameType freeskate2p`), its level select, then
-the skater select twice ("PLAYER ONE", Ready; "PLAYER TWO", Ready). The
-level arrives split in two, one player over the other, under the game's
-TWO PLAYERS menu (Start Game, Change Level, Split Mode for side by side,
-Exit to Stage), and paused the game's 2-player pause menu has the same.
-Each player skates with their own physics, tricks, score and chase
-camera, and sees the other. Player two plays on the second gamepad, or
-the arrows and the numpad (0 ollie, 1 flip, 2 grab, 3 grind, 5 revert;
-or Right Shift , . / ;). `--two-player CHARACTER` with `--skate`
-screenshots it (`--side-by-side` for the other split).
-
-Start Game opens the game's GAME OPTIONS, with its three game types
-(`mp_game_type_info`) and each one's settings, kept as the game keeps
-its `splitscreen` preferences:
-
-- **Horse** (time limit 10/20/30 seconds, and the word: PIG, COW, GOAT,
-  HORSE, DONKEY or GIANT SQUID). One player at a time on the whole
-  screen, at the level's Horse spots. The first sets a score, and the
-  other has to beat it. The clock runs until a trick starts. Lower
-  scores get letters, and spelling the word loses ("Woody is a PIG!").
-  The game's own messages, score panel and sounds are used.
-- **King of the Hill** (time limit). The game's star (`crown.mdl`) waits
-  at one of the level's crown spots. Whoever reaches it carries it over
-  their head ("You are king of the hill!") until they bail and drop it.
-  Each player's time with it counts, and an arrow shows the way to it.
-- **Score Challenge** (target score). Combos add up, and the first to
-  the target wins ("Score Challenge: 50,000 pts to win").
-
-King and Score Challenge end on the game's RANKINGS, and its Done goes
-back to TWO PLAYERS. The pause menu's End Current Game does too.
-`--versus horse|king|scorechallenge` with `--two-player` starts one for
-a screenshot. Not yet: in King, knocking the king over by skating into
-them. Each half shows the viewer's own score and combo rather than the
-game's panel.
-| P | Play or pause the character |
-| [ and ] | Previous or next animation |
-| F1 | Hide or show the panel |
-
-`desa-map-viewer --level HUB --screenshot out.png` renders one frame,
-panel included, without opening a window. Add
-`--character jessie --animation Ollie --time 0.4` to show a character
-there, with the camera looking at them, or `--camera-path Cam_Plane
---time 8` to view from a camera path. For screenshots to share, `--clean`
-leaves out the panel and markers, `--size 1920x1080` sets the size,
-`--spawn N` picks the spawn point, `--orbit`, `--distance` and
-`--camera-height` place the camera around the character, and `--lift`
-raises them into the air (jump height comes from the game's physics, not
-the animations). `--camera x,y,z,yaw,pitch` and `--object NAME` place the
-camera directly. The pictures in `docs/screenshots` were made that way.
-
-## Crates
-
-| Crate | What it does |
-|---|---|
-| `gc_disc` | Reads GameCube disc images: header, file system table, `main.dol` sections |
-| `prg` | Reads the `.prg` archives (Neversoft PRE format, LZSS-compressed) that hold almost all game data |
-| `ngc_texture` | Decodes `.img.ngc` images and `.tex.ngc` texture dictionaries (GX CMPR and RGBA8) |
-| `ngc_model` | Parses `.mdl.ngc` models, `.skin.ngc` skinned characters and `.scn.ngc` level scenes: materials, vertex arrays, bone weights, triangle strips |
-| `ngc_anim` | Parses `.ske` skeletons and `.ska.ngc` animations, samples them and poses skinned characters |
-| `ngc_collision` | Parses `.col.ngc` collision meshes and their BSP trees, repairing the fields the original tool corrupted |
-| `qb` | Tokenizes, decompiles and parses Neversoft QB scripts (level node arrays, game logic) |
-| `skate` | Skater physics: the game's constants and character stats, ray casts against collision, the skater |
-| `desa_viewer` | Level, object and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
-| `desa_cli` | The `desa` command-line tool built on top of them |
-
-## Usage
-
-The image must be a plain `.iso` / `.gcm`. If yours is `.rvz`, `.gcz`, `.wia`
-or `.ciso`, convert it in Dolphin first: right-click the game, choose
-**Convert File...**, and set **Format** to **ISO**.
-
-```
-cargo run --release -- info  game.iso            # header, region, file counts
-cargo run --release -- ls    game.iso            # every file with its size
-cargo run --release -- dol   game.iso            # main.dol load addresses (for Ghidra)
-cargo run --release -- extract game.iso extracted
-cargo run --release -- extract game.iso extracted --prefix levels
-```
-
-`extract` uses the same layout as Dolphin's "Extract Entire Disc": `sys/`
-holds `boot.bin`, `bi2.bin`, `apploader.img`, `main.dol` and `fst.bin`, and
-`files/` holds the game's file system.
-
-Then unpack the archives in `files/pre/`:
-
-```
-cargo run --release -- prg ls extracted/files/pre/qb.prg
-cargo run --release -- prg unpack extracted/files/pre extracted/unpacked
-```
-
-Each archive unpacks into its own folder, e.g. `extracted/unpacked/qb/scripts/*.qb`.
-A few archives list the same sound twice with different capitalization; the
-copies are identical, so on Windows one simply overwrites the other.
-
-To check the `prg` crate against every archive on the real disc:
-
-```
-cargo test --release -p prg -- --ignored
-```
-
-Export images and textures as PNGs (a file, or everything under a folder):
-
-```
-cargo run --release -- tex export extracted/files/images extracted/textures/images
-cargo run --release -- tex export extracted/unpacked extracted/textures/unpacked
-cargo run --release -- tex ls extracted/unpacked/beachScn/Levels/beach/beach.tex.ngc
-```
-
-An `.img.ngc` becomes one PNG. A `.tex.ngc` becomes a folder of PNGs named
-by each texture's checksum, which is how models refer to them. Only the
-full-size mip level is exported.
-
-Export a model or a whole level as OBJ + MTL + PNG textures, ready to open
-in Blender. Textures come from the `.tex.ngc` with the same name next to the
-input, or from `--textures`:
-
-```
-cargo run --release -- model info   extracted/unpacked/beachScn/Levels/beach/beach.scn.ngc
-cargo run --release -- model export extracted/unpacked/beachScn/Levels/beach/beach.scn.ngc extracted/models/beach
-cargo test --release -p ngc_model -- --ignored    # parse every real model and level
-```
-
-Vertex colors (the levels' baked lighting) are written as OBJ vertex colors.
-`tools/render_obj.py` and `tools/render_textured.py` render quick previews of
-an exported OBJ with Python and Pillow, for checking results without Blender.
-
-Inspect an animation, or export a character posed by one at a given time
-(in seconds). The skeleton, the key tables and the rest pose are found
-automatically when everything is unpacked under one folder; `--skeleton`,
-`--tables` and `--rest` override them:
-
-```
-cargo run --release -- anim info extracted/unpacked/anims_jessie/anims/jessie/Ollie.ska.ngc
-cargo run --release -- anim pose extracted/unpacked/anims_jessie/models/jessie/jessie.skin.ngc extracted/unpacked/anims_jessie/anims/jessie/Ollie.ska.ngc extracted/models/jessie_ollie --time 0.4
-cargo test --release -p ngc_anim -- --ignored    # parse every real skeleton and animation
-```
-
-## Level viewer
-
-Fly around any level with its sky, textures and baked lighting:
-
-```
-cargo run --release -p desa_viewer -- extracted/unpacked/HUBScn/Levels/HUB/HUB.scn.ngc
-```
-
-| Control | Action |
-|---|---|
-| Hold right mouse | Look around |
-| W A S D | Move |
-| E / Space, Q / Ctrl | Up, down |
-| Shift | Move 5x faster |
-| Mouse wheel | Change speed |
-| K | Cycle collision: hidden, overlay, collision only |
-| C | Print the camera as a `--camera` value |
-| R / Esc | Reset the camera / quit |
-
-The sky is found automatically (`<name>_sky/<name>_sky.scn.ngc` next to the
-level's folder); `--no-sky` or `--sky` override it. To render one frame to a
-PNG without opening a window, which is handy for comparing changes:
-
-```
-cargo run --release -p desa_viewer -- extracted/unpacked/HUBScn/Levels/HUB/HUB.scn.ngc --camera=-1400,900,4000,40,-8 --screenshot hub.png
-```
-
-It also draws the level's rails and spawn points from its node array
-(`<X>/levels/<name>/<name>.qb`), and starts the camera at the player 1
-spawn; `--no-nodes`, `--hide-rails` and `--hide-spawns` turn them off.
-Node positions use the opposite Z direction from the meshes: mirroring Z
-puts 96% of the hub's rail nodes on a collision surface, against 0% as
-stored. Spawn headings follow the engine's +Z-forward convention mirrored
-the same way; the spawn views look right, but that convention hasn't been
-checked against the running game.
-
-Every material pass is drawn with its blend mode (opaque, add, subtract,
-alpha blend, modulate, brighten, and their fixed-alpha variants), its own UV
-set, scrolling UVs and environment mapping. This viewer draws every
-sector; the Map Viewer leaves out the ones that aren't there at the start,
-adds objects and animates vertex colors. Neither draws fog, which the
-GameCube executable seems to leave out too: its `SetFogColor` prints
-"STUBBED" in dozens of places.
-
-**Animated vertex colors.** A material pass can carry color sequences
-(times in milliseconds, looping at the last key, colors where 0x80 is full
-brightness), and a sector can give each vertex a sequence number: 0 for
-none, otherwise 1-based into the sequences of the material drawing it. The
-sequence's color replaces the baked one. Only three levels use it, for 803
-vertices: the arcade screens at the pizza level flicker on three times a
-second, and there are smaller effects on the hub (beside each warp portal)
-and the beach.
-`desa model materials <file>` lists a level's materials by area covered,
-which helps track down rendering problems.
-
-The level's collision is found automatically (`<X>col/Levels/<name>/` next to
-the `<X>Scn` folder) and shown with **K**, or `--show-collision overlay|only`
-for screenshots. Colors: yellow = trigger or non-collidable, red = vert
-(quarter pipes), blue = wall-ridable, purple = not skatable, gray = the rest.
-
-### Objects and pedestrians
-
-Besides rails and spawns, a level's node array places objects:
-
-- **`LevelGeometry` and `LevelObject`** nodes name sectors of the level
-  scene. Those without the `CreatedAtStart` flag aren't there when the
-  level starts: trigger boxes, goal pickups, warp portals that open later
-  (298 sectors on the hub).
-- **`GameObject` and `Vehicle`** nodes place a model, `Models/<path>.ngc`
-  in the level's archive (`X.prg`).
-- **`Pedestrian`** nodes place a skinned model from `XPed.prg` with a
-  `SkeletonName` and an `AnimName`: a script in `scripts/allanims.qb`
-  whose `LoadAnim` lines give each animation a role. The viewer plays the
-  `Ped_Guide_Idle1` or `Ped_M_Idle1` one. Some sets borrow animations
-  (birds use Zazu's; Tarzan's Buzz uses Buzz's from `anims_buzz.prg`).
-
-While skating, the objects' scripts see the skater: birds, bats and crows
-take off when it comes within their `Obj_SetInnerRadius` (the scripts'
-`SkaterInRadius` exceptions), flying to their next perch or away, with
-their wing-flap and squawk sounds; objects a script creates (the Hub's
-flying birds) appear and run their own scripts. Other pedestrians (Scar,
-hyenas, wildebeest) are solid: the skater bumps off them and flails, as
-off a wall.
-
-All 1,795 object nodes on the disc load. Objects are turned by `-heading`
-about Y, which is what mirroring Z does to a rotation; that's the opposite
-way round from the spawn convention above, and goal intro cameras don't say
-which is right (they see their pedestrian from the front 19 times out of
-40 this way).
-
-## Scripts (QB)
-
-Most of the game's logic and every level's object placement live in compiled
-QB scripts: the 188 global scripts in `qb.prg`, plus each level's
-`<level>.qb` (its `NodeArray`: rails, spawn points, objects, pedestrians)
-and `<level>_scripts.qb`.
-
-```
-cargo run --release -- qb decompile extracted/unpacked extracted/scripts
-cargo run --release -- qb nodes extracted/unpacked/beach/levels/beach/beach.qb
-cargo test --release -p qb -- --ignored    # tokenize, parse and decompile every script
-```
-
-`decompile` writes readable `.q` source next to the original paths, for
-example `extracted/scripts/beach/levels/beach/beach.q`. `nodes` counts a
-level's nodes by class and its linked rail nodes.
-
-- **Tokens** follow the compiler shared across the THPS series: one-byte
-  codes, some followed by data. Numbers are **little-endian**, unlike the
-  rest of the GameCube data.
-- **Names** are stored as checksums: a CRC-32 of the lowercased name
-  without the final inversion. Each file ends with a symbol table giving
-  the original names, so the decompiled scripts use the developers' own
-  names. Across the disc there are 41,018 names, and every checksum used in
-  every script is covered. Names that aren't plain identifiers print as
-  `#"Big 1"`; unknown ones would print as `#0x1234abcd`.
-- **`Random(@a @b ...)`** is stored as a table of offsets with jumps between
-  the choices; the decompiler rebuilds the original form.
-- **Data definitions** such as `NodeArray` parse into structured values
-  (`qb::Value`), ready for the viewer and gameplay code.
-
-On the US disc all 347 scripts tokenize to their last byte and parse:
-7,046 scripts and 25,503 level nodes.
-
-**Running scripts.** `qb::vm` is the start of an interpreter: a `Program`
-holds every script and global value, and a `Thread` runs one script for
-one object a few statements at a time, stopping when it waits, so many
-objects run side by side. It handles calls with parameters (`<name>`,
-`<...>`), assignments, `if`/`elseif`/`else` with `NOT`, `begin ... repeat
-n`, `break`, `return`, `wait n [seconds]`, `object:command` and simple
-arithmetic; anything that isn't a script goes to the game as a command.
-The Map Viewer runs every starting object's `TriggerScript` this way and
-implements path following (`Obj_FollowPathLinked`, path velocity,
-acceleration, random forks), `Obj_PlayAnim`, `Obj_MoveToNode`, waiting for
-animations and moves, `create`/`kill`/`Die` and `IsAlive`, which sets 29
-objects moving across the levels (the Hub's airplane and crane among
-them). The rest (event handlers, trigger radii, sounds, flags) does
-nothing yet: most of it reacts to the skater. Speeds take a unit as an
-inch (1 mph = 17.6 units a second), which hasn't been checked against the
-game.
-
-## Collision format
-
-```
-cargo run --release -- col info   extracted/unpacked/HUBcol/Levels/HUB/HUB.col.ngc
-cargo run --release -- col export extracted/unpacked/HUBcol/Levels/HUB/HUB.col.ngc extracted/models/HUB_col.obj
-cargo test --release -p ngc_collision -- --ignored    # parse every real collision file
-```
-
-The layout (in the module docs of `crates/ngc_collision`) matches the rest
-of Neversoft's THPS engine family: object records with bounding boxes,
-float vertices, a brightness byte per vertex, faces with 8- or 16-bit
-indices, and a BSP tree per object. Each face has flags
-and a terrain type (which picks sounds and particles). Objects share their
-checksums with the level's visible sectors; many are collision-only, such
-as invisible walls and trigger volumes. Rails aren't collision faces: in
-this engine they're path nodes defined by the level scripts.
-
-**Corrupted counts.** The tool that wrote these files turned `0x20` bytes
-into `0x00` in some count and offset fields (32 reads as 0, 288 as 256,
-1056 as 1024). This is the same bug behind the textures' "0 means 32". The
-parser rebuilds each object's true counts by picking the reading that keeps
-all offsets and totals consistent while assuming the fewest corrupted
-fields. When more than one reading fits, the BSP trees decide, since they
-only read cleanly where the faces really end: that fixed Hamm, whose 544
-vertices were stored (with the header's total) as 512, which had shifted
-every face. On the US disc it repairs 90 counts across 271 files, and all
-458,036 faces load.
-
-**BSP trees.** Each object's tree splits space on x, y or z; a split's
-lower child comes right after it and its upper child after the lower's
-whole subtree, and each leaf lists the faces touching its box, as indices
-into one shared face list after all the nodes. The same `0x20` bug hits
-child offsets, leaf face counts and start indices, and the objects' root
-offsets, so the reader takes the tree's shape as the truth, checks the
-stored offsets against it, and solves the leaves' ranges together (a leaf
-of 32 faces otherwise reads as empty). It repairs 364 fields, reads all
-110,174 nodes, and `BspTree::faces_near` finds 99.94% of the faces a
-brute-force search finds near a point; the rest are listed by the game in
-a leaf whose box they don't touch.
-
-## Model formats
-
-`.mdl.ngc` (objects) and `.scn.ngc` (levels) share one big-endian layout; the
-exact field list is in the module docs of `crates/ngc_model`.
-
-- **Materials** have one or more passes. Each pass names a texture by
-  checksum, plus blend settings, a color, and optional UV-scrolling and
-  vertex-color animation blocks, depending on its flags.
-- **Sectors** are objects: a vertex pool (positions, 16-bit normals,
-  interleaved UV sets, colors where 0x80 is full brightness) plus meshes.
-- **Meshes** draw triangle strips from the pool with one material. Strips
-  wind counter-clockwise.
-- **Coordinates** are Y-up. UVs use a bottom-left origin, which matches the
-  bottom-up texture storage, so they export to OBJ unchanged.
-- **Skinned characters** (`.skin.ngc`) use the same layout, except that
-  their vertices come in groups sharing a pair of bones (a bone and its
-  parent), each vertex with two weights. A second block gives 3,701
-  vertices on the disc a third bone with a small weight (1/21 to 1/3), the
-  two main weights then adding up to one minus it; posing with it
-  stretches the mesh less for 9 of the 11 characters that have any. It
-  also holds copies of those vertices, which undo 40 values that the
-  `0x20` bug damaged in the main data (10.0 stored as 8.0). Positions are
-  in model space in the rest pose, so characters export and draw without
-  a skeleton. Some group counts suffer the same `0x20` -> `0x00` corruption as
-  collision; the parser repairs them by keeping the reading where every
-  group header lines up.
-
-```
-cargo run --release -- model export extracted/unpacked/anims_jessie/models/jessie/jessie.skin.ngc extracted/models/jessie
-```
-
-Result on the US disc: all 195 models, 22 level scenes (11 levels plus their
-skies) and 191 skinned models parse exactly to the end of the file.
-
-## Skeletons and animations
-
-Both formats are documented in the module docs of `crates/ngc_anim`. The
-decoder was checked against the game's own (at `0x80067BE8` in `main.dol`).
-
-- **Skeletons** (`.ske`, little-endian) are just names: for each bone its
-  checksum, its parent's and its mirror partner's (left arm <-> right arm).
-  There is no rest pose in them.
-- **Animations** (`.ska.ngc`) have a big-endian header and per-bone key
-  counts, then little-endian key streams. Keys are at 60 frames per second
-  and relative to the parent bone.
-- **Rotation keys** are compressed quaternions: x, y and z as 16-bit values
-  (or unsigned bytes when small) scaled by 1/16384, with w rebuilt from them
-  and its sign in a flag bit. A key can instead be a 1-byte index into
-  `standardkeyq.bin`, a table of common rotations loaded at start-up.
-  Translations work the same way, divided by 32, with `standardkeyt.bin`.
-- **Posing.** The decoded quaternions must be conjugated. A bone's matrix
-  is parent * translate * rotate, and a vertex follows its bones by
-  pose * inverse(rest), where the rest pose is the character's
-  `default.ska.ngc` at time 0. The two weights of each skinned vertex are
-  stored in reverse bone order. Getting any of these wrong tears the mesh
-  apart at the joints.
-- **Camera paths** (header flags `0x1E000000`) are the same file type
-  with plain big-endian floats: one track of rotation and translation
-  keys, plus "custom" keys that set the field of view. The camera looks
-  down its local -Z after the same conjugation as bones; with that, the
-  view rays of the 93 moving paths meet at their subject (median error
-  0.4 degrees, against 50 or more for any other choice). Positions are in
-  mesh space, unlike node positions. Frame numbers have the `0x20` ->
-  `0x00` corruption and are repaired by keeping them in order. Many paths
-  hold their last key for much longer than they move (the hub's warp
-  shots say 55.9 seconds but stop at 11), leaving it to the scripts to
-  cut away. Details are in `crates/ngc_anim/src/camera.rs`.
-
-Result on the US disc: all 53 skeletons, 2,197 bone animations and 292
-camera paths parse.
-
-### Blinking
-
-Most characters' eyes are a small mesh textured with `eyes.png`. The same
-model carries three more frames on tiny quads hidden inside the body:
-`eyes00` (open), `eyes01` (half shut) and `eyes03` (shut). The names come
-from the created-skater script `disneytricks.qb`, which swaps all four
-together, and the texture checksums are the same in every character.
-
-The GameCube executable never refers to these textures: there is no
-checksum, name or format string for them, and
-`CSkinComponent::replace_texture` only prints "STUB FUNCTION called". So
-the GameCube release may not blink at all. The Map Viewer plays the frames
-anyway (half shut, shut, half shut, about 1/6 second in all, every 1.5 to
-5.5 seconds) on a timing of our own; untick **Blink** to turn it off.
-
-## Texture formats
-
-Both files are big-endian; see the module docs in `crates/ngc_texture` for
-the exact layouts.
-
-- **Pixel formats:** CMPR (the GameCube's DXT1), CMPR plus a second CMPR
-  texture whose green channel is the alpha, and tiled RGBA8 (loading screens
-  and two level textures).
-- **Rows are stored bottom to top.** The decoder flips them. When a picture
-  is padded to a larger stored size, the padding comes first in stored order.
-- **A stored 0 means 32.** The original tool wrote any width, height or size
-  of exactly 32 (and a size of 8192) as 0.
-- **Not supported yet:** the 8 memory-card icons, which use a palette format.
-
-Result on the US disc: 48 loading screens plus 3,364 images and textures
-from 1,079 files.
-
-## Formats found so far
-
-| Extension | Count | Probably |
-|---|---|---|
-| `.ska.ngc` | 2489 | Animations: 2,197 skeletal and 292 camera paths (decoded) |
-| `.dsp` | 736 | GameCube ADPCM sound effects |
-| `.img.ngc` / `.tex.ngc` | 679 / 408 | Images and texture dictionaries |
-| `.qb` | 347 | Compiled QB scripts |
-| `.col.ngc` | 271 | Collision meshes (decoded) |
-| `.mdl.ngc` / `.skin.ngc` / `.scn.ngc` | 195 / 191 / 22 | Models, skinned characters, level scenes |
-| `.cas.ngc` | 191 | Create-a-skater parts |
-| `.ske` | 53 | Skeletons (decoded) |
-| `.fnt.ngc` | 32 | Fonts |
-
-## Skater physics
-
-The game keeps its physics tuning in scripts: `PHYSICS.q` holds about 200
-constants in the game's units (which look like inches): kick speeds of
-355-496 a second (675 crouched), a top speed of 700-900, ollies at 400-450
-up, air gravity of -1350, ground snapping 13 up and 8.2 down, and the
-chase cameras. Many are `{ (min, max) STATS_X }` pairs scaled by one of a
-character's stats, which are in their profiles in `disneytricks.q`
-(Woody: `Air = 11`, `spin = 4`, ...); a stat of `s` gives
-`min + (max - min) * s / 10`.
-
-The `skate` crate reads them and runs a skater over a level's collision,
-using the BSP trees for its ray casts. Its update follows the game's own
-code in `main.dol`, found through the constants: the engine reads each
-one by its name (or its name's checksum), and those lead straight to the
-physics functions. Ported so far: pushing and drag, gravity along the
-ground, steering, braking, the speed limits, the ollie (stronger the
-longer the crouch), following the ground (and flying off the lip of a
-kicker), bouncing off walls on the ground and in the air, the air step,
-landing (including popping onto ledges), grinding level rails (rail
-gravity, corners, jumping off), vert air off quarter pipes (coming back
-down onto the ramp), and the balance meter for manuals and grinds (with
-bails). Air tricks come from the game's scripts: each character's trick
-table (Jessie's "Quickest Boots in the West", "Well Howdy There"...) and the
-button combinations, played as the scripts play them, with a bail for
-landing mid-trick. On the Hub, Jessie reaches her kick speed
-of 425 a second, covers about 1,000 units in three seconds, ollies 57
-units high and grinds the Hub's long rails.
-
-[docs/physics-notes.md](docs/physics-notes.md) maps every function read,
-with addresses. Combos score as the game does: repeats degrade (100% down
-to 50%) in a 2 minute run or a goal, as in the game's single session and
-career (free skating doesn't degrade them, and its score is the best
-combo rather than their sum, as the game's free skate has it), 180s multiply (x1.5 up to x5), grinds, manuals and held grabs
-earn points every frame, and the total is the points times the number of
-tricks. The special meter fills with points; full, each character's
-special grab and manual (Jessie: down, right, flip for "Sit a Spell"; in a
-manual right, left, grind for "Happy Trails") are on until it drains.
-The skater pushes by itself (the game's AutoKick option, on by default:
-untick it to push with W), turns, crouches, flies and lands with the
-game's own animation choices, and bails landing sideways at speed. The
-chase camera uses the game's camera settings, stays square to the ramp in
-vert air, and pulls in rather than ending up behind a wall.
-Lip tricks stall on the coping of quarter pipes with a rail along it:
-press E (with a direction for other lips) as you launch off the lip, then
-balance with A and D. Holding R going up a quarter pipe spine-transfers
-to the ramp behind. Gaps score from the levels' trigger scripts, and
-teleporters (like the Hub's harbour water) put the skater back. Moving
-level pieces carry their collision with them as their scripts move them.
-Not yet: a frame-by-frame check against Dolphin.
-Turning rates are radians a second (the steering code turns by the rate
-times the frame time), and the camera distances are feet (the camera
-code multiplies them by 12).
-
-## Roadmap
-
-1. **Asset tools.** Disc reading, PRG unpacking, textures, static and
-   skinned models, levels, collision, a level viewer, skeletons and
-   animations, camera paths, and animated characters in the Map Viewer
-   (done).
-2. **Level loading.** Rails, spawn points, objects, pedestrians and
-   animated vertex colors, the collision BSP trees (done).
-3. **QB scripts.** Decompiling, data parsing, and an interpreter that
-   runs objects' scripts, with path following and animations (done).
-   Next: more commands, events (exceptions) and goals, which need a
-   skater.
-4. **Skater physics.** The game's constants, and its update code from
-   `main.dol` for the ground, walls, air, landing, grinding, vert air,
-   manuals, lips and balance (done; wall rides are unused in this game).
-   Spine transfers too. Next: a frame-by-frame check against Dolphin.
-5. **Tricks and scoring.** Each character's air tricks, grinds, manuals,
-   lips and specials from the trick tables, reverts, the game's combo
-   scoring and special meter, its animation choices, a chase camera and
-   gamepad controls: skating is at an alpha (done; see
-   [docs/alpha-testing.md](docs/alpha-testing.md)).
-6. **Gameplay.** Goals, game modes, the front end, UI and audio.
-
-## Reverse-engineering setup
-
-- Load `extracted/sys/main.dol` into Ghidra with the
-  [GameCube loader](https://github.com/Cuyler36/Ghidra-GameCube-Loader).
-- `desa dol` prints the section addresses for checking the memory map.
-- The US disc (`GEXE52`) ships no `.map` symbol file, so Ghidra's function
-  names will be auto-generated.
-- The PC release of THPS4 runs on the same engine family and is x86, which
-  is much easier to read when you're working out shared systems.
+This builds `target/release/desa-game.exe` and `desa-map-viewer.exe`.
+Developed on Windows; other platforms should work (wgpu and winit) but
+haven't been tried.
+
+## Documentation
+
+- [Map Viewer, game and tools](docs/map-viewer.md): every control and mode, command-line screenshots, the `desa` tool and the crates.
+- [Formats, physics and reverse engineering](docs/formats.md): how each file format was decoded and repaired, the physics port, the roadmap, and the Ghidra setup.
+- [Physics notes](docs/physics-notes.md): every `main.dol` function read, with addresses.
+- [Alpha testing](docs/alpha-testing.md): what to try, and what's known to be missing.
