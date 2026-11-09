@@ -1,0 +1,27 @@
+[package]
+name = "desa_launcher"
+description = "The launcher: installs, updates from GitHub and starts Disney's Extreme Skate Adventure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "desa-launcher"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+desa_viewer = { path = "../viewer" }
+egui = "0.33"
+ngc_texture.workspace = true
+png = "0.18.1"
+egui-wgpu = "0.33"
+egui-winit = "0.33"
+pollster = "1.0.1"
+rfd = "0.17.2"
+serde_json = "1"
+wgpu = "27"
+winit = "0.30.13"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }

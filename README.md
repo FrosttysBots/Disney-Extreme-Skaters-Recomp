@@ -14,10 +14,22 @@ game's own physics, tricks, goals and menus, plus optional modern graphics.
 ## Download
 
 Get the Windows builds from the
-[Releases page](https://github.com/FrosttysBots/Disney-Extreme-Skaters-Recomp/releases):
+[Releases page](https://github.com/FrosttysBots/Disney-Extreme-Skaters-Recomp/releases).
+The easy way is **DESA-Launcher.exe**:
 
-- **Disney Extreme Skate Adventure.exe**: the game (opening movies, then the main menu).
-- **DESA Map Viewer.exe**: the same game with a panel for flying round levels, characters, animations and debugging.
+<img src="docs/screenshots/launcher.jpg" alt="The launcher's Play page over the game's own loading screens" width="560" align="right">
+
+- **Setup on first run**: it installs itself (to `%LOCALAPPDATA%\Programs\DESA Recomp`), makes Desktop and Start menu shortcuts, asks for your disc image and downloads the latest release.
+- **Updates from GitHub**: each time it opens it checks the releases, and the big button turns to **UPDATE** when there's a newer one. It updates itself too.
+- **Play** the game or the Map Viewer, the latest or any older version; **Patch Notes** and **Installations** pages; **Uninstall** in Settings.
+- The background is your disc's own loading screens. Put a `logo.png` next to the launcher to show your own logo instead of the drawn title.
+
+<br clear="right">
+
+Or download the programs themselves:
+
+- **Disney-Extreme-Skate-Adventure.exe**: the game (opening movies, then the main menu).
+- **DESA-Map-Viewer.exe**: the same game with a panel for flying round levels, characters, animations and debugging.
 
 Put either next to your disc image, or pick it with **Open disc image...**
 the first time. Convert `.rvz` and other formats to ISO in Dolphin first
@@ -89,12 +101,13 @@ The Map Viewer's fly camera, panel, debug keys and screenshot options are in
 Install [Rust](https://rustup.rs) 1.85 or newer, then:
 
 ```
-cargo build --release -p desa_viewer
+cargo build --release -p desa_viewer -p desa_launcher
 ```
 
-This builds `target/release/desa-game.exe` and `desa-map-viewer.exe`.
-Developed on Windows; other platforms should work (wgpu and winit) but
-haven't been tried.
+This builds `target/release/desa-game.exe`, `desa-map-viewer.exe` and
+`desa-launcher.exe`. Developed on Windows; the game should work elsewhere
+(wgpu and winit) but hasn't been tried, and the launcher's downloads are
+Windows-only.
 
 ## Documentation
 

@@ -296,3 +296,4 @@ cargo test --release -p ngc_anim -- --ignored    # parse every real skeleton and
 | `skate` | Skater physics: the game's constants and character stats, ray casts against collision, the skater |
 | `desa_viewer` | Level, object and character rendering (wgpu), plus `desa-map-viewer` (the Map Viewer) and `desa-viewer` (command-line viewer and screenshots) |
 | `desa_cli` | The `desa` command-line tool built on top of them |
+| `desa_launcher` | `desa-launcher`: the installer and launcher. Releases come from the GitHub API over Windows' WinHTTP; `--screenshot out.png --page play\|notes\|installs\|settings\|setup` draws a page offscreen, `--fetch <tag> <dir>` downloads a release into a folder |
