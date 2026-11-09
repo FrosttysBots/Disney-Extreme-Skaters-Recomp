@@ -532,7 +532,7 @@ fn real_video_options() {
         let _ = program.add(file);
     }
     desa_viewer::behaviour::add_viewer_menus(&mut program);
-    screen.listen(&["viewer_video"]);
+    screen.listen(&["viewer_video", "viewer_look"]);
     let frames = |screen: &mut desa_viewer::screen::Screen, n| {
         for _ in 0..n {
             screen.update(&program, 1.0 / 60.0);
@@ -587,8 +587,8 @@ fn real_video_options() {
         .and_then(|(_, args)| args.get(qb::checksum("option")))
         .and_then(qb::Value::as_name);
     assert_eq!(apply, Some(qb::checksum("video_apply")));
-    // Up to Advanced: its menu, placeholders greyed out, so focus is on
-    // Done; Done is back to VIDEO.
+    // Up to Advanced: its menu, the look first, the settings to come
+    // greyed out.
     screen.pad(Pad::Up);
     frames(&mut screen, 2);
     screen.pad(Pad::Choose);
@@ -596,9 +596,11 @@ fn real_video_options() {
     let text = screen.describe();
     assert!(text.contains("\"ADVANCED\""), "{text}");
     for id in [
+        "look_fog",
+        "look_exposure",
+        "look_saturation",
+        "look_reset",
         "advanced_aa",
-        "advanced_filtering",
-        "advanced_scale",
         "advanced_done",
     ] {
         assert!(
@@ -608,6 +610,29 @@ fn real_video_options() {
         );
     }
     assert!(!screen.exists("video_menu"));
+    // Fog turned right, then left: the viewer asked, which and which way.
+    screen.requests.clear();
+    screen.pad(Pad::Right);
+    frames(&mut screen, 2);
+    screen.pad(Pad::Left);
+    frames(&mut screen, 2);
+    let asked: Vec<_> = screen
+        .requests
+        .iter()
+        .filter(|(n, _)| *n == qb::checksum("viewer_look"))
+        .map(|(_, args)| {
+            (
+                args.get(qb::checksum("option"))
+                    .and_then(qb::Value::as_name),
+                args.get(qb::checksum("dir")).and_then(qb::Value::as_int),
+            )
+        })
+        .collect();
+    let fog = Some(qb::checksum("look_fog"));
+    assert_eq!(asked, [(fog, Some(1)), (fog, Some(-1))]);
+    // Up from the first: Done (the placeholders skipped), back to VIDEO.
+    screen.pad(Pad::Up);
+    frames(&mut screen, 2);
     screen.pad(Pad::Choose);
     frames(&mut screen, 30);
     assert!(screen.exists("video_menu"), "{}", screen.describe());

@@ -24,6 +24,8 @@ pub struct Settings {
     pub gaps: BTreeMap<String, BTreeSet<String>>,
     /// The Video Options: the window and how often it's drawn.
     pub video: Video,
+    /// The Advanced menu's look: fog and the colour grade.
+    pub look: desa_viewer::post::Look,
     /// Never saved (screenshots).
     pub read_only: bool,
 }
@@ -186,6 +188,11 @@ impl Settings {
                     settings.video.frame_limit = value.parse().unwrap_or(0);
                 }
                 "video.bars" => settings.video.bars = Bars::load(value),
+                key if key.starts_with("look.") => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        set_look(&mut settings.look, &key["look.".len()..], v);
+                    }
+                }
                 "video.aspect" => {
                     settings.video.aspect = value
                         .split_once(':')
@@ -276,6 +283,19 @@ impl Settings {
 "
             );
         }
+        for (key, value) in look_values(&self.look) {
+            if value
+                != look_values(&desa_viewer::post::Look::default())
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map_or(f32::NAN, |(_, v)| *v)
+            {
+                text += &format!(
+                    "look.{key}={value}
+"
+                );
+            }
+        }
         for (level, gaps) in &self.gaps {
             let names: Vec<&str> = gaps.iter().map(String::as_str).collect();
             text += &format!("gaps.{level}={}\n", names.join("|"));
@@ -288,6 +308,35 @@ impl Settings {
         }
         let _ = fs::write(file, text);
     }
+}
+
+/// The look's values by name (as saved, and as `--look` takes them).
+pub fn look_values(look: &desa_viewer::post::Look) -> [(&'static str, f32); 6] {
+    [
+        ("fog", look.fog_distance),
+        ("exposure", look.exposure),
+        ("warmth", look.warmth),
+        ("tint", look.tint),
+        ("contrast", look.contrast),
+        ("saturation", look.saturation),
+    ]
+}
+
+/// Sets one of the look's values by name; `false` if there's none.
+pub fn set_look(look: &mut desa_viewer::post::Look, key: &str, value: f32) -> bool {
+    if !value.is_finite() {
+        return false;
+    }
+    match key {
+        "fog" => look.fog_distance = value.max(0.0),
+        "exposure" => look.exposure = value.clamp(-6.0, 6.0),
+        "warmth" => look.warmth = value.clamp(-1.0, 1.0),
+        "tint" => look.tint = value.clamp(-1.0, 1.0),
+        "contrast" => look.contrast = value.clamp(0.2, 3.0),
+        "saturation" => look.saturation = value.clamp(0.0, 3.0),
+        _ => return false,
+    }
+    true
 }
 
 /// Looks for the game near the program and the current folder: a GameCube
